@@ -6,6 +6,7 @@ export type AuthUser = {
   name: string;
   role: Role;
   customerId?: string | null;
+  impersonator?: { id: string; email: string; name: string; role: Role } | null;
 };
 
 export const COST_ROLES: Role[] = ["admin", "compras"];

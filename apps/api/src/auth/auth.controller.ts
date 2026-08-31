@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Post, Req, Res } from "@nestjs/common";
+import { Body, Controller, Get, Post, Put, Req, Res } from "@nestjs/common";
 import { Request, Response } from "express";
 import { AuthService } from "./auth.service";
 import { Public } from "./public.decorator";
+import { Roles } from "./roles.decorator";
 import { CurrentUser } from "./current-user.decorator";
 import { AuthUser } from "./auth.types";
 
@@ -54,6 +55,43 @@ export class AuthController {
   @Get("me")
   me(@CurrentUser() user: AuthUser) {
     return { user: this.auth.toPublic(user) };
+  }
+
+  @Put("profile")
+  updateProfile(
+    @Body() body: { name?: string; email?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.auth.updateProfile(user, body, req.ip);
+  }
+
+  @Post("password")
+  changePassword(
+    @Body() body: { currentPassword?: string; newPassword?: string },
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.auth.changePassword(user, body.currentPassword || "", body.newPassword || "");
+  }
+
+  @Post("impersonate")
+  @Roles("admin")
+  impersonate(
+    @Body() body: { userId?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return this.auth.impersonate(user, body.userId || "", req.ip, res);
+  }
+
+  @Post("stop-impersonate")
+  stopImpersonate(
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return this.auth.stopImpersonate(user, req.ip, res);
   }
 
   @Public()

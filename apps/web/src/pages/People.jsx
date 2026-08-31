@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { api } from "../api.js";
+import { useNavigate } from "react-router-dom";
+import { api, ApiError } from "../api.js";
+import { homeFor, ROLE_LABELS, useAuth } from "../auth.jsx";
 
 const RISK = ["A", "B", "C", "D"];
 const ROLES = [
@@ -11,6 +13,8 @@ const ROLES = [
 ];
 
 export default function People() {
+  const { user, impersonate } = useAuth();
+  const nav = useNavigate();
   const [tab, setTab] = useState("customers");
   const [customers, setCustomers] = useState([]);
   const [providers, setProviders] = useState([]);
@@ -19,6 +23,8 @@ export default function People() {
   const [cForm, setCForm] = useState({ rucDni: "", companyName: "", email: "", phone: "", risk: "B" });
   const [pForm, setPForm] = useState({ name: "", type: "Transporte", rate: "0", unit: "viaje" });
   const [uForm, setUForm] = useState({ email: "", name: "", role: "vendedor", password: "Zdry123!" });
+  const [resetId, setResetId] = useState(null);
+  const [resetPw, setResetPw] = useState("");
 
   async function load() {
     const [c, p, u] = await Promise.all([
@@ -58,10 +64,33 @@ export default function People() {
     } catch (err) { setError(err.message); }
   }
 
+  async function viewAs(id) {
+    setError("");
+    try {
+      const u = await impersonate(id);
+      nav(homeFor(u));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : err.message);
+    }
+  }
+
+  async function resetPassword(e) {
+    e.preventDefault();
+    if (!resetId) return;
+    setError("");
+    try {
+      await api(`/people/collaborators/${resetId}/password`, { method: "POST", body: { password: resetPw } });
+      setResetId(null);
+      setResetPw("");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : err.message);
+    }
+  }
+
   return (
     <>
       <h2 className="section-title">Personas</h2>
-      <p className="section-sub">Clientes (riesgo A–D), proveedores y colaboradores con rol real de acceso.</p>
+      <p className="section-sub">Clientes (riesgo A–D), proveedores y colaboradores. Como administrador puedes ver la interfaz de otro usuario y restablecer su clave.</p>
       {error ? <div className="err">{error}</div> : null}
       <div className="subtab-row">
         <button type="button" className={`subtab ${tab === "customers" ? "active" : ""}`} onClick={() => setTab("customers")}>Clientes</button>
@@ -86,7 +115,7 @@ export default function People() {
           </form>
           <table className="data">
             <thead><tr><th>Empresa</th><th>RUC/DNI</th><th>Email</th><th>Riesgo</th></tr></thead>
-            <tbody>{customers.map((c) => <tr key={c.id}><td>{c.companyName}</td><td>{c.rucDni}</td><td>{c.email}</td><td>{c.risk}</td></tr>)}</tbody>
+            <tbody>{customers.map((c) => <tr key={c.id}><td>{c.companyName}{c.demo ? <span className="demo-chip">DEMO</span> : null}</td><td>{c.rucDni}</td><td>{c.email}</td><td>{c.risk}</td></tr>)}</tbody>
           </table>
         </div>
       )}
@@ -121,9 +150,31 @@ export default function People() {
             <div><label>Clave inicial</label><input value={uForm.password} onChange={(e) => setUForm({ ...uForm, password: e.target.value })} /></div>
             <button className="btn-primary" type="submit">+ Colaborador</button>
           </form>
+          {resetId ? (
+            <form className="form-grid" onSubmit={resetPassword} style={{ marginTop: 12 }}>
+              <div><label>Nueva clave</label><input type="password" value={resetPw} onChange={(e) => setResetPw(e.target.value)} required minLength={8} /></div>
+              <button className="btn-primary" type="submit">Restablecer</button>
+              <button className="btn-ghost" type="button" onClick={() => { setResetId(null); setResetPw(""); }}>Cancelar</button>
+            </form>
+          ) : null}
           <table className="data">
-            <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Activo</th></tr></thead>
-            <tbody>{collabs.map((u) => <tr key={u.id}><td>{u.name}</td><td>{u.email}</td><td>{u.role}</td><td>{u.active ? "sí" : "no"}</td></tr>)}</tbody>
+            <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Activo</th><th></th></tr></thead>
+            <tbody>
+              {collabs.map((u) => (
+                <tr key={u.id}>
+                  <td>{u.name}{u.demo ? <span className="demo-chip">DEMO</span> : null}</td>
+                  <td>{u.email}</td>
+                  <td>{ROLE_LABELS[u.role] || u.role}</td>
+                  <td>{u.active ? "sí" : "no"}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    {u.id !== user.id && u.active ? (
+                      <button type="button" className="btn-ghost" onClick={() => viewAs(u.id)}>Ver como</button>
+                    ) : null}
+                    <button type="button" className="btn-ghost" onClick={() => { setResetId(u.id); setResetPw(""); }}>Clave</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
           </table>
         </div>
       )}

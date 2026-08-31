@@ -42,7 +42,7 @@ export default function Inventory() {
                 <tr><td colSpan={showCosts ? 8 : 5} style={{ color: "var(--text-2)" }}>Aún no hay contenedores. Compras los crea al registrar una factura.</td></tr>
               ) : rows.map((r) => (
                 <tr key={r.iso}>
-                  <td>{r.iso}</td>
+                  <td>{r.iso}{r.demo ? <span className="demo-chip">DEMO</span> : null}</td>
                   <td>{r.type}</td>
                   <td>{r.cat}</td>
                   <td>{r.status}</td>

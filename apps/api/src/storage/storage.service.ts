@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import {
   CreateBucketCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
   PutObjectCommand,
@@ -63,5 +64,18 @@ export class StorageService implements OnModuleInit {
       contentType: out.ContentType,
       contentLength: out.ContentLength,
     };
+  }
+
+  async getBuffer(key: string): Promise<{ buffer: Buffer; contentType?: string }> {
+    const obj = await this.get(key);
+    const chunks: Buffer[] = [];
+    for await (const chunk of obj.stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return { buffer: Buffer.concat(chunks), contentType: obj.contentType };
+  }
+
+  async delete(key: string) {
+    await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
   }
 }

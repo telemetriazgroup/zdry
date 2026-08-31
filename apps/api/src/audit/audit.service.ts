@@ -18,13 +18,22 @@ export class AuditService {
   }) {
     await this.prisma.auditLog.create({
       data: {
-        userId: input.user?.id ?? null,
+        userId: input.user?.impersonator?.id ?? input.user?.id ?? null,
         action: input.action,
         entity: input.entity,
         entityId: input.entityId ?? null,
         ip: input.ip ?? null,
         ...(input.before !== undefined ? { before: input.before } : {}),
-        ...(input.after !== undefined ? { after: input.after } : {}),
+        ...(input.after !== undefined
+          ? {
+              after: input.user?.impersonator
+                ? ({
+                    ...(typeof input.after === "object" && input.after && !Array.isArray(input.after) ? input.after : { value: input.after }),
+                    _as: { id: input.user.id, email: input.user.email, name: input.user.name, role: input.user.role },
+                  } as Prisma.InputJsonValue)
+                : input.after,
+            }
+          : {}),
       },
     });
   }

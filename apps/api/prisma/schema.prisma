@@ -34,10 +34,13 @@ model User {
   refreshTokenHash String?
   customerId       String?
   customer         Customer?  @relation(fields: [customerId], references: [id])
+  demo             Boolean    @default(false)
   createdAt        DateTime   @default(now())
   updatedAt        DateTime   @updatedAt
   auditLogs        AuditLog[]
   quotesSold       Quote[]    @relation("QuoteVendor")
+
+  @@index([demo])
 }
 
 model Depot {
@@ -49,6 +52,7 @@ model Depot {
   lat          Float?
   lng          Float?
   protected    Boolean     @default(false)
+  archivedAt   DateTime?
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
   containers   Container[]
@@ -104,6 +108,7 @@ model Container {
   nationalizedAt     DateTime?
   purchaseInvoiceId  String?
   purchaseInvoice    PurchaseInvoice?    @relation(fields: [purchaseInvoiceId], references: [id])
+  demo               Boolean             @default(false)
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
   history            ContainerHistory[]
@@ -116,6 +121,7 @@ model Container {
   @@index([depotId, lado])
   @@index([commercialStatus])
   @@index([mediaStatus])
+  @@index([demo])
 }
 
 model ContainerHistory {
@@ -137,6 +143,7 @@ model PurchaseInvoice {
   logistics    String
   amount       Decimal            @db.Decimal(12, 2)
   extras       Json
+  demo         Boolean            @default(false)
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
   lines        PurchaseInvoiceLine[]
@@ -145,6 +152,7 @@ model PurchaseInvoice {
   documents    PurchaseDocument[]
 
   @@index([number])
+  @@index([demo])
 }
 
 model PurchaseDocument {
@@ -191,18 +199,20 @@ model PendingExtraCost {
 }
 
 model ContainerType {
-  code      String  @id
-  label     String
-  dims      String
-  color     String
-  protected Boolean @default(false)
+  code       String    @id
+  label      String
+  dims       String
+  color      String
+  protected  Boolean   @default(false)
+  archivedAt DateTime?
 }
 
 model Category {
-  code      String  @id
-  label     String
-  color     String
-  protected Boolean @default(false)
+  code       String    @id
+  label      String
+  color      String
+  protected  Boolean   @default(false)
+  archivedAt DateTime?
 }
 
 model Customer {
@@ -212,11 +222,14 @@ model Customer {
   email            String
   phone            String
   risk             RiskGrade   @default(B)
+  demo             Boolean     @default(false)
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
   ownedContainers  Container[] @relation("OwnedContainers")
   users            User[]
   quotes           Quote[]
+
+  @@index([demo])
 }
 
 model InspectionPhoto {
@@ -325,6 +338,7 @@ model Quote {
   dispatchDate       DateTime?
   dispatchDepotId    String?
   dispatchNotes      String?
+  demo               Boolean          @default(false)
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
   lines              QuoteLine[]
@@ -338,6 +352,7 @@ model Quote {
   @@index([dealStatus])
   @@index([vendorId])
   @@index([customerId])
+  @@index([demo])
 }
 
 model QuoteLine {
@@ -435,4 +450,17 @@ model Dispatch {
   updatedAt     DateTime  @updatedAt
 
   @@index([status])
+}
+
+model DataBackup {
+  id         String   @id @default(uuid())
+  label      String
+  kind       String
+  storageKey String
+  sizeBytes  Int
+  createdBy  String?
+  notes      Json?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
 }

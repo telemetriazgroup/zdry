@@ -26,9 +26,10 @@ export class CatalogMediaService {
   async list() {
     const rows = await this.prisma.container.findMany({
       where: {
-        intakeType: "compra",
-        physicallyReceived: true,
-        status: { in: ["Disponible", "Reservado"] },
+        ...(await this.prisma.hideDemo()),
+        intakeType: { in: ["compra", "pendiente_factura"] },
+        status: { in: ["Disponible", "Reservado", "Pendiente de ingreso"] },
+        OR: [{ physicallyReceived: true }, { lado: { not: null } }],
       },
       include: { depot: true, photos: { select: { slot: true } } },
       orderBy: { iso: "asc" },
@@ -47,6 +48,9 @@ export class CatalogMediaService {
       mediaStatus: c.mediaStatus,
       mediaReviewNote: c.mediaReviewNote,
       mediaApprovedAt: c.mediaApprovedAt,
+      invoicePending: c.invoicePending,
+      intakeType: c.intakeType,
+      demo: c.demo,
     }));
   }
 

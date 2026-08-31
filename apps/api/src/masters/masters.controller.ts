@@ -7,6 +7,7 @@ import {
   Param,
   Post,
   Put,
+  Query,
   Req,
 } from "@nestjs/common";
 import { Request } from "express";
@@ -15,6 +16,7 @@ import { AuditService } from "../audit/audit.service";
 import { Roles } from "../auth/roles.decorator";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
+import { masterListWhere } from "../domain/masters";
 
 @Controller("masters")
 export class MastersController {
@@ -24,13 +26,20 @@ export class MastersController {
   ) {}
 
   @Get("types")
-  types() {
-    return this.prisma.containerType.findMany({ orderBy: { code: "asc" } });
+  types(@Query("includeArchived") includeArchived?: string) {
+    return this.prisma.containerType.findMany({
+      where: masterListWhere(includeArchived),
+      orderBy: { code: "asc" },
+    });
   }
 
   @Post("types")
   @Roles("admin")
-  async createType(@Body() body: { code?: string; label?: string; dims?: string; color?: string }, @CurrentUser() user: AuthUser, @Req() req: Request) {
+  async createType(
+    @Body() body: { code?: string; label?: string; dims?: string; color?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
     const code = (body.code || "").trim().toUpperCase();
     if (!code || !body.label) throw new BadRequestException("Código y etiqueta son obligatorios");
     const row = await this.prisma.containerType.create({
@@ -40,26 +49,55 @@ export class MastersController {
     return row;
   }
 
+  @Put("types/:code")
+  @Roles("admin")
+  async updateType(
+    @Param("code") code: string,
+    @Body() body: { label?: string; dims?: string; color?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const before = await this.prisma.containerType.findUnique({ where: { code } });
+    if (!before) throw new BadRequestException("Tipo no existe");
+    const row = await this.prisma.containerType.update({
+      where: { code },
+      data: {
+        label: body.label ?? before.label,
+        dims: body.dims ?? before.dims,
+        color: body.color ?? before.color,
+      },
+    });
+    await this.audit.log({ user, action: "update", entity: "ContainerType", entityId: code, before: before as object, after: row as object, ip: req.ip });
+    return row;
+  }
+
   @Delete("types/:code")
   @Roles("admin")
-  async deleteType(@Param("code") code: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    const row = await this.prisma.containerType.findUnique({ where: { code } });
-    if (!row) throw new BadRequestException("Tipo no existe");
-    const inUse = await this.prisma.container.count({ where: { type: code } });
-    if (row.protected || inUse) throw new BadRequestException("No se puede eliminar un tipo de catálogo en uso / protegido");
-    await this.prisma.containerType.delete({ where: { code } });
-    await this.audit.log({ user, action: "delete", entity: "ContainerType", entityId: code, before: row as object, ip: req.ip });
-    return { ok: true };
+  async archiveType(@Param("code") code: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.archive("containerType", code, user, req);
+  }
+
+  @Post("types/:code/restore")
+  @Roles("admin")
+  async restoreType(@Param("code") code: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.restore("containerType", code, user, req);
   }
 
   @Get("categories")
-  categories() {
-    return this.prisma.category.findMany({ orderBy: { code: "asc" } });
+  categories(@Query("includeArchived") includeArchived?: string) {
+    return this.prisma.category.findMany({
+      where: masterListWhere(includeArchived),
+      orderBy: { code: "asc" },
+    });
   }
 
   @Post("categories")
   @Roles("admin")
-  async createCategory(@Body() body: { code?: string; label?: string; color?: string }, @CurrentUser() user: AuthUser, @Req() req: Request) {
+  async createCategory(
+    @Body() body: { code?: string; label?: string; color?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
     const code = (body.code || "").trim().toUpperCase();
     if (!code || !body.label) throw new BadRequestException("Código y etiqueta son obligatorios");
     const row = await this.prisma.category.create({
@@ -69,21 +107,45 @@ export class MastersController {
     return row;
   }
 
+  @Put("categories/:code")
+  @Roles("admin")
+  async updateCategory(
+    @Param("code") code: string,
+    @Body() body: { label?: string; color?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const before = await this.prisma.category.findUnique({ where: { code } });
+    if (!before) throw new BadRequestException("Condición no existe");
+    const row = await this.prisma.category.update({
+      where: { code },
+      data: {
+        label: body.label ?? before.label,
+        color: body.color ?? before.color,
+      },
+    });
+    await this.audit.log({ user, action: "update", entity: "Category", entityId: code, before: before as object, after: row as object, ip: req.ip });
+    return row;
+  }
+
   @Delete("categories/:code")
   @Roles("admin")
-  async deleteCategory(@Param("code") code: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    const row = await this.prisma.category.findUnique({ where: { code } });
-    if (!row) throw new BadRequestException("Categoría no existe");
-    const inUse = await this.prisma.container.count({ where: { cat: code } });
-    if (row.protected || inUse) throw new BadRequestException("No se puede eliminar una condición protegida");
-    await this.prisma.category.delete({ where: { code } });
-    await this.audit.log({ user, action: "delete", entity: "Category", entityId: code, before: row as object, ip: req.ip });
-    return { ok: true };
+  async archiveCategory(@Param("code") code: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.archive("category", code, user, req);
+  }
+
+  @Post("categories/:code/restore")
+  @Roles("admin")
+  async restoreCategory(@Param("code") code: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.restore("category", code, user, req);
   }
 
   @Get("depots")
-  depots() {
-    return this.prisma.depot.findMany({ orderBy: { name: "asc" } });
+  depots(@Query("includeArchived") includeArchived?: string) {
+    return this.prisma.depot.findMany({
+      where: masterListWhere(includeArchived),
+      orderBy: { name: "asc" },
+    });
   }
 
   @Post("depots")
@@ -135,13 +197,60 @@ export class MastersController {
 
   @Delete("depots/:id")
   @Roles("admin")
-  async deleteDepot(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    const row = await this.prisma.depot.findUnique({ where: { id } });
-    if (!row) throw new BadRequestException("Depósito no existe");
-    const inUse = await this.prisma.container.count({ where: { depotId: id } });
-    if (row.protected || inUse) throw new BadRequestException("No se puede eliminar un depósito en uso / protegido");
-    await this.prisma.depot.delete({ where: { id } });
-    await this.audit.log({ user, action: "delete", entity: "Depot", entityId: id, before: row as object, ip: req.ip });
-    return { ok: true };
+  async archiveDepot(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.archive("depot", id, user, req);
+  }
+
+  @Post("depots/:id/restore")
+  @Roles("admin")
+  async restoreDepot(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.restore("depot", id, user, req);
+  }
+
+  private async archive(kind: "depot" | "containerType" | "category", id: string, user: AuthUser, req: Request) {
+    if (kind === "depot") {
+      const row = await this.prisma.depot.findUnique({ where: { id } });
+      if (!row) throw new BadRequestException("Depósito no existe");
+      if (row.archivedAt) throw new BadRequestException("Ya está archivado.");
+      const updated = await this.prisma.depot.update({ where: { id }, data: { archivedAt: new Date() } });
+      await this.audit.log({ user, action: "archive", entity: "Depot", entityId: id, before: row as object, after: updated as object, ip: req.ip });
+      return updated;
+    }
+    if (kind === "containerType") {
+      const row = await this.prisma.containerType.findUnique({ where: { code: id } });
+      if (!row) throw new BadRequestException("Tipo no existe");
+      if (row.archivedAt) throw new BadRequestException("Ya está archivado.");
+      const updated = await this.prisma.containerType.update({ where: { code: id }, data: { archivedAt: new Date() } });
+      await this.audit.log({ user, action: "archive", entity: "ContainerType", entityId: id, before: row as object, after: updated as object, ip: req.ip });
+      return updated;
+    }
+    const row = await this.prisma.category.findUnique({ where: { code: id } });
+    if (!row) throw new BadRequestException("Condición no existe");
+    if (row.archivedAt) throw new BadRequestException("Ya está archivada.");
+    const updated = await this.prisma.category.update({ where: { code: id }, data: { archivedAt: new Date() } });
+    await this.audit.log({ user, action: "archive", entity: "Category", entityId: id, before: row as object, after: updated as object, ip: req.ip });
+    return updated;
+  }
+
+  private async restore(kind: "depot" | "containerType" | "category", id: string, user: AuthUser, req: Request) {
+    if (kind === "depot") {
+      const row = await this.prisma.depot.findUnique({ where: { id } });
+      if (!row) throw new BadRequestException("Depósito no existe");
+      const updated = await this.prisma.depot.update({ where: { id }, data: { archivedAt: null } });
+      await this.audit.log({ user, action: "restore", entity: "Depot", entityId: id, before: row as object, after: updated as object, ip: req.ip });
+      return updated;
+    }
+    if (kind === "containerType") {
+      const row = await this.prisma.containerType.findUnique({ where: { code: id } });
+      if (!row) throw new BadRequestException("Tipo no existe");
+      const updated = await this.prisma.containerType.update({ where: { code: id }, data: { archivedAt: null } });
+      await this.audit.log({ user, action: "restore", entity: "ContainerType", entityId: id, before: row as object, after: updated as object, ip: req.ip });
+      return updated;
+    }
+    const row = await this.prisma.category.findUnique({ where: { code: id } });
+    if (!row) throw new BadRequestException("Condición no existe");
+    const updated = await this.prisma.category.update({ where: { code: id }, data: { archivedAt: null } });
+    await this.audit.log({ user, action: "restore", entity: "Category", entityId: id, before: row as object, after: updated as object, ip: req.ip });
+    return updated;
   }
 }

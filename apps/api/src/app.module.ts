@@ -16,6 +16,7 @@ import { RedisModule } from "./redis/redis.module";
 import { WarehouseModule } from "./warehouse/warehouse.module";
 import { QuotesModule } from "./quotes/quotes.module";
 import { CatalogMediaModule } from "./catalog-media/catalog-media.module";
+import { DemoModule } from "./demo/demo.module";
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { CatalogMediaModule } from "./catalog-media/catalog-media.module";
     QuotesModule,
     CatalogMediaModule,
     ConfigAppModule,
+    DemoModule,
   ],
   controllers: [HealthController],
   providers: [SeedService],

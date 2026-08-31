@@ -5,7 +5,14 @@ import { Request } from "express";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuthUser } from "./auth.types";
 
-type AccessPayload = { sub: string; email: string; role: string; name: string; typ: string };
+type AccessPayload = {
+  sub: string;
+  email: string;
+  role: string;
+  name: string;
+  typ: string;
+  act?: string;
+};
 
 function cookieOrBearer(req: Request): string | null {
   const fromCookie = req.cookies?.zdry_access as string | undefined;
@@ -31,6 +38,20 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!user || !user.active) {
       throw new UnauthorizedException("Sesión inválida");
     }
-    return { id: user.id, email: user.email, name: user.name, role: user.role, customerId: user.customerId };
+    const auth: AuthUser = {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      customerId: user.customerId,
+    };
+    if (payload.act && payload.act !== user.id) {
+      const actor = await this.prisma.user.findUnique({ where: { id: payload.act } });
+      if (!actor || !actor.active || actor.role !== "admin") {
+        throw new UnauthorizedException("La sesión asistida ya no es válida.");
+      }
+      auth.impersonator = { id: actor.id, email: actor.email, name: actor.name, role: actor.role };
+    }
+    return auth;
   }
 }

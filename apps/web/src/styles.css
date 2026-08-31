@@ -130,9 +130,48 @@ table.data td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-s
 }
 .navtabs { display: flex; gap: 4px; flex: 1; flex-wrap: wrap; }
 .navtab.active-link { background: rgba(255,255,255,.14); color: #fff; }
-.badge-role {
-  font-size: 10px; font-weight: 800; padding: 3px 9px; border-radius: 20px;
-  background: var(--orange); color: #fff; letter-spacing: .02em;
+.demo-bar {
+  background: #d9622f;
+  color: #fff;
+  text-align: center;
+  padding: 7px 16px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: .01em;
+}
+.demo-chip {
+  display: inline-block;
+  background: #d9622f;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.demo-panel { border: 1px solid #f0b155; background: #fff9f0; }
+.impersonation-bar {
+  background: #c9720b;
+  color: #fff;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 24px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.impersonation-bar button {
+  background: #fff;
+  color: #12203a;
+  border: none;
+  border-radius: 7px;
+  padding: 6px 12px;
+  font-weight: 800;
+  cursor: pointer;
 }
 .config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
 .config-card { background: #f0f7ff; border: 1px solid #a9d3f5; border-radius: 10px; padding: 14px; }

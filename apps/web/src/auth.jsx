@@ -99,6 +99,25 @@ export function AuthProvider({ children }) {
         setUser(d.user);
         return d.user;
       },
+      async refreshUser(next) {
+        if (next?.id) {
+          setUser(next);
+          return next;
+        }
+        const d = await api("/auth/me");
+        setUser(d.user);
+        return d.user;
+      },
+      async impersonate(userId) {
+        const d = await api("/auth/impersonate", { method: "POST", body: { userId } });
+        setUser(d.user);
+        return d.user;
+      },
+      async stopImpersonation() {
+        const d = await api("/auth/stop-impersonate", { method: "POST", body: {} });
+        setUser(d.user);
+        return d.user;
+      },
       async logout() {
         try {
           await api("/auth/logout", { method: "POST" });

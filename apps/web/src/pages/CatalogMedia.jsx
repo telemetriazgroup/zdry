@@ -112,7 +112,7 @@ export default function CatalogMedia() {
       <h2 className="section-title">Ficha multimedia del catálogo</h2>
       <p className="section-sub">
         Carga o reemplaza cada foto por separado: las que no toques se conservan. El cliente verá solo las que existan, en recorrido automático.
-        Admin, Almacén y Compras pueden cargar. <b>Solo Administrador o Gerencia publican</b> lo que ve el cliente. Cualquier cambio vuelve la ficha a pendiente.
+        Admin, Almacén y Compras pueden cargar. Incluye compras facturadas y reentregas aún sin factura. <b>Solo Administrador o Gerencia publican</b> lo que ve el cliente. Cualquier cambio vuelve la ficha a pendiente.
       </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
@@ -122,15 +122,16 @@ export default function CatalogMedia() {
           <h3>Unidades en stock</h3>
           <table className="data">
             <thead>
-              <tr><th>ISO</th><th>Tipo</th><th>Fotos</th><th>Video</th><th>Ficha</th></tr>
+              <tr><th>ISO</th><th>Tipo</th><th>Fotos</th><th>Video</th><th>Origen</th><th>Ficha</th></tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.iso} className="expandable" onClick={() => open(r.iso)}>
-                  <td className="card-iso">{r.iso}</td>
+                  <td className="card-iso">{r.iso}{r.demo ? <span className="demo-chip">DEMO</span> : null}</td>
                   <td>{r.type}</td>
                   <td>{r.photoCount}</td>
                   <td>{r.hasVideo ? "sí" : "—"}</td>
+                  <td>{r.invoicePending || r.intakeType === "pendiente_factura" ? "compra sin factura" : "compra"}</td>
                   <td style={{ color: (STATUS[r.mediaStatus] || STATUS.pendiente).color, fontWeight: 700 }}>
                     {(STATUS[r.mediaStatus] || STATUS.pendiente).label}
                   </td>

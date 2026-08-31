@@ -17,8 +17,8 @@ export class PeopleController {
   ) {}
 
   @Get("customers")
-  customers() {
-    return this.prisma.customer.findMany({ orderBy: { companyName: "asc" } });
+  async customers() {
+    return this.prisma.customer.findMany({ where: await this.prisma.hideDemo(), orderBy: { companyName: "asc" } });
   }
 
   @Post("customers")
@@ -92,7 +92,10 @@ export class PeopleController {
 
   @Get("collaborators")
   async collaborators() {
-    const rows = await this.prisma.user.findMany({ orderBy: { name: "asc" } });
+    const rows = await this.prisma.user.findMany({
+      where: await this.prisma.hideDemo(),
+      orderBy: { name: "asc" },
+    });
     return rows.map(({ passwordHash, refreshTokenHash, ...u }) => u);
   }
 
@@ -122,5 +125,21 @@ export class PeopleController {
     });
     const { passwordHash: _, refreshTokenHash: __, ...safe } = row;
     return safe;
+  }
+
+  @Post("collaborators/:id/password")
+  async resetPassword(
+    @Param("id") id: string,
+    @Body() body: { password?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const password = body.password || "";
+    if (password.length < 8) throw new BadRequestException("La clave debe tener al menos 8 caracteres.");
+    const row = await this.prisma.user.findUnique({ where: { id } });
+    if (!row) throw new BadRequestException("Usuario no encontrado.");
+    await this.prisma.user.update({ where: { id }, data: { passwordHash: await argon2.hash(password) } });
+    await this.audit.log({ user, action: "reset_password", entity: "User", entityId: id, ip: req.ip });
+    return { ok: true };
   }
 }

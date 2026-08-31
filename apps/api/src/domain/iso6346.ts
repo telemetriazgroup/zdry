@@ -80,6 +80,11 @@ export function requiresNationalization(intakeType: string): boolean {
   return intakeType === "compra" || intakeType === "pendiente_factura";
 }
 
+/** Stock propio de ZDRY (compra facturada o reentrega aún sin factura). No es custodia de cliente. */
+export function isOwnSaleStock(intakeType: string | null | undefined): boolean {
+  return intakeType === "compra" || intakeType === "pendiente_factura";
+}
+
 export function isNationalized(intakeType: string, damNumber: string | null | undefined): boolean {
   return !requiresNationalization(intakeType) || !!damNumber;
 }

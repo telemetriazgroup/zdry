@@ -1,7 +1,146 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
+import { useAuth } from "../auth.jsx";
+
+function DemoPanel() {
+  const [st, setSt] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [msg, setMsg] = useState("");
+
+  async function refresh() {
+    const d = await api("/demo");
+    setSt(d);
+  }
+
+  useEffect(() => {
+    refresh().catch((e) => setError(e.message));
+  }, []);
+
+  async function run(label, path, confirmText) {
+    if (confirmText && !window.confirm(confirmText)) return;
+    setBusy(label);
+    setError("");
+    setMsg("");
+    try {
+      await api(path, { method: "POST" });
+      await refresh();
+      setMsg("Listo.");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  if (!st) {
+    return (
+      <div className="panel demo-panel" style={{ marginBottom: 18 }}>
+        <h3>Modo demostración</h3>
+        {error ? <div className="err">{error}</div> : <p className="section-sub">Cargando…</p>}
+      </div>
+    );
+  }
+
+  const disabled = !!busy;
+
+  return (
+    <div className="panel demo-panel" style={{ marginBottom: 18 }}>
+      <h3>Modo demostración</h3>
+      <p className="section-sub">
+        Solo superusuario. Carga un dataset etiquetado que convive con los datos reales: al volver a producción
+        se oculta, no se borra. Las fotos salen de Wikimedia Commons (CC BY-SA).
+      </p>
+      <div className="tile-row" style={{ margin: "12px 0" }}>
+        <div className="tile">
+          <div className="v">{st.on ? "DEMO" : "PROD"}</div>
+          <div className="l">Modo actual</div>
+        </div>
+        <div className="tile">
+          <div className="v">{st.counts?.containers ?? 0}</div>
+          <div className="l">Unidades demo</div>
+        </div>
+        <div className="tile">
+          <div className="v">{st.counts?.quotes ?? 0}</div>
+          <div className="l">Cotizaciones demo</div>
+        </div>
+        <div className="tile">
+          <div className="v">{st.backups?.length ?? 0}</div>
+          <div className="l">Backups</div>
+        </div>
+      </div>
+      {error ? <div className="err">{error}</div> : null}
+      {msg ? <div className="ok-msg">{msg}</div> : null}
+      {busy ? <div className="warn-inline">{busy}… puede tardar un minuto si descarga fotos.</div> : null}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+        <button className="btn-primary" type="button" disabled={disabled || st.on} onClick={() => run("Activando demo", "/demo/activate")}>
+          Activar modo demo
+        </button>
+        <button className="btn-ghost" type="button" disabled={disabled || !st.on} onClick={() => run("Volviendo a producción", "/demo/production")}>
+          Volver a producción
+        </button>
+        <button className="btn-ghost" type="button" disabled={disabled || !st.loaded} onClick={() => run("Recargando dataset", "/demo/reload", "¿Recargar el dataset demo? Se hace backup automático. Los datos de producción no se tocan.")}>
+          Recargar dataset
+        </button>
+        <button className="btn-ghost" type="button" disabled={disabled} onClick={() => run("Creando backup", "/demo/backups")}>
+          Backup ahora
+        </button>
+        <button
+          className="btn-ghost"
+          type="button"
+          disabled={disabled || !st.loaded}
+          onClick={() => run("Vaciando demo", "/demo/purge", "¿Eliminar solo los datos etiquetados como demo? Producción se conserva. Se crea un backup antes.")}
+        >
+          Vaciar datos demo
+        </button>
+      </div>
+      {st.demoLogins?.length ? (
+        <p className="section-sub" style={{ marginTop: 12 }}>
+          Clientes demo (clave {st.demoLogins[0].password}): {st.demoLogins.map((u) => u.email).join(" · ")}
+        </p>
+      ) : null}
+      {st.backups?.length ? (
+        <div style={{ marginTop: 14 }}>
+          <div className="box-kicker">Backups (restaurar reinyecta filas por ID; no borra lo creado después)</div>
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Etiqueta</th>
+                <th>Tipo</th>
+                <th>Tamaño</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {st.backups.map((b) => (
+                <tr key={b.id}>
+                  <td>{new Date(b.createdAt).toLocaleString("es-PE")}</td>
+                  <td>{b.label}</td>
+                  <td>{b.kind}</td>
+                  <td>{Math.round(b.sizeBytes / 1024)} KB</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      disabled={disabled}
+                      onClick={() => run("Restaurando", `/demo/backups/${b.id}/restore`, "¿Restaurar este backup? Se reinyectan los registros. Los datos actuales no se eliminan.")}
+                    >
+                      Restaurar
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export default function ConfigPage() {
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [rules, setRules] = useState(null);
   const [vis, setVis] = useState([]);
@@ -57,6 +196,8 @@ export default function ConfigPage() {
       <p className="section-sub">{data?.note || "Solo Administrador y Gerente."}</p>
       {error ? <div className="err">{error}</div> : null}
       {saved ? <div className="ok-msg">{saved}</div> : null}
+
+      {user?.role === "admin" ? <DemoPanel /> : null}
 
       <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Visibilidad de precios en catálogo</h3>

@@ -13,6 +13,7 @@ import Recepcion from "./Recepcion.jsx";
 import Patio from "./Patio.jsx";
 import QuotesHub from "./QuotesHub.jsx";
 import CatalogMedia from "./CatalogMedia.jsx";
+import Profile from "./Profile.jsx";
 
 function allowed(nav, pathname, role) {
   if ((role === "admin" || role === "compras") && pathname.startsWith("/app/compras")) return true;
@@ -49,6 +50,7 @@ export default function Shell() {
             ))}
           </nav>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <NavLink to="/app/perfil" className={({ isActive }) => `navtab ${isActive ? "active-link" : ""}`}>Mi perfil</NavLink>
             <span className="badge-role">{ROLE_LABELS[user.role]}</span>
             <span style={{ fontSize: 12, color: "#c7cede" }}>{user.name}</span>
             <button className="btn-primary" type="button" onClick={onLogout}>Salir</button>
@@ -60,6 +62,7 @@ export default function Shell() {
         <div className="role-desc">{ROLE_DESC[user.role]}</div>
         <Routes>
           <Route index element={<Home />} />
+          <Route path="perfil" element={<Profile />} />
           <Route path="inventario" element={<Gate nav={nav} role={user.role} path="/app/inventario"><Inventory /></Gate>} />
           <Route path="personas" element={<Gate nav={nav} role={user.role} path="/app/personas"><People /></Gate>} />
           <Route path="maestros" element={<Gate nav={nav} role={user.role} path="/app/maestros"><Masters /></Gate>} />

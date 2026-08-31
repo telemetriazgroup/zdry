@@ -98,7 +98,7 @@ export default function QuotesHub() {
             <tbody>
               {filtered.map((row) => (
                 <tr key={row.id} className="expandable" onClick={() => refresh(row.id)}>
-                  <td>{row.number}</td>
+                  <td>{row.number}{row.demo ? <span className="demo-chip">DEMO</span> : null}</td>
                   <td>{row.customer.companyName}</td>
                   <td>{STATUS_LABEL[row.dealStatus] || row.dealStatus}</td>
                   <td>{money(row.totals.gross)}</td>
@@ -109,7 +109,7 @@ export default function QuotesHub() {
         </div>
         {q ? (
           <div className="panel">
-            <h3>{q.number}</h3>
+            <h3>{q.number}{q.demo ? <span className="demo-chip">DEMO</span> : null}</h3>
             <p className="section-sub">{q.customer.companyName} · {STATUS_LABEL[q.dealStatus]} {q.holdPaused ? "· hold en pausa" : ""}</p>
             <ul>{q.lines.map((l) => (
               <li key={l.id}>{l.iso} lista {money(l.listPrice)} / piso {money(l.minPrice)} / neto {money(l.priceNet)}</li>

@@ -48,16 +48,19 @@ function BankBox({ accounts }) {
 }
 
 export default function Account() {
-  const { user, logout } = useAuth();
+  const { user, logout, refreshUser } = useAuth();
   const [profile, setProfile] = useState(null);
   const [quotes, setQuotes] = useState([]);
   const [open, setOpen] = useState(null);
   const [detail, setDetail] = useState(null);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [bank, setBank] = useState("BCP");
   const [op, setOp] = useState("");
   const [form, setForm] = useState({ companyName: "", rucDni: "", contactName: "", phone: "" });
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
 
   const load = useCallback(() => {
     api("/account").then((p) => {
@@ -80,6 +83,8 @@ export default function Account() {
     try {
       const p = await api("/account/profile", { method: "PUT", body: form });
       setProfile(p);
+      await refreshUser();
+      setNotice("Datos guardados.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : err.message);
     }
@@ -147,6 +152,7 @@ export default function Account() {
           El catálogo público solo deja ver stock y armar el carrito.
         </p>
         {error ? <div className="err">{error}</div> : null}
+        {notice ? <div className="ok-msg">{notice}</div> : null}
         {incomplete ? (
           <div className="err">Faltan datos: {(profile.missing || []).join(", ")}. Complétalos para negociar o adjuntar el voucher.</div>
         ) : null}
@@ -174,6 +180,33 @@ export default function Account() {
           </form>
         </div>
 
+        <div className="panel" style={{ marginBottom: 18 }}>
+          <h3>Cambiar clave</h3>
+          {user?.impersonator ? (
+            <p className="section-sub">En una sesión asistida no se cambia la clave. Restablécela en Personas.</p>
+          ) : (
+            <form
+              className="form-grid"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setError("");
+                try {
+                  await api("/auth/password", { method: "POST", body: { currentPassword, newPassword } });
+                  setCurrentPassword("");
+                  setNewPassword("");
+                  setNotice("Clave actualizada.");
+                } catch (err) {
+                  setError(err instanceof ApiError ? err.message : err.message);
+                }
+              }}
+            >
+              <div><label>Clave actual</label><input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required /></div>
+              <div><label>Nueva clave (mín. 8)</label><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required minLength={8} /></div>
+              <button className="btn-primary" type="submit">Cambiar clave</button>
+            </form>
+          )}
+        </div>
+
         <BankBox accounts={profile?.paymentAccounts} />
 
         <div className="dash-grid">
@@ -184,7 +217,7 @@ export default function Account() {
               <tbody>
                 {quotes.map((q) => (
                   <tr key={q.id}>
-                    <td>{q.number}</td>
+                    <td>{q.number}{q.demo ? <span className="demo-chip">DEMO</span> : null}</td>
                     <td>{STATUS_LABEL[q.dealStatus] || q.dealStatus}</td>
                     <td>{money(q.totals.gross)}</td>
                     <td><button className="link-btn" type="button" onClick={() => openQuote(q.id)}>Ver</button></td>

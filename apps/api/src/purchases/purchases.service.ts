@@ -10,6 +10,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { AuthUser, canSeeRealCosts } from "../auth/auth.types";
 import { damFormatOk, isNationalized, parseIso6346, requiresNationalization } from "../domain/iso6346";
+import { ACTIVE_MASTER } from "../domain/masters";
 import { applyShowPrice, DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
 import {
   INCOTERMS,
@@ -71,10 +72,14 @@ export class PurchasesService {
   }
 
   async badges() {
+    const demoOn = await this.prisma.demoOn();
+    const extrasWhere: Prisma.PendingExtraCostWhereInput = demoOn
+      ? { status: "pending" }
+      : { status: "pending", invoice: { demo: false } };
     const [extras, dam] = await Promise.all([
-      this.prisma.pendingExtraCost.count({ where: { status: "pending" } }),
+      this.prisma.pendingExtraCost.count({ where: extrasWhere }),
       this.prisma.container.count({
-        where: { intakeType: { in: ["compra", "pendiente_factura"] }, damNumber: null },
+        where: { intakeType: { in: ["compra", "pendiente_factura"] }, damNumber: null, ...(await this.prisma.hideDemo()) },
       }),
     ]);
     return { extras, dam };
@@ -82,6 +87,7 @@ export class PurchasesService {
 
   async listInvoices() {
     const rows = await this.prisma.purchaseInvoice.findMany({
+      where: await this.prisma.hideDemo(),
       orderBy: { createdAt: "desc" },
       include: {
         lines: true,
@@ -109,9 +115,9 @@ export class PurchasesService {
     if (!input.providerName?.trim()) throw new BadRequestException("Selecciona el proveedor.");
     if (!input.lines?.length) throw new BadRequestException("Ingresa los códigos ISO y genera las filas de detalle.");
     const depot = await this.prisma.depot.findUnique({ where: { id: input.depotId } });
-    if (!depot) throw new BadRequestException("Depósito de ingreso inválido.");
-    const typeCodes = new Set((await this.prisma.containerType.findMany()).map((t) => t.code));
-    const catCodes = new Set((await this.prisma.category.findMany()).map((c) => c.code));
+    if (!depot || depot.archivedAt) throw new BadRequestException("Depósito de ingreso inválido.");
+    const typeCodes = new Set((await this.prisma.containerType.findMany({ where: ACTIVE_MASTER })).map((t) => t.code));
+    const catCodes = new Set((await this.prisma.category.findMany({ where: ACTIVE_MASTER })).map((c) => c.code));
 
     const seen = new Set<string>();
     const parsedLines = input.lines.map((line, idx) => {
@@ -253,8 +259,9 @@ export class PurchasesService {
   }
 
   async pendingExtras() {
+    const demoOn = await this.prisma.demoOn();
     const rows = await this.prisma.pendingExtraCost.findMany({
-      where: { status: "pending" },
+      where: demoOn ? { status: "pending" } : { status: "pending", invoice: { demo: false } },
       orderBy: { createdAt: "desc" },
       include: { invoice: { select: { number: true, providerName: true, logistics: true } } },
     });
@@ -267,7 +274,7 @@ export class PurchasesService {
 
   async damPending() {
     const rows = await this.prisma.container.findMany({
-      where: { intakeType: { in: ["compra", "pendiente_factura"] }, damNumber: null },
+        where: { intakeType: { in: ["compra", "pendiente_factura"] }, damNumber: null, ...(await this.prisma.hideDemo()) },
       include: { depot: { select: { name: true } }, purchaseInvoice: { select: { number: true } } },
       orderBy: { createdAt: "asc" },
     });
@@ -276,7 +283,7 @@ export class PurchasesService {
 
   async damDone() {
     const rows = await this.prisma.container.findMany({
-      where: { damNumber: { not: null } },
+        where: { damNumber: { not: null }, ...(await this.prisma.hideDemo()) },
       orderBy: { nationalizedAt: "desc" },
       take: 50,
     });
@@ -327,19 +334,19 @@ export class PurchasesService {
     return this.presentContainerDam(updated);
   }
 
-  listContainersForRole(role: AuthUser["role"]) {
-    return Promise.all([
+  async listContainersForRole(role: AuthUser["role"]) {
+    const [rows, visRows] = await Promise.all([
       this.prisma.container.findMany({
+        where: await this.prisma.hideDemo(),
         include: { depot: { select: { name: true } } },
         orderBy: { createdAt: "desc" },
       }),
       this.prisma.visibilityRule.findMany(),
-    ]).then(([rows, visRows]) => {
-      const vis = visRows.length
-        ? visRows.map((r) => ({ scope: r.scope, target: r.target, show: r.show }))
-        : DEFAULT_VISIBILITY_RULES;
-      return rows.map((c) => this.presentInventory(c, role, vis));
-    });
+    ]);
+    const vis = visRows.length
+      ? visRows.map((r) => ({ scope: r.scope, target: r.target, show: r.show }))
+      : DEFAULT_VISIBILITY_RULES;
+    return rows.map((c) => this.presentInventory(c, role, vis));
   }
 
   async attachDocuments(
@@ -520,6 +527,7 @@ export class PurchasesService {
       ruma: number | null;
       columna: number | null;
       nivel: number | null;
+      demo?: boolean;
       depot: { name: string };
     },
     role: AuthUser["role"],
@@ -534,6 +542,7 @@ export class PurchasesService {
       type: c.type,
       cat: c.cat,
       status: c.status,
+      demo: !!c.demo,
       depot: c.depot.name,
       physicallyReceived: c.physicallyReceived,
       nationalized: isNationalized(c.intakeType, c.damNumber),

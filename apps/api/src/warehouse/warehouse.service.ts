@@ -13,6 +13,7 @@ import { AuthUser } from "../auth/auth.types";
 import { StorageService } from "../storage/storage.service";
 import { YardLockService } from "../redis/yard-lock.service";
 import { parseIso6346 } from "../domain/iso6346";
+import { ACTIVE_MASTER } from "../domain/masters";
 import { MANUFACTURERS } from "../domain/purchase-extras";
 import {
   extForInspectionMime,
@@ -84,10 +85,10 @@ export class WarehouseService {
 
   async meta() {
     const [types, categories, depots, customers, rules] = await Promise.all([
-      this.prisma.containerType.findMany({ orderBy: { code: "asc" } }),
-      this.prisma.category.findMany({ orderBy: { code: "asc" } }),
-      this.prisma.depot.findMany({ orderBy: { name: "asc" } }),
-      this.prisma.customer.findMany({ orderBy: { companyName: "asc" } }),
+      this.prisma.containerType.findMany({ where: ACTIVE_MASTER, orderBy: { code: "asc" } }),
+      this.prisma.category.findMany({ where: ACTIVE_MASTER, orderBy: { code: "asc" } }),
+      this.prisma.depot.findMany({ where: ACTIVE_MASTER, orderBy: { name: "asc" } }),
+      this.prisma.customer.findMany({ where: await this.prisma.hideDemo(), orderBy: { companyName: "asc" } }),
       this.getLayoutRules(),
     ]);
     const maxY = new Date().getFullYear();
@@ -129,7 +130,7 @@ export class WarehouseService {
       this.prisma.containerType.findMany(),
       this.prisma.category.findMany(),
       this.prisma.container.findMany({
-        where: { status: { not: "Vendido" } },
+        where: { status: { not: "Vendido" }, ...(await this.prisma.hideDemo()) },
         include: { depot: true },
         orderBy: { createdAt: "desc" },
       }),
@@ -201,11 +202,11 @@ export class WarehouseService {
       throw new BadRequestException("Selecciona el cliente dueño de la unidad.");
     }
     const depot = await this.prisma.depot.findUnique({ where: { id: input.depotId || "" } });
-    if (!depot) throw new BadRequestException("Depósito de ingreso inválido.");
+    if (!depot || depot.archivedAt) throw new BadRequestException("Depósito de ingreso inválido.");
     const typeRow = await this.prisma.containerType.findUnique({ where: { code: input.type || "" } });
     const catRow = await this.prisma.category.findUnique({ where: { code: input.cat || "" } });
-    if (!typeRow) throw new BadRequestException("Tipo inválido.");
-    if (!catRow) throw new BadRequestException("Condición inválida.");
+    if (!typeRow || typeRow.archivedAt) throw new BadRequestException("Tipo inválido.");
+    if (!catRow || catRow.archivedAt) throw new BadRequestException("Condición inválida.");
     if (category === "almacenaje_cliente") {
       const customer = await this.prisma.customer.findUnique({ where: { id: input.customerId } });
       if (!customer) throw new BadRequestException("Cliente inválido.");
@@ -496,9 +497,9 @@ export class WarehouseService {
     const [types, categories, depots, rules, rows] = await Promise.all([
       this.prisma.containerType.findMany(),
       this.prisma.category.findMany(),
-      this.prisma.depot.findMany({ orderBy: { name: "asc" } }),
+      this.prisma.depot.findMany({ where: ACTIVE_MASTER, orderBy: { name: "asc" } }),
       this.getLayoutRules(),
-      this.prisma.container.findMany({ where: { depotId } }),
+      this.prisma.container.findMany({ where: { depotId, ...(await this.prisma.hideDemo()) } }),
     ]);
     const typeMap = Object.fromEntries(types.map((t) => [t.code, t]));
     const catMap = Object.fromEntries(categories.map((c) => [c.code, c]));
@@ -532,6 +533,7 @@ export class WarehouseService {
         needsPlacement: needsYardPlacement(c),
         posLabel: posLabel(c),
         movesToRetrieve: movesToRetrieve(occupants, yu),
+        demo: c.demo,
       };
     });
     return {
@@ -620,6 +622,7 @@ export class WarehouseService {
               columna,
               nivel,
               physicallyReceived: true,
+              ...(unit.status === "Pendiente de ingreso" ? { status: "Disponible" } : {}),
             },
           });
           await tx.containerPosition.create({

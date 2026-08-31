@@ -22,6 +22,8 @@ import { AuthUser } from "../auth/auth.types";
 import { type DealStatus, holdClockPaused } from "../deal-close/deal-close.types";
 import { applyShowPrice, DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
 import { isMediaApproved } from "../domain/catalog-media";
+import { ACTIVE_MASTER } from "../domain/masters";
+import { isOwnSaleStock } from "../domain/iso6346";
 import {
   assertPriceFloor,
   computeListPrices,
@@ -144,9 +146,10 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     return { priceList: computed.priceList, priceMin: computed.priceMin };
   }
 
-  private catalogWhere() {
+  private async catalogWhere(): Promise<Prisma.ContainerWhereInput> {
     return {
-      intakeType: "compra",
+      ...(await this.prisma.hideDemo()),
+      intakeType: { in: ["compra", "pendiente_factura"] },
       physicallyReceived: true,
       status: { in: ["Disponible", "Reservado"] },
     };
@@ -155,8 +158,9 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   private async isCatalogVisible(iso: string) {
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c) return false;
+    if (c.demo && !(await this.prisma.demoOn())) return false;
     return (
-      c.intakeType === "compra" &&
+      isOwnSaleStock(c.intakeType) &&
       c.physicallyReceived &&
       (c.status === "Disponible" || c.status === "Reservado")
     );
@@ -164,11 +168,11 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
 
   async catalogMeta() {
     const [types, cats, depots, manufacturers] = await Promise.all([
-      this.prisma.containerType.findMany({ orderBy: { code: "asc" } }),
-      this.prisma.category.findMany({ orderBy: { code: "asc" } }),
-      this.prisma.depot.findMany({ orderBy: { name: "asc" } }),
+      this.prisma.containerType.findMany({ where: ACTIVE_MASTER, orderBy: { code: "asc" } }),
+      this.prisma.category.findMany({ where: ACTIVE_MASTER, orderBy: { code: "asc" } }),
+      this.prisma.depot.findMany({ where: ACTIVE_MASTER, orderBy: { name: "asc" } }),
       this.prisma.container.findMany({
-        where: this.catalogWhere(),
+        where: await this.catalogWhere(),
         select: { manufacturer: true },
         distinct: ["manufacturer"],
       }),
@@ -195,7 +199,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     page?: string;
   }) {
     const page = Math.max(1, parseInt(query.page || "1", 10) || 1);
-    const where: Prisma.ContainerWhereInput = { ...this.catalogWhere() };
+    const where: Prisma.ContainerWhereInput = { ...(await this.catalogWhere()) };
     if (query.type) where.type = query.type;
     if (query.cat) where.cat = query.cat;
     if (query.depot) where.depotId = query.depot;
@@ -259,6 +263,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         depotCity: c.depot.city,
         status: c.status,
         commercialStatus: c.commercialStatus,
+        demo: c.demo,
         showPrice,
         priceList: showPrice ? prices.priceList : null,
         priceMin: null,
@@ -316,6 +321,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       depotCity: c.depot.city,
       status: c.status,
       reserved: c.status === "Reservado",
+      demo: c.demo,
       showPrice,
       priceList: showPrice ? prices.priceList : null,
       igv: showPrice ? igvOf(prices.priceList) : null,
@@ -495,7 +501,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     for (const iso of isos) {
       const c = await this.prisma.container.findUnique({ where: { iso } });
       if (!c) throw new NotFoundException(`Unidad ${iso} no existe.`);
-      if (c.intakeType !== "compra") throw new BadRequestException(`${iso} no está en venta (custodia).`);
+      if (!isOwnSaleStock(c.intakeType)) throw new BadRequestException(`${iso} no está en venta (custodia).`);
       if (!c.physicallyReceived) throw new BadRequestException(`${iso} aún no está en patio.`);
       if (c.status !== "Disponible" && c.status !== "Reservado") {
         throw new ConflictException(`${iso} no está disponible.`);
@@ -512,6 +518,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     }
 
     const number = await this.nextQuoteNumber();
+    const anyDemo = (await this.prisma.container.findMany({ where: { iso: { in: isos }, demo: true } })).length > 0;
     const quote = await this.prisma.quote.create({
       data: {
         number,
@@ -519,6 +526,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         dealStatus: "nueva",
         customerId,
         vendorId,
+        demo: anyDemo,
         lines: { create: lines },
         events: { create: { type: "creada", detail: `Solicitud ${kind} ${number}` } },
       },
@@ -559,6 +567,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       number: q.number,
       kind: q.kind,
       dealStatus: q.dealStatus,
+      demo: q.demo,
       holdExpiresAt: q.holdExpiresAt,
       holdPausedAt: q.holdPausedAt,
       holdPaused: holdClockPaused(q.dealStatus as DealStatus),
@@ -620,7 +629,10 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async listForStaff(status?: string) {
-    const where: Prisma.QuoteWhereInput = status ? { dealStatus: status } : {};
+    const where: Prisma.QuoteWhereInput = {
+      ...(await this.prisma.hideDemo()),
+      ...(status ? { dealStatus: status } : {}),
+    };
     const rows = await this.prisma.quote.findMany({
       where,
       include: QUOTE_INCLUDE,
@@ -632,7 +644,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   async listForCustomer(user: AuthUser) {
     if (!user.customerId) return [];
     const rows = await this.prisma.quote.findMany({
-      where: { customerId: user.customerId },
+      where: { customerId: user.customerId, ...(await this.prisma.hideDemo()) },
       include: QUOTE_INCLUDE,
       orderBy: { createdAt: "desc" },
     });
@@ -1124,6 +1136,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         dealStatus: { in: ["reservada", "cotizada", "pago_rechazado"] },
         holdExpiresAt: { lte: now },
         holdPausedAt: null,
+        ...(await this.prisma.hideDemo()),
       },
       include: QUOTE_INCLUDE,
     });

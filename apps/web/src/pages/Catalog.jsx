@@ -279,6 +279,7 @@ export default function Catalog() {
                 <CardCover iso={u.iso} slots={publishedSlots(u)} version={u.mediaVersion} />
                 <span className="badge" style={{ background: "var(--navy)" }}>{u.type}</span>
                 <span className="badge-status">{u.status}</span>
+                {u.demo ? <span className="badge-status" style={{ top: 34, background: "#d9622f" }}>DEMO</span> : null}
               </div>
               <div className="card-body">
                 <div className="card-title">{u.typeLabel}</div>
