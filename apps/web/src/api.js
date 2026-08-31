@@ -1,4 +1,15 @@
-import { apiUrl } from "./base.js";
+/** Prefijo público: todo vive bajo /zdry/ (ip:28080/zdry/…). */
+export const BASE_PATH = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+
+export function apiUrl(path) {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${BASE_PATH}/api${p}`;
+}
+
+export function publicUrl(path) {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${BASE_PATH}${p}`;
+}
 
 export class ApiError extends Error {
   constructor(status, data) {

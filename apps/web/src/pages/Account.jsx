@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, apiUpload, ApiError } from "../api.js";
-import { publicUrl } from "../base.js";
+import { api, apiUpload, ApiError, publicUrl } from "../api.js";
 import { useAuth } from "../auth.jsx";
 
 const money = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");

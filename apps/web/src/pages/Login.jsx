@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { homeFor, useAuth } from "../auth.jsx";
-import { ApiError } from "../api.js";
-import { publicUrl } from "../base.js";
+import { ApiError, publicUrl } from "../api.js";
 
 function safeNext(raw, user) {
   if (raw && raw.startsWith("/") && !raw.startsWith("//")) return raw;

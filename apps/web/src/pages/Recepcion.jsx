@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, apiUpload } from "../api.js";
-import { apiUrl } from "../base.js";
+import { api, apiUpload, apiUrl } from "../api.js";
 import { parseIso6346 } from "../iso6346.js";
 
 export default function Recepcion() {

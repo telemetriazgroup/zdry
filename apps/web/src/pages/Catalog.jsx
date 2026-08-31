@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, ApiError } from "../api.js";
-import { apiUrl, publicUrl } from "../base.js";
+import { api, ApiError, apiUrl, publicUrl } from "../api.js";
 import { useAuth } from "../auth.jsx";
 
 const CART_KEY = "zdry_cart";

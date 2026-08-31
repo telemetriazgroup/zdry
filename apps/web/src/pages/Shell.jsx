@@ -1,6 +1,6 @@
 import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { ROLE_DESC, ROLE_LABELS, useAuth } from "../auth.jsx";
-import { publicUrl } from "../base.js";
+import { publicUrl } from "../api.js";
 import Home from "./Home.jsx";
 import Inventory from "./Inventory.jsx";
 import Masters from "./Masters.jsx";

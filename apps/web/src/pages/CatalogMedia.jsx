@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, apiUpload, ApiError } from "../api.js";
-import { apiUrl } from "../base.js";
+import { api, apiUpload, ApiError, apiUrl } from "../api.js";
 import { useAuth } from "../auth.jsx";
 
 const STATUS = {
