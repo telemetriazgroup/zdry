@@ -205,23 +205,26 @@ export default function Catalog() {
   return (
     <>
       <header className="topbar">
-        <div className="topbar-inner">
+        <div className="topbar-inner topbar-public">
           <Link to="/" className="brand"><img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" /></Link>
-          <nav className="navtabs">
-            <Link to="/" className="navtab active-link">Catálogo</Link>
-            {user?.role === "cliente" ? <Link to="/mi-cuenta" className="navtab">Mi cuenta</Link> : null}
-            {user && user.role !== "cliente" ? <Link to="/app" className="navtab">Dashboard</Link> : null}
-          </nav>
-          <button className="cart-pill" type="button" onClick={() => setQuoteOpen(true)}>
-            🛒 Cotización <span>{cart.length}</span>
-          </button>
           {user ? (
-            <button className="btn-ghost" type="button" style={{ color: "#fff", borderColor: "rgba(255,255,255,.25)", background: "transparent" }} onClick={async () => { await logout(); nav("/"); }}>
-              Salir
+            <nav className="navtabs">
+              {user.role === "cliente" ? <Link to="/mi-cuenta" className="navtab">Mi cuenta</Link> : null}
+              {user.role !== "cliente" ? <Link to="/app" className="navtab">Dashboard</Link> : null}
+            </nav>
+          ) : null}
+          <div className="topbar-tools">
+            <button className="cart-pill" type="button" onClick={() => setQuoteOpen(true)}>
+              🛒 <span className="cart-label">Cotización</span> <span>{cart.length}</span>
             </button>
-          ) : (
-            <Link to="/login" className="navtab">Entrar</Link>
-          )}
+            {user ? (
+              <button className="btn-ghost btn-salir-ghost" type="button" onClick={async () => { await logout(); nav("/"); }}>
+                Salir
+              </button>
+            ) : (
+              <Link to="/login" className="navtab">Entrar</Link>
+            )}
+          </div>
         </div>
       </header>
 

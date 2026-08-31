@@ -120,6 +120,7 @@ export default function CatalogMedia() {
       <div className="dash-grid">
         <div className="panel">
           <h3>Unidades en stock</h3>
+          <div className="tablewrap">
           <table className="data">
             <thead>
               <tr><th>ISO</th><th>Tipo</th><th>Fotos</th><th>Video</th><th>Origen</th><th>Ficha</th></tr>
@@ -139,6 +140,7 @@ export default function CatalogMedia() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
 
         {unit ? (

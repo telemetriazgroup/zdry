@@ -1,4 +1,5 @@
-import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ROLE_DESC, ROLE_LABELS, useAuth } from "../auth.jsx";
 import { publicUrl } from "../api.js";
 import Home from "./Home.jsx";
@@ -24,11 +25,38 @@ function allowed(nav, pathname, role) {
 export default function Shell() {
   const { user, nav, logout } = useAuth();
   const navigate = useNavigate();
+  const loc = useLocation();
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [loc.pathname]);
+
+  useEffect(() => {
+    document.body.classList.toggle("nav-locked", menuOpen);
+    return () => document.body.classList.remove("nav-locked");
+  }, [menuOpen]);
 
   async function onLogout() {
     await logout();
     navigate("/login");
   }
+
+  const links = (
+    <>
+      {nav.map((item) => (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end={item.end}
+          className={({ isActive }) => `navtab ${isActive ? "active-link" : ""}`}
+        >
+          {item.label}
+        </NavLink>
+      ))}
+      <NavLink to="/app/perfil" className={({ isActive }) => `navtab ${isActive ? "active-link" : ""}`}>Mi perfil</NavLink>
+    </>
+  );
 
   return (
     <>
@@ -37,25 +65,35 @@ export default function Shell() {
           <div className="brand">
             <img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" />
           </div>
-          <nav className="navtabs">
-            {nav.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                className={({ isActive }) => `navtab ${isActive ? "active-link" : ""}`}
-              >
-                {item.label}
-              </NavLink>
-            ))}
-          </nav>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <NavLink to="/app/perfil" className={({ isActive }) => `navtab ${isActive ? "active-link" : ""}`}>Mi perfil</NavLink>
+          <nav className="navtabs navtabs-desktop">{links}</nav>
+          <div className="topbar-tools">
             <span className="badge-role">{ROLE_LABELS[user.role]}</span>
-            <span style={{ fontSize: 12, color: "#c7cede" }}>{user.name}</span>
-            <button className="btn-primary" type="button" onClick={onLogout}>Salir</button>
+            <span className="topbar-user">{user.name}</span>
+            <button className="btn-primary btn-salir" type="button" onClick={onLogout}>Salir</button>
+            <button
+              type="button"
+              className={`menu-toggle ${menuOpen ? "open" : ""}`}
+              aria-label={menuOpen ? "Cerrar menú" : "Abrir menú"}
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((v) => !v)}
+            >
+              <span /><span /><span />
+            </button>
           </div>
         </div>
+        {menuOpen ? (
+          <>
+            <button type="button" className="nav-backdrop" aria-label="Cerrar menú" onClick={() => setMenuOpen(false)} />
+            <nav className="nav-drawer open">
+              <div className="nav-drawer-head">
+                <b>{user.name}</b>
+                <span className="badge-role">{ROLE_LABELS[user.role]}</span>
+              </div>
+              {links}
+              <button className="btn-primary" type="button" onClick={onLogout}>Salir</button>
+            </nav>
+          </>
+        ) : null}
       </header>
 
       <div className="page">

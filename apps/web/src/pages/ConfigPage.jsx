@@ -72,7 +72,7 @@ function DemoPanel() {
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
       {busy ? <div className="warn-inline">{busy}… puede tardar un minuto si descarga fotos.</div> : null}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+      <div className="action-row">
         <button className="btn-primary" type="button" disabled={disabled || st.on} onClick={() => run("Activando demo", "/demo/activate")}>
           Activar modo demo
         </button>
@@ -102,6 +102,7 @@ function DemoPanel() {
       {st.backups?.length ? (
         <div style={{ marginTop: 14 }}>
           <div className="box-kicker">Backups (restaurar reinyecta filas por ID; no borra lo creado después)</div>
+          <div className="tablewrap">
           <table className="data">
             <thead>
               <tr>
@@ -133,6 +134,7 @@ function DemoPanel() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       ) : null}
     </div>
@@ -221,8 +223,10 @@ export default function ConfigPage() {
             </div>
           </div>
         ))}
-        <button className="btn-ghost" type="button" onClick={() => setVis([...vis, { scope: "global", target: null, show: false }])}>Añadir regla</button>
-        <button className="btn-primary" type="button" style={{ marginLeft: 8 }} onClick={saveVis}>Guardar visibilidad</button>
+        <div className="action-row">
+          <button className="btn-ghost" type="button" onClick={() => setVis([...vis, { scope: "global", target: null, show: false }])}>Añadir regla</button>
+          <button className="btn-primary" type="button" onClick={saveVis}>Guardar visibilidad</button>
+        </div>
       </div>
 
       <div className="panel" style={{ marginBottom: 18 }}>
@@ -253,10 +257,12 @@ export default function ConfigPage() {
       {services.length ? (
         <div className="panel" style={{ marginBottom: 18 }}>
           <h3>Servicios comerciales</h3>
-          <table className="data">
-            <thead><tr><th>Servicio</th><th>Precio</th></tr></thead>
-            <tbody>{services.map((s) => <tr key={s.id}><td>{s.name}</td><td>${Number(s.price)}</td></tr>)}</tbody>
-          </table>
+          <div className="tablewrap">
+            <table className="data">
+              <thead><tr><th>Servicio</th><th>Precio</th></tr></thead>
+              <tbody>{services.map((s) => <tr key={s.id}><td>{s.name}</td><td>${Number(s.price)}</td></tr>)}</tbody>
+            </table>
+          </div>
         </div>
       ) : null}
 

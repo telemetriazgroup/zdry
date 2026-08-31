@@ -113,10 +113,12 @@ export default function People() {
             </div>
             <button className="btn-primary" type="submit">+ Cliente</button>
           </form>
-          <table className="data">
-            <thead><tr><th>Empresa</th><th>RUC/DNI</th><th>Email</th><th>Riesgo</th></tr></thead>
-            <tbody>{customers.map((c) => <tr key={c.id}><td>{c.companyName}{c.demo ? <span className="demo-chip">DEMO</span> : null}</td><td>{c.rucDni}</td><td>{c.email}</td><td>{c.risk}</td></tr>)}</tbody>
-          </table>
+          <div className="tablewrap">
+            <table className="data">
+              <thead><tr><th>Empresa</th><th>RUC/DNI</th><th>Email</th><th>Riesgo</th></tr></thead>
+              <tbody>{customers.map((c) => <tr key={c.id}><td>{c.companyName}{c.demo ? <span className="demo-chip">DEMO</span> : null}</td><td>{c.rucDni}</td><td>{c.email}</td><td>{c.risk}</td></tr>)}</tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -129,10 +131,12 @@ export default function People() {
             <div><label>Unidad</label><input value={pForm.unit} onChange={(e) => setPForm({ ...pForm, unit: e.target.value })} /></div>
             <button className="btn-primary" type="submit">+ Proveedor</button>
           </form>
-          <table className="data">
-            <thead><tr><th>Nombre</th><th>Tipo</th><th>Tarifa</th><th>Unidad</th></tr></thead>
-            <tbody>{providers.map((p) => <tr key={p.id}><td>{p.name}</td><td>{p.type}</td><td>{Number(p.rate)}</td><td>{p.unit}</td></tr>)}</tbody>
-          </table>
+          <div className="tablewrap">
+            <table className="data">
+              <thead><tr><th>Nombre</th><th>Tipo</th><th>Tarifa</th><th>Unidad</th></tr></thead>
+              <tbody>{providers.map((p) => <tr key={p.id}><td>{p.name}</td><td>{p.type}</td><td>{Number(p.rate)}</td><td>{p.unit}</td></tr>)}</tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -157,6 +161,7 @@ export default function People() {
               <button className="btn-ghost" type="button" onClick={() => { setResetId(null); setResetPw(""); }}>Cancelar</button>
             </form>
           ) : null}
+          <div className="tablewrap">
           <table className="data">
             <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Activo</th><th></th></tr></thead>
             <tbody>
@@ -176,6 +181,7 @@ export default function People() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </>

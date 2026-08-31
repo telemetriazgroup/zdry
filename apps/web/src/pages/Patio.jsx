@@ -124,6 +124,7 @@ export default function Patio() {
       return (
         <div
           key={`${lado}-${ruma}-${columna}-${nivel}`}
+          className="yard-cell"
           onClick={() => onCellClick(lado, ruma, columna, nivel)}
           title={`${occ.iso} — ${occ.typeLabel}${committed ? ` — comprometida (${occ.status}), pendiente de despacho físico` : ""}`}
           style={{
@@ -172,6 +173,7 @@ export default function Patio() {
       return (
         <div
           key={`${lado}-${ruma}-${columna}-${nivel}`}
+          className="yard-cell"
           style={{
             width: 74,
             height: 32,
@@ -193,6 +195,7 @@ export default function Patio() {
     return (
       <div
         key={`${lado}-${ruma}-${columna}-${nivel}`}
+        className="yard-cell"
         onClick={() => onCellClick(lado, ruma, columna, nivel)}
         style={{
           width: 74,
@@ -240,7 +243,7 @@ export default function Patio() {
       );
     }
     return (
-      <div style={{ flex: 1, minWidth: 280 }}>
+      <div className="yard-lado">
         <div style={{ fontWeight: 800, fontSize: 12, color: "var(--text-2)", marginBottom: 10, letterSpacing: ".03em" }}>LADO {lado.toUpperCase()}</div>
         {rumaRows}
       </div>
@@ -295,7 +298,7 @@ export default function Patio() {
             {msg.text}
           </div>
         ) : null}
-        <div style={{ display: "flex", gap: 22, alignItems: "flex-start", overflowX: "auto" }}>
+        <div className="yard-board">
           {ladoBlock(config.lados[0])}
           <div style={{ alignSelf: "stretch", minWidth: 34, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <div style={{ writingMode: "vertical-rl", textOrientation: "mixed", fontSize: 10, fontWeight: 800, letterSpacing: ".06em", color: "var(--text-3)", borderLeft: "2px dashed var(--line)", borderRight: "2px dashed var(--line)", height: "100%", padding: "0 6px", display: "flex", alignItems: "center" }}>

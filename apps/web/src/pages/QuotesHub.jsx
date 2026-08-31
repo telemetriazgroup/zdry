@@ -93,6 +93,7 @@ export default function QuotesHub() {
       {error ? <div className="err">{error}</div> : null}
       <div className="dash-grid">
         <div className="panel">
+          <div className="tablewrap">
           <table className="data">
             <thead><tr><th>N°</th><th>Cliente</th><th>Estado</th><th>Total</th></tr></thead>
             <tbody>
@@ -106,6 +107,7 @@ export default function QuotesHub() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
         {q ? (
           <div className="panel">
@@ -127,7 +129,7 @@ export default function QuotesHub() {
                 <div style={{ maxHeight: 140, overflow: "auto", margin: "10px 0" }}>
                   {q.messages.map((m) => <div key={m.id}><b>{m.authorName}:</b> {m.body}</div>)}
                 </div>
-                <form onSubmit={(e) => { e.preventDefault(); act(`/quotes/${q.id}/thread`, { body: msg }); setMsg(""); }} style={{ display: "flex", gap: 8 }}>
+                <form className="inline-form" onSubmit={(e) => { e.preventDefault(); act(`/quotes/${q.id}/thread`, { body: msg }); setMsg(""); }}>
                   <input value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Responder…" />
                   <button className="btn-ghost" type="submit">Enviar</button>
                 </form>

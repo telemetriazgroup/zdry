@@ -15,6 +15,7 @@ export default function AuditPage() {
       <p className="section-sub">Quién hizo login, altas de maestros y personas. Append-only.</p>
       {error ? <div className="err">{error}</div> : null}
       <div className="panel">
+        <div className="tablewrap">
         <table className="data">
           <thead><tr><th>Cuándo</th><th>Usuario</th><th>Acción</th><th>Entidad</th><th>Id</th></tr></thead>
           <tbody>
@@ -29,6 +30,7 @@ export default function AuditPage() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </>
   );

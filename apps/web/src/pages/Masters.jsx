@@ -196,6 +196,7 @@ export default function Masters() {
               <button className="btn-ghost" type="button" onClick={() => { setEditingType(null); setTypeForm({ code: "", label: "", dims: "", color: "#1971c2" }); }}>Cancelar</button>
             ) : null}
           </form>
+          <div className="tablewrap">
           <table className="data">
             <thead><tr><th>Código</th><th>Etiqueta</th><th>Medidas</th><th>Estado</th><th></th></tr></thead>
             <tbody>
@@ -213,6 +214,7 @@ export default function Masters() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -227,6 +229,7 @@ export default function Masters() {
               <button className="btn-ghost" type="button" onClick={() => { setEditingCat(null); setCatForm({ code: "", label: "", color: "#1971c2" }); }}>Cancelar</button>
             ) : null}
           </form>
+          <div className="tablewrap">
           <table className="data">
             <thead><tr><th>Código</th><th>Etiqueta</th><th>Estado</th><th></th></tr></thead>
             <tbody>
@@ -244,6 +247,7 @@ export default function Masters() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </>

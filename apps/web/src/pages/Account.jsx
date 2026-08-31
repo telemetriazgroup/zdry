@@ -29,6 +29,7 @@ function BankBox({ accounts }) {
     <div className="panel" style={{ marginBottom: 18, background: "#fff7ed", borderColor: "#fcd9b6" }}>
       <h3>Cuentas ZDRY para transferencia</h3>
       <p className="section-sub">Paga el neto cotizado por transferencia o interbancario y sube el voucher. El abono CCI puede tardar 24–48 h: tu comercial lo marcará «en verificación» hasta que acredite. No hay pasarela de cobro.</p>
+      <div className="tablewrap">
       <table className="data">
         <thead><tr><th>Banco</th><th>Moneda</th><th>Cuenta</th><th>CCI</th><th>Titular</th></tr></thead>
         <tbody>
@@ -43,6 +44,7 @@ function BankBox({ accounts }) {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -135,14 +137,16 @@ export default function Account() {
   return (
     <>
       <header className="topbar">
-        <div className="topbar-inner">
+        <div className="topbar-inner topbar-public">
           <Link to="/" className="brand"><img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" /></Link>
           <nav className="navtabs">
             <Link to="/" className="navtab">Catálogo</Link>
             <Link to="/mi-cuenta" className="navtab active-link">Mi cuenta</Link>
           </nav>
-          <span style={{ color: "#c7cede", fontSize: 13 }}>{user.name}</span>
-          <button className="btn-primary" type="button" onClick={() => logout()}>Salir</button>
+          <div className="topbar-tools">
+            <span className="topbar-user">{user.name}</span>
+            <button className="btn-primary btn-salir" type="button" onClick={() => logout()}>Salir</button>
+          </div>
         </div>
       </header>
       <div className="page">
@@ -212,6 +216,7 @@ export default function Account() {
         <div className="dash-grid">
           <div className="panel">
             <h3>Cotizaciones</h3>
+            <div className="tablewrap">
             <table className="data">
               <thead><tr><th>N°</th><th>Estado</th><th>Total</th><th></th></tr></thead>
               <tbody>
@@ -225,6 +230,7 @@ export default function Account() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
           {detail ? (
             <div className="panel">
@@ -249,7 +255,7 @@ export default function Account() {
                 ))}
               </div>
               {["reservada", "en_negociacion"].includes(detail.dealStatus) ? (
-                <form onSubmit={sendMsg} style={{ display: "flex", gap: 8 }}>
+                <form className="inline-form" onSubmit={sendMsg}>
                   <input style={{ flex: 1 }} value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Pedir descuento al comercial (antes de pagar)…" />
                   <button className="btn-primary" type="submit">Enviar</button>
                 </form>
