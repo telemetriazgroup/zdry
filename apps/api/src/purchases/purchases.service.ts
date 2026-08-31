@@ -505,11 +505,18 @@ export class PurchasesService {
       damNumber: string | null;
       physicallyReceived: boolean;
       intakeType: string;
+      lado: string | null;
+      ruma: number | null;
+      columna: number | null;
+      nivel: number | null;
       depot: { name: string };
     },
     role: AuthUser["role"],
   ) {
     const fob = Number(c.fobCif);
+    const pos = c.lado
+      ? `Lado ${c.lado} · Ruma ${c.ruma} · Columna ${c.columna} · Nivel ${c.nivel}`
+      : "Sin posición asignada";
     const base: Record<string, unknown> = {
       iso: c.iso,
       type: c.type,
@@ -518,6 +525,11 @@ export class PurchasesService {
       depot: c.depot.name,
       physicallyReceived: c.physicallyReceived,
       nationalized: isNationalized(c.intakeType, c.damNumber),
+      lado: c.lado,
+      ruma: c.ruma,
+      columna: c.columna,
+      nivel: c.nivel,
+      posLabel: pos,
     };
     if (role !== "almacen") {
       base.priceList = c.priceList != null ? Number(c.priceList) : null;

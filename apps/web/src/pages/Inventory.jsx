@@ -31,7 +31,7 @@ export default function Inventory() {
           <table className="data">
             <thead>
               <tr>
-                <th>ISO</th><th>Tipo</th><th>Condición</th><th>Estado</th><th>Depósito</th>
+                <th>ISO</th><th>Tipo</th><th>Condición</th><th>Estado</th><th>Depósito</th><th>Posición</th>
                 {showPrice ? <><th>Precio min</th><th>Precio lista</th></> : null}
                 {showMargin ? <th>Margen %</th> : null}
                 {showCosts ? <><th>FOB</th><th>C_T</th><th>C_T real</th></> : null}
@@ -46,7 +46,8 @@ export default function Inventory() {
                   <td>{r.type}</td>
                   <td>{r.cat}</td>
                   <td>{r.status}</td>
-                  <td>{r.depot}</td>
+                    <td>{r.depot}</td>
+                    <td>{r.posLabel || "—"}</td>
                   {showPrice ? <><td>{r.priceMin ?? "—"}</td><td><b>{r.priceList ?? "—"}</b></td></> : null}
                   {showMargin ? <td>{r.marginPct}</td> : null}
                   {showCosts ? <><td>{r.costs.fob}</td><td>{r.costs.cT}</td><td>{r.costs.cTReal}</td></> : null}

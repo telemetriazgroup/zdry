@@ -12,6 +12,8 @@ import { InventoryModule } from "./inventory/inventory.module";
 import { PurchasesModule } from "./purchases/purchases.module";
 import { StorageModule } from "./storage/storage.module";
 import { ConfigAppModule } from "./config/config.module";
+import { RedisModule } from "./redis/redis.module";
+import { WarehouseModule } from "./warehouse/warehouse.module";
 
 @Module({
   imports: [
@@ -21,10 +23,12 @@ import { ConfigAppModule } from "./config/config.module";
     DealCloseModule,
     OdooModule,
     StorageModule,
+    RedisModule,
     MastersModule,
     PeopleModule,
     InventoryModule,
     PurchasesModule,
+    WarehouseModule,
     ConfigAppModule,
   ],
   controllers: [HealthController],

@@ -59,6 +59,23 @@ model Container {
   manufacturer       String              @default("—")
   depotId            String
   depot              Depot               @relation(fields: [depotId], references: [id])
+  lado               String?
+  ruma               Int?
+  columna            Int?
+  nivel              Int?
+  tareKg             Int                 @default(0)
+  mgwKg              Int                 @default(0)
+  payloadKg          Int                 @default(0)
+  color              String              @default("—")
+  inspectionNotes    String              @default("")
+  cbm                Decimal?            @db.Decimal(8, 2)
+  gateIn             Boolean             @default(false)
+  gateOut            Boolean             @default(false)
+  video360Key        String?
+  video360Mime       String?
+  ownerCustomerId    String?
+  ownerCustomer      Customer?           @relation(fields: [ownerCustomerId], references: [id])
+  storageDiscountPct Decimal             @default(0) @db.Decimal(5, 2)
   intakeType         String              @default("compra")
   invoicePending     Boolean             @default(false)
   physicallyReceived Boolean             @default(false)
@@ -76,10 +93,13 @@ model Container {
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
   history            ContainerHistory[]
+  photos             InspectionPhoto[]
+  positions          ContainerPosition[]
 
   @@index([depotId])
   @@index([status])
   @@index([damNumber])
+  @@index([depotId, lado])
 }
 
 model ContainerHistory {
@@ -170,14 +190,49 @@ model Category {
 }
 
 model Customer {
-  id          String     @id @default(uuid())
-  rucDni      String
-  companyName String
-  email       String
-  phone       String
-  risk        RiskGrade  @default(B)
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id               String      @id @default(uuid())
+  rucDni           String
+  companyName      String
+  email            String
+  phone            String
+  risk             RiskGrade   @default(B)
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  ownedContainers  Container[]
+}
+
+model InspectionPhoto {
+  id           String    @id @default(uuid())
+  iso          String
+  container    Container @relation(fields: [iso], references: [iso], onDelete: Cascade)
+  slot         Int
+  storageKey   String
+  mimeType     String
+  originalName String
+  sizeBytes    Int
+  createdAt    DateTime  @default(now())
+
+  @@unique([iso, slot])
+}
+
+model ContainerPosition {
+  id        String    @id @default(uuid())
+  iso       String
+  container Container @relation(fields: [iso], references: [iso], onDelete: Cascade)
+  depotId   String
+  lado      String
+  ruma      Int
+  columna   Int
+  nivel     Int
+  createdAt DateTime  @default(now())
+  closedAt  DateTime?
+
+  @@index([iso, createdAt])
+}
+
+model AppSetting {
+  key   String @id
+  value Json
 }
 
 model Provider {

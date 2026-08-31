@@ -49,6 +49,16 @@ export function parseIso6346(raw) {
   };
 }
 
+export function completeIso(code10) {
+  const n = String(code10 || "")
+    .toUpperCase()
+    .replace(/[\s-]/g, "");
+  if (!/^[A-Z]{3}U\d{6}$/.test(n)) {
+    throw new Error("code10 debe ser 3 letras + U + 6 dígitos");
+  }
+  return n + String(iso6346CheckDigit(n));
+}
+
 export const DAM_REGEX = /^\d{3}-\d{4}-\d{2}-\d{5}$/;
 
 export function damFormatOk(dam) {

@@ -1,7 +1,8 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
-import { Role, RiskGrade } from "@prisma/client";
+import { Prisma, Role, RiskGrade } from "@prisma/client";
 import * as argon2 from "argon2";
 import { PrismaService } from "./prisma.service";
+import { DEFAULT_LAYOUT_RULES, DEFAULT_YARD_CONFIG } from "../domain/yard";
 
 const PASSWORD = process.env.SEED_PASSWORD || "Zdry123!";
 
@@ -97,6 +98,25 @@ export class SeedService implements OnModuleInit {
       const exists = await this.prisma.provider.findFirst({ where: { name: p.name } });
       if (!exists) await this.prisma.provider.create({ data: p });
     }
+
+    await this.prisma.appSetting.upsert({
+      where: { key: "layout_rules" },
+      update: {},
+      create: { key: "layout_rules", value: DEFAULT_LAYOUT_RULES as Prisma.InputJsonValue },
+    });
+    await this.prisma.appSetting.upsert({
+      where: { key: "yard_config" },
+      update: {},
+      create: {
+        key: "yard_config",
+        value: {
+          lados: [...DEFAULT_YARD_CONFIG.lados],
+          rumas: DEFAULT_YARD_CONFIG.rumas,
+          columnas: DEFAULT_YARD_CONFIG.columnas,
+          niveles: DEFAULT_YARD_CONFIG.niveles,
+        },
+      },
+    });
 
     this.log.log(`Seed listo. Usuarios: ${USERS.map((u) => u.email).join(", ")} / clave ${PASSWORD}`);
   }
