@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { homeFor, useAuth } from "../auth.jsx";
 import { ApiError } from "../api.js";
+import { publicUrl } from "../base.js";
 
 function safeNext(raw, user) {
   if (raw && raw.startsWith("/") && !raw.startsWith("//")) return raw;
@@ -41,7 +42,7 @@ export default function Login() {
   return (
     <div className="login-wrap">
       <form className="login-card" onSubmit={submit}>
-        <Link to="/"><img className="logo" src="/brand/LOGO_Z.png" alt="ZDRY" /></Link>
+        <Link to="/"><img className="logo" src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" /></Link>
         <div className="tag">Venta y alquiler de contenedores</div>
         {mode === "register" ? (
           <>

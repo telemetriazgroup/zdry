@@ -1,3 +1,5 @@
+import { apiUrl } from "./base.js";
+
 export class ApiError extends Error {
   constructor(status, data) {
     super(data?.message || data?.error || `HTTP ${status}`);
@@ -16,7 +18,7 @@ async function parse(res) {
 }
 
 export async function api(path, { method = "GET", body, retry = true } = {}) {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(apiUrl(path), {
     method,
     credentials: "include",
     headers: body ? { "Content-Type": "application/json" } : undefined,
@@ -24,7 +26,7 @@ export async function api(path, { method = "GET", body, retry = true } = {}) {
   });
 
   if (res.status === 401 && retry && path !== "/auth/login" && path !== "/auth/refresh") {
-    const refreshed = await fetch("/api/auth/refresh", { method: "POST", credentials: "include" });
+    const refreshed = await fetch(apiUrl("/auth/refresh"), { method: "POST", credentials: "include" });
     if (refreshed.ok) return api(path, { method, body, retry: false });
   }
 
@@ -34,14 +36,14 @@ export async function api(path, { method = "GET", body, retry = true } = {}) {
 }
 
 export async function apiUpload(path, formData, { retry = true } = {}) {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     credentials: "include",
     body: formData,
   });
 
   if (res.status === 401 && retry) {
-    const refreshed = await fetch("/api/auth/refresh", { method: "POST", credentials: "include" });
+    const refreshed = await fetch(apiUrl("/auth/refresh"), { method: "POST", credentials: "include" });
     if (refreshed.ok) return apiUpload(path, formData, { retry: false });
   }
 
@@ -51,9 +53,9 @@ export async function apiUpload(path, formData, { retry = true } = {}) {
 }
 
 export async function apiBlob(path) {
-  const res = await fetch(`/api${path}`, { credentials: "include" });
+  const res = await fetch(apiUrl(path), { credentials: "include" });
   if (res.status === 401) {
-    const refreshed = await fetch("/api/auth/refresh", { method: "POST", credentials: "include" });
+    const refreshed = await fetch(apiUrl("/auth/refresh"), { method: "POST", credentials: "include" });
     if (refreshed.ok) return apiBlob(path);
   }
   if (!res.ok) {

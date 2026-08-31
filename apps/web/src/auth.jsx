@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
+import { apiUrl } from "./base.js";
 
 const AuthContext = createContext(null);
 
@@ -103,7 +104,7 @@ export function AuthProvider({ children }) {
         try {
           await api("/auth/logout", { method: "POST" });
         } catch {
-          await fetch("/api/auth/logout-all", { method: "POST", credentials: "include" });
+          await fetch(apiUrl("/auth/logout-all"), { method: "POST", credentials: "include" });
         }
         setUser(null);
       },

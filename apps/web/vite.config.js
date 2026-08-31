@@ -2,15 +2,16 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
+  base: "/zdry/",
   plugins: [react()],
   server: {
     host: true,
-    port: 5173,
+    port: 28080,
     proxy: {
-      "/api": {
-        target: "http://localhost:3000",
+      "/zdry/api": {
+        target: "http://localhost:3003",
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ""),
+        rewrite: (path) => path.replace(/^\/zdry\/api/, ""),
       },
     },
   },

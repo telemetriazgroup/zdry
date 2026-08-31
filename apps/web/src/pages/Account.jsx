@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, apiUpload, ApiError } from "../api.js";
+import { publicUrl } from "../base.js";
 import { useAuth } from "../auth.jsx";
 
 const money = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
@@ -131,7 +132,7 @@ export default function Account() {
     <>
       <header className="topbar">
         <div className="topbar-inner">
-          <Link to="/" className="brand"><img src="/brand/LOGO_Z.png" alt="ZDRY" /></Link>
+          <Link to="/" className="brand"><img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" /></Link>
           <nav className="navtabs">
             <Link to="/" className="navtab">Catálogo</Link>
             <Link to="/mi-cuenta" className="navtab active-link">Mi cuenta</Link>

@@ -13,8 +13,10 @@ docker compose up --build
 
 | Servicio | URL |
 |---|---|
-| Web | http://localhost:5173 |
-| API | http://localhost:3000/health |
+| Web | http://localhost:28080/zdry/ |
+| API (vía app) | http://localhost:28080/zdry/api/health |
+| API directa | http://localhost:3003/health |
+| Postgres (host) | localhost:5435 |
 | MinIO | http://localhost:9001 |
 | Mailhog | http://localhost:8025 |
 
@@ -28,7 +30,7 @@ docker compose up --build
 | compras@zdry.pe | Compras / Costos |
 | almacen@zdry.pe | Almacén / Operador |
 
-Cada cuenta ve un menú distinto. El vendedor **no recibe** FOB ni C_T en `/api/inventory/sample`. Configuración responde **403** si no eres admin o gerente.
+Cada cuenta ve un menú distinto. El vendedor **no recibe** FOB ni C_T en `/zdry/api/inventory/sample`. Configuración responde **403** si no eres admin o gerente.
 
 Desarrollo local:
 

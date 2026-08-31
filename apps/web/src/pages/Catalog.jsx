@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../api.js";
+import { apiUrl, publicUrl } from "../base.js";
 import { useAuth } from "../auth.jsx";
 
 const CART_KEY = "zdry_cart";
@@ -14,7 +15,7 @@ function publishedSlots(u) {
 
 function mediaSrc(iso, slot, version) {
   const q = version ? `?v=${encodeURIComponent(version)}` : "";
-  return `/api/catalog/${iso}/photos/${slot}${q}`;
+  return `${apiUrl(`/catalog/${iso}/photos/${slot}`)}${q}`;
 }
 
 function CardCover({ iso, slots, version }) {
@@ -206,7 +207,7 @@ export default function Catalog() {
     <>
       <header className="topbar">
         <div className="topbar-inner">
-          <Link to="/" className="brand"><img src="/brand/LOGO_Z.png" alt="ZDRY" /></Link>
+          <Link to="/" className="brand"><img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" /></Link>
           <nav className="navtabs">
             <Link to="/" className="navtab active-link">Catálogo</Link>
             {user?.role === "cliente" ? <Link to="/mi-cuenta" className="navtab">Mi cuenta</Link> : null}
@@ -323,7 +324,7 @@ export default function Catalog() {
               <div>
                 <div className="gallery-main">
                   {thumb === "video" && pdp.hasVideo ? (
-                    <video src={`/api/catalog/${pdp.iso}/video${pdp.mediaVersion ? `?v=${encodeURIComponent(pdp.mediaVersion)}` : ""}`} controls autoPlay muted playsInline />
+                    <video src={`${apiUrl(`/catalog/${pdp.iso}/video`)}${pdp.mediaVersion ? `?v=${encodeURIComponent(pdp.mediaVersion)}` : ""}`} controls autoPlay muted playsInline />
                   ) : pdpSlots.includes(thumb) ? (
                     <img src={mediaSrc(pdp.iso, thumb, pdp.mediaVersion)} alt={`${pdp.iso} foto ${thumb + 1}`} />
                   ) : (

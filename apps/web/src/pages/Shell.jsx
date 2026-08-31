@@ -1,5 +1,6 @@
 import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { ROLE_DESC, ROLE_LABELS, useAuth } from "../auth.jsx";
+import { publicUrl } from "../base.js";
 import Home from "./Home.jsx";
 import Inventory from "./Inventory.jsx";
 import Masters from "./Masters.jsx";
@@ -33,7 +34,7 @@ export default function Shell() {
       <header className="topbar">
         <div className="topbar-inner">
           <div className="brand">
-            <img src="/brand/LOGO_Z.png" alt="ZDRY" />
+            <img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" />
           </div>
           <nav className="navtabs">
             {nav.map((item) => (

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, apiUpload, ApiError } from "../api.js";
+import { apiUrl } from "../base.js";
 import { useAuth } from "../auth.jsx";
 
 const STATUS = {
@@ -102,8 +103,8 @@ export default function CatalogMedia() {
   const labels = unit?.photoLabels || meta.photoLabels || [];
   const st = unit ? STATUS[unit.mediaStatus] || STATUS.pendiente : null;
   const photoCount = unit ? (unit.photos?.length ?? unit.photoSlots?.filter(Boolean).length ?? 0) : 0;
-  const photoSrc = (slot) => `/api/catalog-media/${unit.iso}/photos/${slot}?t=${bust}`;
-  const videoSrc = unit ? `/api/catalog-media/${unit.iso}/photos/video?t=${bust}` : "";
+  const photoSrc = (slot) => `${apiUrl(`/catalog-media/${unit.iso}/photos/${slot}`)}?t=${bust}`;
+  const videoSrc = unit ? `${apiUrl(`/catalog-media/${unit.iso}/photos/video`)}?t=${bust}` : "";
   const previewingPhoto = preview?.type === "photo" && unit?.photoSlots?.[preview.slot];
   const previewingVideo = preview?.type === "video" && unit?.hasVideo;
 

@@ -17,12 +17,16 @@ export class AuthService {
     private readonly audit: AuditService,
   ) {}
 
+  private cookiePath() {
+    return process.env.COOKIE_PATH || "/zdry";
+  }
+
   private cookieOpts(maxAge: number) {
     return {
       httpOnly: true,
       sameSite: "lax" as const,
       secure: process.env.COOKIE_SECURE === "true",
-      path: "/",
+      path: this.cookiePath(),
       maxAge,
     };
   }
@@ -47,8 +51,8 @@ export class AuthService {
   }
 
   clearAuthCookies(res: Response) {
-    res.clearCookie("zdry_access", { path: "/" });
-    res.clearCookie("zdry_refresh", { path: "/" });
+    res.clearCookie("zdry_access", { path: this.cookiePath() });
+    res.clearCookie("zdry_refresh", { path: this.cookiePath() });
   }
 
   toPublic(user: AuthUser) {

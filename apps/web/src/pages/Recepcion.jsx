@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, apiUpload } from "../api.js";
+import { apiUrl } from "../base.js";
 import { parseIso6346 } from "../iso6346.js";
 
 export default function Recepcion() {
@@ -255,7 +256,7 @@ export default function Recepcion() {
             <div className="checklist">
               {labels.map((lab, i) => {
                 const done = i < 9 ? unit.photos[i] : unit.hasVideo;
-                const bg = done && i < 9 ? { backgroundImage: `url(/api/warehouse/units/${unit.iso}/photos/${i})`, backgroundSize: "cover", backgroundPosition: "center", color: "#fff", textShadow: "0 1px 3px rgba(0,0,0,.7)" } : undefined;
+                const bg = done && i < 9 ? { backgroundImage: `url(${apiUrl(`/warehouse/units/${unit.iso}/photos/${i}`)})`, backgroundSize: "cover", backgroundPosition: "center", color: "#fff", textShadow: "0 1px 3px rgba(0,0,0,.7)" } : undefined;
                 return (
                   <label key={lab} className={`check-item ${done ? "done" : ""}`} style={bg}>
                     <input
