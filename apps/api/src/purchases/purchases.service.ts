@@ -10,6 +10,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { AuthUser, canSeeRealCosts } from "../auth/auth.types";
 import { damFormatOk, isNationalized, parseIso6346, requiresNationalization } from "../domain/iso6346";
+import { applyShowPrice, DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
 import {
   INCOTERMS,
   MANUFACTURERS,
@@ -327,10 +328,18 @@ export class PurchasesService {
   }
 
   listContainersForRole(role: AuthUser["role"]) {
-    return this.prisma.container.findMany({
-      include: { depot: { select: { name: true } } },
-      orderBy: { createdAt: "desc" },
-    }).then((rows) => rows.map((c) => this.presentInventory(c, role)));
+    return Promise.all([
+      this.prisma.container.findMany({
+        include: { depot: { select: { name: true } } },
+        orderBy: { createdAt: "desc" },
+      }),
+      this.prisma.visibilityRule.findMany(),
+    ]).then(([rows, visRows]) => {
+      const vis = visRows.length
+        ? visRows.map((r) => ({ scope: r.scope, target: r.target, show: r.show }))
+        : DEFAULT_VISIBILITY_RULES;
+      return rows.map((c) => this.presentInventory(c, role, vis));
+    });
   }
 
   async attachDocuments(
@@ -505,6 +514,8 @@ export class PurchasesService {
       damNumber: string | null;
       physicallyReceived: boolean;
       intakeType: string;
+      manufacturer?: string | null;
+      showPriceOverride?: boolean | null;
       lado: string | null;
       ruma: number | null;
       columna: number | null;
@@ -512,6 +523,7 @@ export class PurchasesService {
       depot: { name: string };
     },
     role: AuthUser["role"],
+    vis: VisibilityRule[] = DEFAULT_VISIBILITY_RULES,
   ) {
     const fob = Number(c.fobCif);
     const pos = c.lado
@@ -530,6 +542,17 @@ export class PurchasesService {
       columna: c.columna,
       nivel: c.nivel,
       posLabel: pos,
+      showPrice: applyShowPrice(
+        {
+          iso: c.iso,
+          type: c.type,
+          cat: c.cat,
+          manufacturer: c.manufacturer,
+          priceVisibilityOverride: c.showPriceOverride,
+          status: c.status,
+        },
+        vis,
+      ),
     };
     if (role !== "almacen") {
       base.priceList = c.priceList != null ? Number(c.priceList) : null;

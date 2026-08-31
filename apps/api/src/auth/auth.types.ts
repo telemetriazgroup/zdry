@@ -5,6 +5,7 @@ export type AuthUser = {
   email: string;
   name: string;
   role: Role;
+  customerId?: string | null;
 };
 
 export const COST_ROLES: Role[] = ["admin", "compras"];

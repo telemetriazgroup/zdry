@@ -14,6 +14,7 @@ enum Role {
   vendedor
   compras
   almacen
+  cliente
 }
 
 enum RiskGrade {
@@ -31,9 +32,12 @@ model User {
   role             Role
   active           Boolean    @default(true)
   refreshTokenHash String?
+  customerId       String?
+  customer         Customer?  @relation(fields: [customerId], references: [id])
   createdAt        DateTime   @default(now())
   updatedAt        DateTime   @updatedAt
   auditLogs        AuditLog[]
+  quotesSold       Quote[]    @relation("QuoteVendor")
 }
 
 model Depot {
@@ -73,9 +77,19 @@ model Container {
   gateOut            Boolean             @default(false)
   video360Key        String?
   video360Mime       String?
+  mediaStatus        String              @default("pendiente")
+  mediaApprovedBy    String?
+  mediaApprovedAt    DateTime?
+  mediaReviewNote    String?
   ownerCustomerId    String?
-  ownerCustomer      Customer?           @relation(fields: [ownerCustomerId], references: [id])
+  ownerCustomer      Customer?           @relation("OwnedContainers", fields: [ownerCustomerId], references: [id])
   storageDiscountPct Decimal             @default(0) @db.Decimal(5, 2)
+  commercialStatus   String              @default("disponible")
+  physicalStatus     String              @default("en_transito_ingreso")
+  reservedBy         String?
+  reservationExpiry  DateTime?
+  reservedQuoteId    String?
+  showPriceOverride  Boolean?
   intakeType         String              @default("compra")
   invoicePending     Boolean             @default(false)
   physicallyReceived Boolean             @default(false)
@@ -100,6 +114,8 @@ model Container {
   @@index([status])
   @@index([damNumber])
   @@index([depotId, lado])
+  @@index([commercialStatus])
+  @@index([mediaStatus])
 }
 
 model ContainerHistory {
@@ -198,7 +214,9 @@ model Customer {
   risk             RiskGrade   @default(B)
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
-  ownedContainers  Container[]
+  ownedContainers  Container[] @relation("OwnedContainers")
+  users            User[]
+  quotes           Quote[]
 }
 
 model InspectionPhoto {
@@ -261,4 +279,160 @@ model AuditLog {
 
   @@index([createdAt])
   @@index([entity, entityId])
+}
+
+model PricingRule {
+  id             String   @id @default(uuid())
+  scope          String
+  target         String?
+  marginPct      Decimal  @db.Decimal(6, 2)
+  maxDiscountPct Decimal  @db.Decimal(6, 2)
+  createdAt      DateTime @default(now())
+}
+
+model VisibilityRule {
+  id        String   @id @default(uuid())
+  scope     String
+  target    String?
+  show      Boolean
+  createdAt DateTime @default(now())
+}
+
+model CommercialService {
+  id    String  @id @default(uuid())
+  name  String
+  price Decimal @db.Decimal(12, 2)
+}
+
+model Quote {
+  id                 String           @id @default(uuid())
+  number             String           @unique
+  kind               String           @default("venta")
+  dealStatus         String           @default("nueva")
+  customerId         String
+  customer           Customer         @relation(fields: [customerId], references: [id])
+  vendorId           String
+  vendor             User             @relation("QuoteVendor", fields: [vendorId], references: [id])
+  lostReason         String?
+  holdExpiresAt      DateTime?
+  holdPausedAt       DateTime?
+  freightZoneId      String?
+  freightVehicle     String?
+  freightSnapshot    Json?
+  movementInformed   Boolean          @default(false)
+  movementWaived     Boolean          @default(false)
+  clientPickup       Boolean          @default(false)
+  dispatchDate       DateTime?
+  dispatchDepotId    String?
+  dispatchNotes      String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  lines              QuoteLine[]
+  extras             QuoteExtra[]
+  messages           DealMessage[]
+  vouchers           PaymentVoucher[]
+  events             QuoteEvent[]
+  odooJobs           OdooSyncJob[]
+  dispatches         Dispatch[]
+
+  @@index([dealStatus])
+  @@index([vendorId])
+  @@index([customerId])
+}
+
+model QuoteLine {
+  id        String    @id @default(uuid())
+  quoteId   String
+  quote     Quote     @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  iso       String
+  type      String
+  cat       String
+  listPrice Decimal   @db.Decimal(12, 2)
+  minPrice  Decimal   @db.Decimal(12, 2)
+  priceNet  Decimal   @db.Decimal(12, 2)
+  frozenAt  DateTime?
+}
+
+model QuoteExtra {
+  id       String  @id @default(uuid())
+  quoteId  String
+  quote    Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  kind     String
+  label    String
+  amount   Decimal @db.Decimal(12, 2)
+  accepted Boolean @default(false)
+  meta     Json?
+}
+
+model DealMessage {
+  id         String   @id @default(uuid())
+  quoteId    String
+  quote      Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  authorRole String
+  authorName String
+  body       String
+  createdAt  DateTime @default(now())
+
+  @@index([quoteId, createdAt])
+}
+
+model PaymentVoucher {
+  id               String   @id @default(uuid())
+  quoteId          String
+  quote            Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  storageKey       String
+  mimeType         String
+  originalName     String
+  sizeBytes        Int
+  bank             String   @default("")
+  operationNumber  String   @default("")
+  paidAt           DateTime?
+  declaredAmount   Decimal  @db.Decimal(12, 2)
+  status           String   @default("subido")
+  reviewNote       String?
+  createdAt        DateTime @default(now())
+
+  @@index([quoteId, status])
+}
+
+model QuoteEvent {
+  id        String   @id @default(uuid())
+  quoteId   String
+  quote     Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  type      String
+  detail    String
+  createdAt DateTime @default(now())
+
+  @@index([quoteId, createdAt])
+}
+
+model OdooSyncJob {
+  id        String   @id @default(uuid())
+  quoteId   String
+  quote     Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  event     String
+  payload   Json
+  status    String   @default("pending")
+  attempts  Int      @default(0)
+  lastError String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
+model Dispatch {
+  id            String    @id @default(uuid())
+  quoteId       String?
+  quote         Quote?    @relation(fields: [quoteId], references: [id])
+  reason        String    @default("venta")
+  status        String    @default("Pendiente de programar")
+  depotId       String?
+  scheduledDate DateTime?
+  notes         String    @default("")
+  isos          String[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status])
 }

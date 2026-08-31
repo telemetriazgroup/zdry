@@ -14,6 +14,8 @@ import { StorageModule } from "./storage/storage.module";
 import { ConfigAppModule } from "./config/config.module";
 import { RedisModule } from "./redis/redis.module";
 import { WarehouseModule } from "./warehouse/warehouse.module";
+import { QuotesModule } from "./quotes/quotes.module";
+import { CatalogMediaModule } from "./catalog-media/catalog-media.module";
 
 @Module({
   imports: [
@@ -29,6 +31,8 @@ import { WarehouseModule } from "./warehouse/warehouse.module";
     InventoryModule,
     PurchasesModule,
     WarehouseModule,
+    QuotesModule,
+    CatalogMediaModule,
     ConfigAppModule,
   ],
   controllers: [HealthController],

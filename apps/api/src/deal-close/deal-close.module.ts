@@ -7,5 +7,6 @@ import { OdooModule } from "../odoo/odoo.module";
   imports: [OdooModule],
   controllers: [DealCloseController],
   providers: [DealCloseService],
+  exports: [DealCloseService],
 })
 export class DealCloseModule {}

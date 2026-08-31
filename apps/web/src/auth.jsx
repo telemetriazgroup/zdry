@@ -9,6 +9,7 @@ export const ROLE_LABELS = {
   vendedor: "Vendedor / Comercial",
   compras: "Compras / Costos",
   almacen: "Almacén / Operador",
+  cliente: "Cliente",
 };
 
 export const ROLE_DESC = {
@@ -17,6 +18,7 @@ export const ROLE_DESC = {
   vendedor: "Cotiza, valida comprobantes y confirma asignación. Nunca ve el costo real.",
   compras: "Facturas de compra, extras y DAM. Ve costos de adquisición.",
   almacen: "Recepción, patio y despachos. Sin precios ni costos.",
+  cliente: "Reserva, negocia descuento con tu comercial y sube el comprobante de pago.",
 };
 
 export const ROLE_NAV = {
@@ -30,12 +32,14 @@ export const ROLE_NAV = {
     { to: "/app/compras/facturas", label: "Compras" },
     { to: "/app/almacen/recepcion", label: "Recepción" },
     { to: "/app/almacen/patio", label: "Patio" },
+    { to: "/app/catalogo-media", label: "Ficha catálogo" },
   ],
   gerente: [
     { to: "/app", label: "Inicio", end: true },
     { to: "/app/precios", label: "Reglas de precio" },
     { to: "/app/equipo", label: "Equipo" },
     { to: "/app/configuracion", label: "Configuración" },
+    { to: "/app/catalogo-media", label: "Ficha catálogo" },
   ],
   vendedor: [
     { to: "/app", label: "Inicio", end: true },
@@ -51,14 +55,23 @@ export const ROLE_NAV = {
     { to: "/app/compras/facturas", label: "Facturas de compra" },
     { to: "/app/compras/extras", label: "Costos adicionales" },
     { to: "/app/compras/dam", label: "Nacionalización (DAM)" },
+    { to: "/app/catalogo-media", label: "Ficha catálogo" },
   ],
   almacen: [
     { to: "/app", label: "Inicio", end: true },
     { to: "/app/almacen/recepcion", label: "Recepción" },
     { to: "/app/almacen/patio", label: "Patio" },
     { to: "/app/almacen/despachos", label: "Despachos" },
+    { to: "/app/catalogo-media", label: "Ficha catálogo" },
   ],
+  cliente: [],
 };
+
+export function homeFor(user) {
+  if (!user) return "/";
+  if (user.role === "cliente") return "/mi-cuenta";
+  return "/app";
+}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -78,6 +91,11 @@ export function AuthProvider({ children }) {
       nav: user ? ROLE_NAV[user.role] || [] : [],
       async login(email, password) {
         const d = await api("/auth/login", { method: "POST", body: { email, password } });
+        setUser(d.user);
+        return d.user;
+      },
+      async register(body) {
+        const d = await api("/auth/register", { method: "POST", body });
         setUser(d.user);
         return d.user;
       },

@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import { Response } from "express";
 import * as argon2 from "argon2";
@@ -52,7 +52,11 @@ export class AuthService {
   }
 
   toPublic(user: AuthUser) {
-    return { id: user.id, email: user.email, name: user.name, role: user.role };
+    return { id: user.id, email: user.email, name: user.name, role: user.role, customerId: user.customerId ?? null };
+  }
+
+  private asAuth(user: { id: string; email: string; name: string; role: AuthUser["role"]; customerId?: string | null }): AuthUser {
+    return { id: user.id, email: user.email, name: user.name, role: user.role, customerId: user.customerId ?? null };
   }
 
   async login(email: string, password: string, ip: string | undefined, res: Response) {
@@ -64,7 +68,7 @@ export class AuthService {
     if (!ok) {
       throw new UnauthorizedException("Correo o contraseña incorrectos");
     }
-    const authUser: AuthUser = { id: user.id, email: user.email, name: user.name, role: user.role };
+    const authUser = this.asAuth(user);
     const access = this.signAccess(authUser);
     const refresh = this.signRefresh(authUser);
     await this.prisma.user.update({
@@ -73,6 +77,44 @@ export class AuthService {
     });
     this.setAuthCookies(res, authUser, access, refresh);
     await this.audit.log({ user: authUser, action: "login", entity: "User", entityId: user.id, ip });
+    return { user: this.toPublic(authUser) };
+  }
+
+  async register(
+    input: { email?: string; password?: string; name?: string; companyName?: string; rucDni?: string; phone?: string },
+    ip: string | undefined,
+    res: Response,
+  ) {
+    const email = (input.email || "").trim().toLowerCase();
+    const password = input.password || "";
+    const name = (input.name || "").trim();
+    const companyName = (input.companyName || "").trim();
+    const rucDni = (input.rucDni || "").trim();
+    const phone = (input.phone || "").trim();
+    if (!email || !password || password.length < 8) throw new BadRequestException("Correo y clave de al menos 8 caracteres.");
+    if (!companyName || !rucDni) throw new BadRequestException("Empresa y RUC/DNI son obligatorios.");
+    if (!name || !phone) throw new BadRequestException("Persona de contacto y teléfono son obligatorios.");
+    const exists = await this.prisma.user.findUnique({ where: { email } });
+    if (exists) throw new ConflictException("Ya existe una cuenta con ese correo.");
+    const hash = await argon2.hash(password);
+    let customer = await this.prisma.customer.findFirst({ where: { OR: [{ email }, { rucDni }] } });
+    if (!customer) {
+      customer = await this.prisma.customer.create({
+        data: { rucDni, companyName, email, phone, risk: "B" },
+      });
+    }
+    const user = await this.prisma.user.create({
+      data: { email, passwordHash: hash, name, role: "cliente", customerId: customer.id },
+    });
+    const authUser = this.asAuth(user);
+    const access = this.signAccess(authUser);
+    const refresh = this.signRefresh(authUser);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { refreshTokenHash: await argon2.hash(refresh) },
+    });
+    this.setAuthCookies(res, authUser, access, refresh);
+    await this.audit.log({ user: authUser, action: "register", entity: "User", entityId: user.id, ip });
     return { user: this.toPublic(authUser) };
   }
 
@@ -91,7 +133,7 @@ export class AuthService {
     }
     const match = await argon2.verify(user.refreshTokenHash, refreshToken);
     if (!match) throw new UnauthorizedException("Sesión inválida");
-    const authUser: AuthUser = { id: user.id, email: user.email, name: user.name, role: user.role };
+    const authUser = this.asAuth(user);
     const access = this.signAccess(authUser);
     const nextRefresh = this.signRefresh(authUser);
     await this.prisma.user.update({

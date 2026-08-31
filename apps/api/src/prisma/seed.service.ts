@@ -3,6 +3,9 @@ import { Prisma, Role, RiskGrade } from "@prisma/client";
 import * as argon2 from "argon2";
 import { PrismaService } from "./prisma.service";
 import { DEFAULT_LAYOUT_RULES, DEFAULT_YARD_CONFIG } from "../domain/yard";
+import { DEFAULT_PRICING_RULES, computeListPrices } from "../domain/pricing";
+import { DEFAULT_VISIBILITY_RULES } from "../domain/visibility";
+import { DEFAULT_PAYMENT_ACCOUNTS } from "../domain/payment-accounts";
 
 const PASSWORD = process.env.SEED_PASSWORD || "Zdry123!";
 
@@ -105,6 +108,11 @@ export class SeedService implements OnModuleInit {
       create: { key: "layout_rules", value: DEFAULT_LAYOUT_RULES as Prisma.InputJsonValue },
     });
     await this.prisma.appSetting.upsert({
+      where: { key: "payment_accounts" },
+      update: {},
+      create: { key: "payment_accounts", value: DEFAULT_PAYMENT_ACCOUNTS as Prisma.InputJsonValue },
+    });
+    await this.prisma.appSetting.upsert({
       where: { key: "yard_config" },
       update: {},
       create: {
@@ -118,6 +126,72 @@ export class SeedService implements OnModuleInit {
       },
     });
 
-    this.log.log(`Seed listo. Usuarios: ${USERS.map((u) => u.email).join(", ")} / clave ${PASSWORD}`);
+    if ((await this.prisma.pricingRule.count()) === 0) {
+      await this.prisma.pricingRule.createMany({
+        data: DEFAULT_PRICING_RULES.map((r) => ({
+          scope: r.scope,
+          target: r.target,
+          marginPct: r.marginPct,
+          maxDiscountPct: r.maxDiscountPct,
+        })),
+      });
+    }
+    if ((await this.prisma.visibilityRule.count()) === 0) {
+      await this.prisma.visibilityRule.createMany({
+        data: DEFAULT_VISIBILITY_RULES.map((r) => ({ scope: r.scope, target: r.target, show: r.show })),
+      });
+    }
+    const services = [
+      { name: "Pintado exterior", price: 180 },
+      { name: "Transporte adicional (movimiento extra)", price: 220 },
+      { name: "Sellado / precintado de seguridad", price: 35 },
+      { name: "Reparación estética a pedido del cliente", price: 150 },
+      { name: "Fumigación certificada", price: 90 },
+      { name: "Instalación de accesorios (rejillas, ganchos)", price: 60 },
+    ];
+    for (const s of services) {
+      const exists = await this.prisma.commercialService.findFirst({ where: { name: s.name } });
+      if (!exists) await this.prisma.commercialService.create({ data: s });
+    }
+
+    const andina = await this.prisma.customer.findFirst({ where: { companyName: "Logística Andina SAC" } });
+    if (andina) {
+      await this.prisma.user.upsert({
+        where: { email: "cliente@andina.pe" },
+        update: { name: "Compras Andina", role: "cliente", active: true, customerId: andina.id },
+        create: {
+          email: "cliente@andina.pe",
+          passwordHash: hash,
+          name: "Compras Andina",
+          role: "cliente",
+          customerId: andina.id,
+        },
+      });
+    }
+
+    const pricing = await this.prisma.pricingRule.findMany();
+    const rules = pricing.length
+      ? pricing.map((r) => ({
+          scope: r.scope,
+          target: r.target,
+          marginPct: Number(r.marginPct),
+          maxDiscountPct: Number(r.maxDiscountPct),
+        }))
+      : DEFAULT_PRICING_RULES;
+    const toPrice = await this.prisma.container.findMany({
+      where: { intakeType: "compra", physicallyReceived: true, priceList: null },
+    });
+    for (const c of toPrice) {
+      const p = computeListPrices(
+        { iso: c.iso, type: c.type, cat: c.cat, manufacturer: c.manufacturer, fobCif: Number(c.fobCif) },
+        rules,
+      );
+      await this.prisma.container.update({
+        where: { iso: c.iso },
+        data: { priceList: p.priceList, priceMin: p.priceMin },
+      });
+    }
+
+    this.log.log(`Seed listo. Usuarios: ${USERS.map((u) => u.email).join(", ")}, cliente@andina.pe / clave ${PASSWORD}`);
   }
 }

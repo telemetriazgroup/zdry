@@ -10,6 +10,16 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Public()
+  @Post("register")
+  register(
+    @Body() body: { email?: string; password?: string; name?: string; companyName?: string; rucDni?: string; phone?: string },
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return this.auth.register(body, req.ip, res);
+  }
+
+  @Public()
   @Post("login")
   login(
     @Body() body: { email?: string; password?: string },

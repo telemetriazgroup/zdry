@@ -19,6 +19,11 @@ export default function Home() {
         <div className="tile"><div className="v">{health?.ok ? "OK" : "…"}</div><div className="l">API</div></div>
         <div className="tile"><div className="v">{health?.odoo === "enabled" ? "Odoo" : "Noop"}</div><div className="l">Conector contable</div></div>
       </div>
+      <p className="section-sub" style={{ marginTop: 16 }}>
+        El catálogo público está en <a href="/" style={{ color: "var(--orange)", fontWeight: 700 }}>/</a>.
+        {user.role === "vendedor" ? " Usa Bandeja → Negociación → Pagos → Seguimiento para el cierre por comprobante." : ""}
+        {user.role === "admin" ? " Cola Odoo: GET /api/admin/odoo-queue." : ""}
+      </p>
     </>
   );
 }

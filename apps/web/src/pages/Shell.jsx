@@ -10,6 +10,8 @@ import ComingSoon from "./ComingSoon.jsx";
 import Compras from "./Compras.jsx";
 import Recepcion from "./Recepcion.jsx";
 import Patio from "./Patio.jsx";
+import QuotesHub from "./QuotesHub.jsx";
+import CatalogMedia from "./CatalogMedia.jsx";
 
 function allowed(nav, pathname, role) {
   if ((role === "admin" || role === "compras") && pathname.startsWith("/app/compras")) return true;
@@ -62,12 +64,12 @@ export default function Shell() {
           <Route path="maestros" element={<Gate nav={nav} role={user.role} path="/app/maestros"><Masters /></Gate>} />
           <Route path="configuracion" element={<Gate nav={nav} role={user.role} path="/app/configuracion"><ConfigPage /></Gate>} />
           <Route path="auditoria" element={<Gate nav={nav} role={user.role} path="/app/auditoria"><AuditPage /></Gate>} />
-          <Route path="precios" element={<Gate nav={nav} role={user.role} path="/app/precios"><ComingSoon title="Reglas de precio" sprint="4 y 9" /></Gate>} />
+          <Route path="precios" element={<Gate nav={nav} role={user.role} path="/app/precios"><ConfigPage /></Gate>} />
           <Route path="equipo" element={<Gate nav={nav} role={user.role} path="/app/equipo"><ComingSoon title="Desempeño del equipo" sprint="9" /></Gate>} />
-          <Route path="bandeja" element={<Gate nav={nav} role={user.role} path="/app/bandeja"><ComingSoon title="Bandeja de cotizaciones" sprint="4" /></Gate>} />
-          <Route path="negociacion" element={<Gate nav={nav} role={user.role} path="/app/negociacion"><ComingSoon title="Negociación de descuento" sprint="4" /></Gate>} />
-          <Route path="pagos" element={<Gate nav={nav} role={user.role} path="/app/pagos"><ComingSoon title="Pagos por validar" sprint="4" /></Gate>} />
-          <Route path="seguimiento" element={<Gate nav={nav} role={user.role} path="/app/seguimiento"><ComingSoon title="Seguimiento de cotizaciones" sprint="4" /></Gate>} />
+          <Route path="bandeja" element={<Gate nav={nav} role={user.role} path="/app/bandeja"><QuotesHub /></Gate>} />
+          <Route path="negociacion" element={<Gate nav={nav} role={user.role} path="/app/negociacion"><QuotesHub /></Gate>} />
+          <Route path="pagos" element={<Gate nav={nav} role={user.role} path="/app/pagos"><QuotesHub /></Gate>} />
+          <Route path="seguimiento" element={<Gate nav={nav} role={user.role} path="/app/seguimiento"><QuotesHub /></Gate>} />
           <Route path="alquileres" element={<Gate nav={nav} role={user.role} path="/app/alquileres"><ComingSoon title="Contratos de alquiler" sprint="5" /></Gate>} />
           <Route path="compras/facturas" element={<Gate nav={nav} role={user.role} path="/app/compras/facturas"><Compras /></Gate>} />
           <Route path="compras/extras" element={<Gate nav={nav} role={user.role} path="/app/compras/extras"><Compras /></Gate>} />
@@ -75,6 +77,7 @@ export default function Shell() {
           <Route path="almacen/recepcion" element={<Gate nav={nav} role={user.role} path="/app/almacen/recepcion"><Recepcion /></Gate>} />
           <Route path="almacen/patio" element={<Gate nav={nav} role={user.role} path="/app/almacen/patio"><Patio /></Gate>} />
           <Route path="almacen/despachos" element={<Gate nav={nav} role={user.role} path="/app/almacen/despachos"><ComingSoon title="Despachos" sprint="6" /></Gate>} />
+          <Route path="catalogo-media" element={<Gate nav={nav} role={user.role} path="/app/catalogo-media"><CatalogMedia /></Gate>} />
           <Route path="*" element={<Navigate to="/app" replace />} />
         </Routes>
       </div>

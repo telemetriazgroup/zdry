@@ -326,7 +326,13 @@ export class WarehouseService {
       await this.storage.put(storageKey, file.buffer, mime);
       await this.prisma.container.update({
         where: { iso: c.iso },
-        data: { video360Key: storageKey, video360Mime: mime },
+        data: {
+          video360Key: storageKey,
+          video360Mime: mime,
+          mediaStatus: "pendiente",
+          mediaApprovedAt: null,
+          mediaApprovedBy: null,
+        },
       });
       await this.audit.log({
         user,
@@ -361,6 +367,10 @@ export class WarehouseService {
       where: { iso_slot: { iso: c.iso, slot } },
       update: { storageKey, mimeType: mime, originalName, sizeBytes: file.size },
       create: { iso: c.iso, slot, storageKey, mimeType: mime, originalName, sizeBytes: file.size },
+    });
+    await this.prisma.container.update({
+      where: { iso: c.iso },
+      data: { mediaStatus: "pendiente", mediaApprovedAt: null, mediaApprovedBy: null },
     });
     await this.audit.log({
       user,
@@ -397,7 +407,11 @@ export class WarehouseService {
     const nextStatus = c.status === "Pendiente de ingreso" ? "Disponible" : c.status;
     const updated = await this.prisma.container.update({
       where: { iso: c.iso },
-      data: { physicallyReceived: true, status: nextStatus },
+      data: {
+        physicallyReceived: true,
+        status: nextStatus,
+        mediaStatus: c.mediaStatus === "aprobado" ? c.mediaStatus : "pendiente",
+      },
       include: { depot: true },
     });
     await this.prisma.containerHistory.create({
@@ -746,6 +760,8 @@ export class WarehouseService {
       storageDiscountPct: Number(c.storageDiscountPct),
       photos: photoSlots,
       hasVideo: !!c.video360Key,
+      mediaStatus: c.mediaStatus,
+      mediaReviewNote: c.mediaReviewNote,
       missing: inspectMissing(c),
       dataMissing: inspectDataMissing(c),
       suggested,

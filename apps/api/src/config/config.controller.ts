@@ -35,9 +35,13 @@ export class ConfigController {
     return {
       sections: CONFIG_SECTIONS.map((s) => ({
         ...s,
-        status: s.id === "yard-columns" ? ("live" as const) : ("stub" as const),
+        status: ["yard-columns", "visibility", "commercial-services"].includes(s.id)
+          ? ("live" as const)
+          : s.id === "freight"
+            ? ("partial" as const)
+            : ("stub" as const),
       })),
-      note: "Las reglas de columna de patio (Sprint 3) ya se editan aquí. El resto entra en el Sprint 9.",
+      note: "Visibilidad, servicios comerciales y reglas de columna ya se editan aquí. El tarifario de flete completo entra en el Sprint 7/9; el stub de zonas ya cotiza en el cierre.",
     };
   }
 
@@ -65,5 +69,63 @@ export class ConfigController {
       ip: req.ip,
     });
     return value;
+  }
+
+  @Get("visibility")
+  async getVisibility() {
+    return this.prisma.visibilityRule.findMany({ orderBy: { createdAt: "asc" } });
+  }
+
+  @Put("visibility")
+  async putVisibility(
+    @Body() body: { rules?: { scope: string; target?: string | null; show: boolean }[] },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const rules = body.rules || [];
+    await this.prisma.$transaction([
+      this.prisma.visibilityRule.deleteMany(),
+      ...rules.map((r) =>
+        this.prisma.visibilityRule.create({
+          data: { scope: r.scope, target: r.target ?? null, show: !!r.show },
+        }),
+      ),
+    ]);
+    await this.audit.log({ user, action: "update", entity: "VisibilityRule", after: { count: rules.length }, ip: req.ip });
+    return this.getVisibility();
+  }
+
+  @Get("pricing")
+  async getPricing() {
+    return this.prisma.pricingRule.findMany({ orderBy: { createdAt: "asc" } });
+  }
+
+  @Put("pricing")
+  async putPricing(
+    @Body() body: { rules?: { scope: string; target?: string | null; marginPct: number; maxDiscountPct: number }[] },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const rules = body.rules || [];
+    await this.prisma.$transaction([
+      this.prisma.pricingRule.deleteMany(),
+      ...rules.map((r) =>
+        this.prisma.pricingRule.create({
+          data: {
+            scope: r.scope,
+            target: r.target ?? null,
+            marginPct: r.marginPct,
+            maxDiscountPct: r.maxDiscountPct,
+          },
+        }),
+      ),
+    ]);
+    await this.audit.log({ user, action: "update", entity: "PricingRule", after: { count: rules.length }, ip: req.ip });
+    return this.getPricing();
+  }
+
+  @Get("commercial-services")
+  commercialServices() {
+    return this.prisma.commercialService.findMany({ orderBy: { name: "asc" } });
   }
 }

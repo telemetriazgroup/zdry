@@ -4,12 +4,18 @@ import { api } from "../api.js";
 export default function ConfigPage() {
   const [data, setData] = useState(null);
   const [rules, setRules] = useState(null);
+  const [vis, setVis] = useState([]);
+  const [pricing, setPricing] = useState([]);
+  const [services, setServices] = useState([]);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
 
   useEffect(() => {
     api("/config/sections").then(setData).catch((e) => setError(e.message));
     api("/config/yard-columns").then(setRules).catch(() => {});
+    api("/config/visibility").then(setVis).catch(() => {});
+    api("/config/pricing").then(setPricing).catch(() => {});
+    api("/config/commercial-services").then(setServices).catch(() => {});
   }, []);
 
   async function saveRules(next) {
@@ -23,12 +29,96 @@ export default function ConfigPage() {
     }
   }
 
+  async function saveVis() {
+    setSaved("");
+    try {
+      const out = await api("/config/visibility", { method: "PUT", body: { rules: vis } });
+      setVis(out);
+      setSaved("✓ Visibilidad de precios actualizada.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function savePricing() {
+    setSaved("");
+    try {
+      const out = await api("/config/pricing", { method: "PUT", body: { rules: pricing } });
+      setPricing(out);
+      setSaved("✓ Reglas de precio actualizadas. Las unidades nuevas las usan al cotizar.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   return (
     <>
       <h2 className="section-title">Configuración</h2>
       <p className="section-sub">{data?.note || "Solo Administrador y Gerente."}</p>
       {error ? <div className="err">{error}</div> : null}
       {saved ? <div className="ok-msg">{saved}</div> : null}
+
+      <div className="panel" style={{ marginBottom: 18 }}>
+        <h3>Visibilidad de precios en catálogo</h3>
+        <p className="section-sub">Jerarquía global → tipo/categoría/depósito → fabricante → unidad. CIMC visible por defecto; el resto pide precio.</p>
+        {vis.map((r, i) => (
+          <div className="form-grid" key={r.id || i}>
+            <div>
+              <label>Ámbito</label>
+              <input value={r.scope} onChange={(e) => setVis(vis.map((x, j) => j === i ? { ...x, scope: e.target.value } : x))} />
+            </div>
+            <div>
+              <label>Target</label>
+              <input value={r.target || ""} onChange={(e) => setVis(vis.map((x, j) => j === i ? { ...x, target: e.target.value || null } : x))} />
+            </div>
+            <div>
+              <label>Mostrar precio</label>
+              <select value={r.show ? "1" : "0"} onChange={(e) => setVis(vis.map((x, j) => j === i ? { ...x, show: e.target.value === "1" } : x))}>
+                <option value="1">Sí</option>
+                <option value="0">No</option>
+              </select>
+            </div>
+          </div>
+        ))}
+        <button className="btn-ghost" type="button" onClick={() => setVis([...vis, { scope: "global", target: null, show: false }])}>Añadir regla</button>
+        <button className="btn-primary" type="button" style={{ marginLeft: 8 }} onClick={saveVis}>Guardar visibilidad</button>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 18 }}>
+        <h3>Reglas de precio (margen / descuento máximo)</h3>
+        {pricing.map((r, i) => (
+          <div className="form-grid" key={r.id || i}>
+            <div>
+              <label>Ámbito</label>
+              <input value={r.scope} onChange={(e) => setPricing(pricing.map((x, j) => j === i ? { ...x, scope: e.target.value } : x))} />
+            </div>
+            <div>
+              <label>Target</label>
+              <input value={r.target || ""} onChange={(e) => setPricing(pricing.map((x, j) => j === i ? { ...x, target: e.target.value || null } : x))} />
+            </div>
+            <div>
+              <label>Margen %</label>
+              <input type="number" value={r.marginPct} onChange={(e) => setPricing(pricing.map((x, j) => j === i ? { ...x, marginPct: Number(e.target.value) } : x))} />
+            </div>
+            <div>
+              <label>Dto. máx %</label>
+              <input type="number" value={r.maxDiscountPct} onChange={(e) => setPricing(pricing.map((x, j) => j === i ? { ...x, maxDiscountPct: Number(e.target.value) } : x))} />
+            </div>
+          </div>
+        ))}
+        <button className="btn-primary" type="button" onClick={savePricing}>Guardar precios</button>
+      </div>
+
+      {services.length ? (
+        <div className="panel" style={{ marginBottom: 18 }}>
+          <h3>Servicios comerciales</h3>
+          <table className="data">
+            <thead><tr><th>Servicio</th><th>Precio</th></tr></thead>
+            <tbody>{services.map((s) => <tr key={s.id}><td>{s.name}</td><td>${Number(s.price)}</td></tr>)}</tbody>
+          </table>
+        </div>
+      ) : null}
+
       {rules ? (
         <div className="panel" style={{ marginBottom: 18 }}>
           <h3>Reglas de columna del patio</h3>
@@ -75,6 +165,8 @@ export default function ConfigPage() {
             <p>{s.blurb}</p>
             {s.status === "live" ? (
               <div className="ok-msg" style={{ marginTop: 8 }}>Activo — edición arriba</div>
+            ) : s.status === "partial" ? (
+              <div className="locked-note" style={{ marginTop: 8 }}>Stub de zonas en cierre comercial (Sprint 4); Maps en Sprint 7</div>
             ) : (
               <div className="locked-note" style={{ marginTop: 8 }}>Ancla Sprint 1 — edición en sprints posteriores</div>
             )}

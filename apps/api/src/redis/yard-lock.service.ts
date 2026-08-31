@@ -12,7 +12,19 @@ export class YardLockService {
   constructor(@Inject(REDIS) private readonly redis: Redis) {}
 
   async withYardLock<T>(depotId: string, fn: () => Promise<T>): Promise<T> {
-    const key = `lock:yard:${depotId}`;
+    return this.withKey(`yard:${depotId}`, fn, "El patio está ocupado por otra operación. Reintenta en unos segundos.");
+  }
+
+  async withIsoLock<T>(iso: string, fn: () => Promise<T>): Promise<T> {
+    return this.withKey(`iso:${iso}`, fn, "Esta unidad ya está siendo reservada por otra operación.");
+  }
+
+  async withQuoteLock<T>(quoteId: string, fn: () => Promise<T>): Promise<T> {
+    return this.withKey(`quote:${quoteId}`, fn, "Esta cotización está siendo actualizada por otra operación.");
+  }
+
+  async withKey<T>(suffix: string, fn: () => Promise<T>, busyMessage?: string): Promise<T> {
+    const key = `lock:${suffix}`;
     const token = randomUUID();
     let acquired = false;
     try {
@@ -29,7 +41,7 @@ export class YardLockService {
       return fn();
     }
     if (!acquired) {
-      throw new ConflictException("El patio está ocupado por otra operación. Reintenta en unos segundos.");
+      throw new ConflictException(busyMessage || "Operación en curso. Reintenta en unos segundos.");
     }
     try {
       return await fn();
