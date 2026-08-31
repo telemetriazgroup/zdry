@@ -51,6 +51,7 @@ services:
       REDIS_URL: redis://redis:6379
       MINIO_ENDPOINT: http://minio:9000
       JWT_SECRET: ${JWT_SECRET:-cambiar-en-produccion}
+      SEED_PASSWORD: ${SEED_PASSWORD:-Zdry123!}
       TZ: America/Lima
       ODOO_ENABLED: ${ODOO_ENABLED:-false}
       ODOO_URL: ${ODOO_URL:-}

@@ -104,3 +104,39 @@ p { margin: 0; }
   background: #fff7ed; border: 1px solid #fcd9b6; color: var(--orange-dark);
   font-size: 12px; padding: 10px 12px; border-radius: 8px; margin-top: 10px; font-weight: 600;
 }
+.err {
+  background: #fff5f5; border: 1px solid #ffc9c9; color: var(--red);
+  font-size: 12px; padding: 10px 12px; border-radius: 8px; margin: 8px 0 12px; font-weight: 600;
+}
+.role-desc {
+  background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px 16px; font-size: 13px; color: var(--text-2); margin-bottom: 20px;
+}
+.tablewrap { overflow-x: auto; }
+table.data { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.data th {
+  text-align: left; padding: 8px 10px; background: var(--bg);
+  border-bottom: 2px solid var(--line); font-size: 10.5px; text-transform: uppercase;
+  color: var(--text-2); white-space: nowrap;
+}
+table.data td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.form-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px; align-items: end; margin-bottom: 12px;
+}
+.form-grid label { font-size: 11px; font-weight: 700; color: var(--text-2); text-transform: uppercase; display: block; margin-bottom: 4px; }
+.form-grid input, .form-grid select {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 13px;
+}
+.navtabs { display: flex; gap: 4px; flex: 1; flex-wrap: wrap; }
+.navtab.active-link { background: rgba(255,255,255,.14); color: #fff; }
+.badge-role {
+  font-size: 10px; font-weight: 800; padding: 3px 9px; border-radius: 20px;
+  background: var(--orange); color: #fff; letter-spacing: .02em;
+}
+.config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.config-card { background: #f0f7ff; border: 1px solid #a9d3f5; border-radius: 10px; padding: 14px; }
+.config-card h4 { color: #0c4a80; margin-bottom: 6px; font-size: 14px; }
+.config-card p { font-size: 12px; color: var(--text-2); }
+.demo-users { text-align: left; font-size: 11px; color: var(--text-2); margin-top: 12px; line-height: 1.6; }
+.demo-users b { color: var(--text); }

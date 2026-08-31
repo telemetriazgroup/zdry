@@ -1,0 +1,34 @@
+export class ApiError extends Error {
+  constructor(status, data) {
+    super(data?.message || data?.error || `HTTP ${status}`);
+    this.status = status;
+    this.data = data;
+  }
+}
+
+async function parse(res) {
+  const text = await res.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    return { message: text };
+  }
+}
+
+export async function api(path, { method = "GET", body, retry = true } = {}) {
+  const res = await fetch(`/api${path}`, {
+    method,
+    credentials: "include",
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  if (res.status === 401 && retry && path !== "/auth/login" && path !== "/auth/refresh") {
+    const refreshed = await fetch("/api/auth/refresh", { method: "POST", credentials: "include" });
+    if (refreshed.ok) return api(path, { method, body, retry: false });
+  }
+
+  const data = await parse(res);
+  if (!res.ok) throw new ApiError(res.status, data);
+  return data;
+}

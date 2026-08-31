@@ -1,23 +1,25 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { ROLE_DESC, ROLE_LABELS, useAuth } from "../auth.jsx";
+import Home from "./Home.jsx";
+import Inventory from "./Inventory.jsx";
+import Masters from "./Masters.jsx";
+import People from "./People.jsx";
+import ConfigPage from "./ConfigPage.jsx";
+import AuditPage from "./AuditPage.jsx";
+import ComingSoon from "./ComingSoon.jsx";
 
-const TABS = [
-  { id: "inv", label: "Inventario y costos" },
-  { id: "pagos", label: "Pagos por validar" },
-  { id: "neg", label: "Negociación de descuento" },
-];
+function allowed(nav, pathname) {
+  return nav.some((item) => (item.end ? pathname === item.to : pathname === item.to || pathname.startsWith(item.to + "/")));
+}
 
 export default function Shell() {
-  const nav = useNavigate();
-  const [tab, setTab] = useState("pagos");
-  const [health, setHealth] = useState(null);
-  const [machine, setMachine] = useState(null);
-  const email = sessionStorage.getItem("zdry-email") || "admin@zdry.pe";
+  const { user, nav, logout } = useAuth();
+  const navigate = useNavigate();
 
-  useEffect(() => {
-    fetch("/api/health").then((r) => r.json()).then(setHealth).catch(() => setHealth({ ok: false }));
-    fetch("/api/deal-close/machine").then((r) => r.json()).then(setMachine).catch(() => null);
-  }, []);
+  async function onLogout() {
+    await logout();
+    navigate("/login");
+  }
 
   return (
     <>
@@ -26,68 +28,63 @@ export default function Shell() {
           <div className="brand">
             <img src="/brand/LOGO_Z.png" alt="ZDRY" />
           </div>
-          <button className="navtab active" type="button">Dashboard interno</button>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center" }}>
-            <span style={{ fontSize: 12, color: "#c7cede" }}>{email}</span>
-            <button className="btn-primary" type="button" onClick={() => { sessionStorage.clear(); nav("/login"); }}>
-              Salir
-            </button>
+          <nav className="navtabs">
+            {nav.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                className={({ isActive }) => `navtab ${isActive ? "active-link" : ""}`}
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <span className="badge-role">{ROLE_LABELS[user.role]}</span>
+            <span style={{ fontSize: 12, color: "#c7cede" }}>{user.name}</span>
+            <button className="btn-primary" type="button" onClick={onLogout}>Salir</button>
           </div>
         </div>
       </header>
 
       <div className="page">
-        <h2 className="section-title">Dashboard interno — Sprint 0</h2>
-        <p className="section-sub">
-          Paleta y topbar del prototipo. El cierre comercial (comprobante → validación → asignación → despacho → Odoo) queda cableado en la API como máquina de estados.
-        </p>
-
-        <div className="tile-row" style={{ marginBottom: 18 }}>
-          <div className="tile">
-            <div className="v">{health?.ok ? "OK" : "…"}</div>
-            <div className="l">API /health</div>
-          </div>
-          <div className="tile">
-            <div className="v">{health?.odoo === "enabled" ? "Odoo" : "Noop"}</div>
-            <div className="l">Conector contable</div>
-          </div>
-          <div className="tile">
-            <div className="v">{machine?.statuses?.length || "—"}</div>
-            <div className="l">Estados de cierre</div>
-          </div>
-        </div>
-
-        <div className="subtab-row">
-          {TABS.map((t) => (
-            <button key={t.id} className={`subtab ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)} type="button">
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        {tab === "pagos" && (
-          <div className="panel">
-            <h3>Pagos por validar</h3>
-            <p className="section-sub">El cliente sube el comprobante. El comercial confirma si el dinero está — el interbancario puede demorar. No se asigna el contenedor ni se mueve patio antes de eso.</p>
-            <div className="locked-note">Bandeja vacía — Sprint 4 implementa upload, “en verificación”, rechazo y validación. Sprint 0 deja el contrato de estados en <code>GET /api/deal-close/machine</code>.</div>
-          </div>
-        )}
-
-        {tab === "neg" && (
-          <div className="panel">
-            <h3>Negociación de descuento (antes del pago)</h3>
-            <p className="section-sub">Durante la reserva el cliente puede hablar con un comercial para tentar un descuento. El hold de 48 h se pausa mientras el hilo está abierto. El piso de lista se respeta.</p>
-            <div className="locked-note">Sin hilos todavía. El estado <code>en_negociacion</code> ya está en la máquina de cierre.</div>
-          </div>
-        )}
-
-        {tab === "inv" && (
-          <div className="panel">
-            <h3>Inventario y costos</h3>
-            <p className="section-sub">Se porta del prototipo a partir del Sprint 2–3. El vendedor nunca ve el costo real.</p>
-          </div>
-        )}
+        <div className="role-desc">{ROLE_DESC[user.role]}</div>
+        <Routes>
+          <Route index element={<Home />} />
+          <Route path="inventario" element={<Gate nav={nav} path="/app/inventario"><Inventory /></Gate>} />
+          <Route path="personas" element={<Gate nav={nav} path="/app/personas"><People /></Gate>} />
+          <Route path="maestros" element={<Gate nav={nav} path="/app/maestros"><Masters /></Gate>} />
+          <Route path="configuracion" element={<Gate nav={nav} path="/app/configuracion"><ConfigPage /></Gate>} />
+          <Route path="auditoria" element={<Gate nav={nav} path="/app/auditoria"><AuditPage /></Gate>} />
+          <Route path="precios" element={<Gate nav={nav} path="/app/precios"><ComingSoon title="Reglas de precio" sprint="4 y 9" /></Gate>} />
+          <Route path="equipo" element={<Gate nav={nav} path="/app/equipo"><ComingSoon title="Desempeño del equipo" sprint="9" /></Gate>} />
+          <Route path="bandeja" element={<Gate nav={nav} path="/app/bandeja"><ComingSoon title="Bandeja de cotizaciones" sprint="4" /></Gate>} />
+          <Route path="negociacion" element={<Gate nav={nav} path="/app/negociacion"><ComingSoon title="Negociación de descuento" sprint="4" /></Gate>} />
+          <Route path="pagos" element={<Gate nav={nav} path="/app/pagos"><ComingSoon title="Pagos por validar" sprint="4" /></Gate>} />
+          <Route path="seguimiento" element={<Gate nav={nav} path="/app/seguimiento"><ComingSoon title="Seguimiento de cotizaciones" sprint="4" /></Gate>} />
+          <Route path="alquileres" element={<Gate nav={nav} path="/app/alquileres"><ComingSoon title="Contratos de alquiler" sprint="5" /></Gate>} />
+          <Route path="compras/facturas" element={<Gate nav={nav} path="/app/compras/facturas"><ComingSoon title="Facturas de compra" sprint="2" /></Gate>} />
+          <Route path="compras/extras" element={<Gate nav={nav} path="/app/compras/extras"><ComingSoon title="Costos adicionales" sprint="2 y 8" /></Gate>} />
+          <Route path="compras/dam" element={<Gate nav={nav} path="/app/compras/dam"><ComingSoon title="Nacionalización (DAM)" sprint="2" /></Gate>} />
+          <Route path="almacen/recepcion" element={<Gate nav={nav} path="/app/almacen/recepcion"><ComingSoon title="Recepción e inspección" sprint="3" /></Gate>} />
+          <Route path="almacen/patio" element={<Gate nav={nav} path="/app/almacen/patio"><ComingSoon title="Layout de patio" sprint="3" /></Gate>} />
+          <Route path="almacen/despachos" element={<Gate nav={nav} path="/app/almacen/despachos"><ComingSoon title="Despachos" sprint="6" /></Gate>} />
+          <Route path="*" element={<Navigate to="/app" replace />} />
+        </Routes>
       </div>
     </>
   );
+}
+
+function Gate({ nav, path, children }) {
+  if (!allowed(nav, path)) {
+    return (
+      <div className="panel">
+        <h3>403 — Sin acceso</h3>
+        <p className="section-sub">Esta pantalla no corresponde a tu rol. El API también responde 403 si se llama por fuera.</p>
+      </div>
+    );
+  }
+  return children;
 }

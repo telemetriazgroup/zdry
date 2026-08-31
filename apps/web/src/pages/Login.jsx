@@ -1,16 +1,28 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../auth.jsx";
+import { ApiError } from "../api.js";
 
 export default function Login() {
+  const { login } = useAuth();
   const nav = useNavigate();
   const [email, setEmail] = useState("admin@zdry.pe");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
 
-  function submit(e) {
+  async function submit(e) {
     e.preventDefault();
-    sessionStorage.setItem("zdry-role", "admin");
-    sessionStorage.setItem("zdry-email", email);
-    nav("/app");
+    setError("");
+    setPending(true);
+    try {
+      await login(email, password);
+      nav("/app");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "No se pudo iniciar sesión");
+    } finally {
+      setPending(false);
+    }
   }
 
   return (
@@ -19,14 +31,15 @@ export default function Login() {
         <img className="logo" src="/brand/LOGO_Z.png" alt="ZDRY" />
         <div className="tag">Venta y alquiler de contenedores</div>
         <label>Correo</label>
-        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="username" />
         <label>Contraseña</label>
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Sprint 0 — cualquier valor" />
-        <button className="btn-primary" type="submit">Entrar al dashboard</button>
-        <p className="hint">
-          Sprint 0: el login visual ya usa el logo oficial. Auth real (JWT + roles) entra en el Sprint 1.
-          El cierre de venta será comprobante + validación comercial, no pasarela ni SUNAT.
-        </p>
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" placeholder="Zdry123!" />
+        {error ? <div className="err">{error}</div> : null}
+        <button className="btn-primary" type="submit" disabled={pending}>{pending ? "Entrando…" : "Entrar al dashboard"}</button>
+        <div className="demo-users">
+          Usuarios seed (clave <b>Zdry123!</b>):<br />
+          admin@zdry.pe · gerente@zdry.pe · vendedor@zdry.pe · compras@zdry.pe · almacen@zdry.pe
+        </div>
       </form>
     </div>
   );

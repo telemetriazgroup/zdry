@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Post } from "@nestjs/common";
+import { Roles } from "../auth/roles.decorator";
 import { DealCloseService } from "./deal-close.service";
 import {
   DEAL_STATUSES,
@@ -7,6 +8,7 @@ import {
 } from "./deal-close.types";
 
 @Controller("deal-close")
+@Roles("admin", "gerente", "vendedor")
 export class DealCloseController {
   constructor(private readonly deals: DealCloseService) {}
 
