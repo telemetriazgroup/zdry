@@ -32,3 +32,33 @@ export async function api(path, { method = "GET", body, retry = true } = {}) {
   if (!res.ok) throw new ApiError(res.status, data);
   return data;
 }
+
+export async function apiUpload(path, formData, { retry = true } = {}) {
+  const res = await fetch(`/api${path}`, {
+    method: "POST",
+    credentials: "include",
+    body: formData,
+  });
+
+  if (res.status === 401 && retry) {
+    const refreshed = await fetch("/api/auth/refresh", { method: "POST", credentials: "include" });
+    if (refreshed.ok) return apiUpload(path, formData, { retry: false });
+  }
+
+  const data = await parse(res);
+  if (!res.ok) throw new ApiError(res.status, data);
+  return data;
+}
+
+export async function apiBlob(path) {
+  const res = await fetch(`/api${path}`, { credentials: "include" });
+  if (res.status === 401) {
+    const refreshed = await fetch("/api/auth/refresh", { method: "POST", credentials: "include" });
+    if (refreshed.ok) return apiBlob(path);
+  }
+  if (!res.ok) {
+    const data = await parse(res);
+    throw new ApiError(res.status, data);
+  }
+  return res.blob();
+}

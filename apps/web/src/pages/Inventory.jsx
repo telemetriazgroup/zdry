@@ -8,7 +8,7 @@ export default function Inventory() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    api("/inventory/sample").then(setRows).catch((e) => setError(e.message));
+    api("/inventory").then(setRows).catch((e) => setError(e.message));
   }, []);
 
   const showCosts = rows.some((r) => r.costs);
@@ -19,7 +19,7 @@ export default function Inventory() {
     <>
       <h2 className="section-title">{user.role === "admin" ? "Inventario y costos" : "Inventario disponible"}</h2>
       <p className="section-sub">
-        Muestra de Sprint 1: el servidor oculta FOB y C_T según el rol. El vendedor y el operador no reciben esos campos aunque inspeccionen la red.
+        Unidades reales en BD. El servidor oculta FOB y C_T según el rol — el vendedor y el operador no reciben esos campos aunque inspeccionen la red.
       </p>
       {error ? <div className="err">{error}</div> : null}
       {!showCosts && user.role !== "almacen" ? (
@@ -38,14 +38,16 @@ export default function Inventory() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {rows.length === 0 ? (
+                <tr><td colSpan={showCosts ? 8 : 5} style={{ color: "var(--text-2)" }}>Aún no hay contenedores. Compras los crea al registrar una factura.</td></tr>
+              ) : rows.map((r) => (
                 <tr key={r.iso}>
                   <td>{r.iso}</td>
                   <td>{r.type}</td>
                   <td>{r.cat}</td>
                   <td>{r.status}</td>
                   <td>{r.depot}</td>
-                  {showPrice ? <><td>{r.priceMin}</td><td><b>{r.priceList}</b></td></> : null}
+                  {showPrice ? <><td>{r.priceMin ?? "—"}</td><td><b>{r.priceList ?? "—"}</b></td></> : null}
                   {showMargin ? <td>{r.marginPct}</td> : null}
                   {showCosts ? <><td>{r.costs.fob}</td><td>{r.costs.cT}</td><td>{r.costs.cTReal}</td></> : null}
                 </tr>

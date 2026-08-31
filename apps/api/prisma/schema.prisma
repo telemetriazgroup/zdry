@@ -37,16 +37,121 @@ model User {
 }
 
 model Depot {
-  id           String   @id @default(uuid())
+  id           String      @id @default(uuid())
   name         String
   city         String
   address      String
-  dailyRateTeu Decimal  @db.Decimal(12, 4)
+  dailyRateTeu Decimal     @db.Decimal(12, 4)
   lat          Float?
   lng          Float?
-  protected    Boolean  @default(false)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  protected    Boolean     @default(false)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  containers   Container[]
+}
+
+model Container {
+  iso                String              @id
+  type               String
+  cat                String
+  status             String              @default("Pendiente de ingreso")
+  year               Int?
+  manufacturer       String              @default("—")
+  depotId            String
+  depot              Depot               @relation(fields: [depotId], references: [id])
+  intakeType         String              @default("compra")
+  invoicePending     Boolean             @default(false)
+  physicallyReceived Boolean             @default(false)
+  isoException       Boolean             @default(false)
+  isoExceptionReason String?
+  fobCif             Decimal             @db.Decimal(12, 2)
+  priceList          Decimal?            @db.Decimal(12, 2)
+  priceMin           Decimal?            @db.Decimal(12, 2)
+  bl                 String              @default("")
+  manifest           String              @default("")
+  damNumber          String?
+  nationalizedAt     DateTime?
+  purchaseInvoiceId  String?
+  purchaseInvoice    PurchaseInvoice?    @relation(fields: [purchaseInvoiceId], references: [id])
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  history            ContainerHistory[]
+
+  @@index([depotId])
+  @@index([status])
+  @@index([damNumber])
+}
+
+model ContainerHistory {
+  id          String    @id @default(uuid())
+  iso         String
+  container   Container @relation(fields: [iso], references: [iso], onDelete: Cascade)
+  type        String
+  detail      String
+  createdAt   DateTime  @default(now())
+
+  @@index([iso, createdAt])
+}
+
+model PurchaseInvoice {
+  id           String             @id @default(uuid())
+  number       String
+  providerName String
+  incoterm     String
+  logistics    String
+  amount       Decimal            @db.Decimal(12, 2)
+  extras       Json
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  lines        PurchaseInvoiceLine[]
+  containers   Container[]
+  pendingExtras PendingExtraCost[]
+  documents    PurchaseDocument[]
+
+  @@index([number])
+}
+
+model PurchaseDocument {
+  id                String          @id @default(uuid())
+  purchaseInvoiceId String
+  invoice           PurchaseInvoice @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Cascade)
+  kind              String
+  originalName      String
+  mimeType          String
+  sizeBytes         Int
+  storageKey        String
+  createdAt         DateTime        @default(now())
+
+  @@index([purchaseInvoiceId])
+}
+
+model PurchaseInvoiceLine {
+  id                String          @id @default(uuid())
+  invoiceId         String
+  invoice           PurchaseInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  iso               String
+  type              String
+  cat               String
+  year              Int?
+  manufacturer      String          @default("—")
+  price             Decimal         @db.Decimal(12, 2)
+  bl                String          @default("")
+  manifest          String          @default("")
+  isoException      Boolean         @default(false)
+}
+
+model PendingExtraCost {
+  id                String          @id @default(uuid())
+  purchaseInvoiceId String
+  invoice           PurchaseInvoice @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Cascade)
+  serviceKey        String
+  serviceLabel      String
+  suggestedProvider String          @default("")
+  isos              String[]
+  status            String          @default("pending")
+  createdAt         DateTime        @default(now())
+
+  @@index([status])
 }
 
 model ContainerType {

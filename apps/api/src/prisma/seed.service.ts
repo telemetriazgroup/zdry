@@ -86,13 +86,16 @@ export class SeedService implements OnModuleInit {
       });
     }
 
-    if ((await this.prisma.provider.count()) === 0) {
-      await this.prisma.provider.createMany({
-        data: [
-          { name: "CIMC", type: "Fabricante Contenedor", rate: 0, unit: "unidad" },
-          { name: "Agente Aduanas Callao", type: "Agente Aduana", rate: 180, unit: "DAM" },
-        ],
-      });
+    const providers = [
+      { name: "CIMC", type: "Fabricante Contenedor", rate: 0, unit: "unidad" },
+      { name: "Agente Aduanas Callao", type: "Agente Aduana", rate: 180, unit: "DAM" },
+      { name: "Transporte Callao", type: "Transporte", rate: 0, unit: "viaje" },
+      { name: "Almacén Extraportuario Callao", type: "Almacén Extraportuario", rate: 0, unit: "unidad" },
+      { name: "Agente Portuario Callao", type: "Agente Portuario", rate: 0, unit: "servicio" },
+    ];
+    for (const p of providers) {
+      const exists = await this.prisma.provider.findFirst({ where: { name: p.name } });
+      if (!exists) await this.prisma.provider.create({ data: p });
     }
 
     this.log.log(`Seed listo. Usuarios: ${USERS.map((u) => u.email).join(", ")} / clave ${PASSWORD}`);

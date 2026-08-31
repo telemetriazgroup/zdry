@@ -45,7 +45,8 @@ export class MastersController {
   async deleteType(@Param("code") code: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     const row = await this.prisma.containerType.findUnique({ where: { code } });
     if (!row) throw new BadRequestException("Tipo no existe");
-    if (row.protected) throw new BadRequestException("No se puede eliminar un tipo de catálogo en uso / protegido");
+    const inUse = await this.prisma.container.count({ where: { type: code } });
+    if (row.protected || inUse) throw new BadRequestException("No se puede eliminar un tipo de catálogo en uso / protegido");
     await this.prisma.containerType.delete({ where: { code } });
     await this.audit.log({ user, action: "delete", entity: "ContainerType", entityId: code, before: row as object, ip: req.ip });
     return { ok: true };
@@ -73,7 +74,8 @@ export class MastersController {
   async deleteCategory(@Param("code") code: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     const row = await this.prisma.category.findUnique({ where: { code } });
     if (!row) throw new BadRequestException("Categoría no existe");
-    if (row.protected) throw new BadRequestException("No se puede eliminar una condición protegida");
+    const inUse = await this.prisma.container.count({ where: { cat: code } });
+    if (row.protected || inUse) throw new BadRequestException("No se puede eliminar una condición protegida");
     await this.prisma.category.delete({ where: { code } });
     await this.audit.log({ user, action: "delete", entity: "Category", entityId: code, before: row as object, ip: req.ip });
     return { ok: true };
@@ -136,7 +138,8 @@ export class MastersController {
   async deleteDepot(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     const row = await this.prisma.depot.findUnique({ where: { id } });
     if (!row) throw new BadRequestException("Depósito no existe");
-    if (row.protected) throw new BadRequestException("No se puede eliminar un depósito en uso / protegido");
+    const inUse = await this.prisma.container.count({ where: { depotId: id } });
+    if (row.protected || inUse) throw new BadRequestException("No se puede eliminar un depósito en uso / protegido");
     await this.prisma.depot.delete({ where: { id } });
     await this.audit.log({ user, action: "delete", entity: "Depot", entityId: id, before: row as object, ip: req.ip });
     return { ok: true };

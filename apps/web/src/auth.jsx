@@ -27,6 +27,7 @@ export const ROLE_NAV = {
     { to: "/app/maestros", label: "Maestros" },
     { to: "/app/configuracion", label: "Configuración" },
     { to: "/app/auditoria", label: "Auditoría" },
+    { to: "/app/compras/facturas", label: "Compras" },
   ],
   gerente: [
     { to: "/app", label: "Inicio", end: true },

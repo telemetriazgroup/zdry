@@ -9,6 +9,8 @@ import { AuthModule } from "./auth/auth.module";
 import { MastersModule } from "./masters/masters.module";
 import { PeopleModule } from "./people/people.module";
 import { InventoryModule } from "./inventory/inventory.module";
+import { PurchasesModule } from "./purchases/purchases.module";
+import { StorageModule } from "./storage/storage.module";
 import { ConfigAppModule } from "./config/config.module";
 
 @Module({
@@ -18,9 +20,11 @@ import { ConfigAppModule } from "./config/config.module";
     AuthModule,
     DealCloseModule,
     OdooModule,
+    StorageModule,
     MastersModule,
     PeopleModule,
     InventoryModule,
+    PurchasesModule,
     ConfigAppModule,
   ],
   controllers: [HealthController],
