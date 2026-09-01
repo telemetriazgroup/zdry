@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../auth.jsx";
 
@@ -198,6 +199,12 @@ export default function ConfigPage() {
       <p className="section-sub">{data?.note || "Solo Administrador y Gerente."}</p>
       {error ? <div className="err">{error}</div> : null}
       {saved ? <div className="ok-msg">{saved}</div> : null}
+
+      <div className="panel" style={{ marginBottom: 18 }}>
+        <h3>Textos del catálogo público</h3>
+        <p className="section-sub">Titular, carrusel, pasos, botones, pie y legales. Editas a la izquierda y ves a la derecha cómo lo ve el cliente.</p>
+        <Link className="btn-primary" to="/app/catalogo-textos">Abrir editor</Link>
+      </div>
 
       {user?.role === "admin" ? <DemoPanel /> : null}
 

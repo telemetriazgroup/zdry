@@ -6,8 +6,10 @@ import { AuthUser } from "../auth/auth.types";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { LayoutRules, normalizeLayoutRules } from "../domain/yard";
+import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
 
 export const CONFIG_SECTIONS = [
+  { id: "catalog-copy", title: "Textos del catálogo", blurb: "Editor de la página pública: hero, pasos, pie y legales. Así lo ve el cliente." },
   { id: "visibility", title: "Visibilidad de precios", blurb: "Reglas jerárquicas global → tipo → fabricante → unidad." },
   { id: "freight", title: "Tarifario de fletes", blurb: "Zonas, terrenos, márgenes min/rec/premium, vehículos." },
   { id: "rentals", title: "Reglas de alquiler", blurb: "Depreciación, márgenes, descuento por plazo y riesgo A–D." },
@@ -35,7 +37,7 @@ export class ConfigController {
     return {
       sections: CONFIG_SECTIONS.map((s) => ({
         ...s,
-        status: ["yard-columns", "visibility", "commercial-services"].includes(s.id)
+        status: ["catalog-copy", "yard-columns", "visibility", "commercial-services"].includes(s.id)
           ? ("live" as const)
           : s.id === "freight"
             ? ("partial" as const)
@@ -43,6 +45,31 @@ export class ConfigController {
       })),
       note: "Visibilidad, servicios comerciales y reglas de columna ya se editan aquí. El tarifario de flete completo entra en el Sprint 7/9; el stub de zonas ya cotiza en el cierre.",
     };
+  }
+
+  @Get("catalog-copy")
+  async getCatalogCopy() {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: CATALOG_COPY_KEY } });
+    return normalizeCatalogCopy(row?.value);
+  }
+
+  @Put("catalog-copy")
+  async putCatalogCopy(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    const value = normalizeCatalogCopy(body);
+    await this.prisma.appSetting.upsert({
+      where: { key: CATALOG_COPY_KEY },
+      update: { value: value as object },
+      create: { key: CATALOG_COPY_KEY, value: value as object },
+    });
+    await this.audit.log({
+      user,
+      action: "update",
+      entity: "AppSetting",
+      entityId: CATALOG_COPY_KEY,
+      after: { heroTitle: value.heroTitle },
+      ip: req.ip,
+    });
+    return value;
   }
 
   @Get("yard-columns")

@@ -1,11 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { api } from "../api.js";
+import { DEFAULT_CATALOG_COPY, mergeCatalogCopy } from "../catalog-copy.js";
 
 const COOKIE_KEY = "zdry.cookieConsent";
-const COMPANY = "ZGROUP S.A.C.";
-const ADDRESS = "MZ.D LTE 14 PROGRAMA DE VIVIENDA ACUARIO. Callao, Perú";
-const PHONE = "+51 (1) 651-1974";
-const EMAIL = "ventas@zgroup.com.pe";
 
 function IconFacebook() {
   return (
@@ -23,21 +21,27 @@ function IconInstagram() {
   );
 }
 
-function CookieBanner() {
-  const [open, setOpen] = useState(false);
+function CookieBanner({ copy, forceCookie }) {
+  const [open, setOpen] = useState(!!forceCookie);
   useEffect(() => {
+    if (forceCookie) {
+      setOpen(true);
+      return;
+    }
     try {
       setOpen(!localStorage.getItem(COOKIE_KEY));
     } catch {
       setOpen(true);
     }
-  }, []);
+  }, [forceCookie]);
 
   function close(value) {
-    try {
-      localStorage.setItem(COOKIE_KEY, value);
-    } catch {
-      /* ignore */
+    if (!forceCookie) {
+      try {
+        localStorage.setItem(COOKIE_KEY, value);
+      } catch {
+        /* ignore */
+      }
     }
     setOpen(false);
   }
@@ -45,58 +49,77 @@ function CookieBanner() {
   if (!open) return null;
   return (
     <div className="cookie-bar" role="dialog" aria-label="Aviso de cookies">
-      <p>
-        Usamos cookies para mejorar tu experiencia. Revisa nuestras{" "}
-        <Link to="/legal/privacidad">política de privacidad</Link> y de{" "}
-        <Link to="/legal/cookies">cookies</Link>.
-      </p>
+      <p>{copy.cookieText}</p>
       <div className="cookie-actions">
-        <button className="cookie-accept" type="button" onClick={() => close("accepted")}>Aceptar</button>
+        <button className="cookie-accept" type="button" onClick={() => close("accepted")}>{copy.cookieAccept}</button>
         <button className="cookie-x" type="button" aria-label="Cerrar" onClick={() => close("dismissed")}>×</button>
       </div>
     </div>
   );
 }
 
-export default function SiteFooter() {
+export default function SiteFooter({ copy: copyProp, forceCookie = false }) {
+  const [loaded, setLoaded] = useState(copyProp || null);
+
+  useEffect(() => {
+    if (copyProp) {
+      setLoaded(mergeCatalogCopy(copyProp));
+      return;
+    }
+    api("/catalog/copy")
+      .then((d) => setLoaded(mergeCatalogCopy(d)))
+      .catch(() => setLoaded(DEFAULT_CATALOG_COPY));
+  }, [copyProp]);
+
+  const copy = loaded || DEFAULT_CATALOG_COPY;
+  const tel = (copy.phone || "").replace(/[^\d+]/g, "");
+
   return (
     <>
       <footer className="site-footer">
         <div className="site-footer-inner">
           <div className="site-footer-top">
             <div className="site-social">
-              <a href="https://www.facebook.com/ZgroupSac" target="_blank" rel="noopener noreferrer" aria-label="Facebook de ZGROUP">
-                <IconFacebook />
-              </a>
-              <a href="https://www.instagram.com/zgroup_modular_solution/" target="_blank" rel="noopener noreferrer" aria-label="Instagram de ZGROUP">
-                <IconInstagram />
-              </a>
+              {copy.facebook ? (
+                <a href={copy.facebook} target="_blank" rel="noopener noreferrer" aria-label="Facebook">
+                  <IconFacebook />
+                </a>
+              ) : null}
+              {copy.instagram ? (
+                <a href={copy.instagram} target="_blank" rel="noopener noreferrer" aria-label="Instagram">
+                  <IconInstagram />
+                </a>
+              ) : null}
             </div>
             <nav className="site-legal-links" aria-label="Información legal">
-              <Link to="/legal/terminos">Términos y condiciones</Link>
-              <Link to="/legal/cookies">Política de cookies</Link>
-              <Link to="/legal/privacidad">Política de privacidad</Link>
-              <Link to="/legal/datos">Oficial de Datos Personales</Link>
+              <Link to="/legal/terminos">{copy.legalTerms}</Link>
+              <Link to="/legal/cookies">{copy.legalCookies}</Link>
+              <Link to="/legal/privacidad">{copy.legalPrivacy}</Link>
+              <Link to="/legal/datos">{copy.legalData}</Link>
             </nav>
           </div>
           <div className="site-footer-bottom">
             <div>
-              <div className="site-copy">© TODOS LOS DERECHOS RESERVADOS</div>
-              <div className="site-company">{COMPANY}</div>
-              <div className="site-address">{ADDRESS}</div>
+              <div className="site-copy">{copy.copyright}</div>
+              <div className="site-company">{copy.company}</div>
+              <div className="site-address">{copy.address}</div>
               <div className="site-contact">
-                <a href={`tel:${PHONE.replace(/[^\d+]/g, "")}`}>{PHONE}</a>
-                {" · "}
-                <a href={`mailto:${EMAIL}`}>{EMAIL}</a>
+                {copy.phone ? <a href={`tel:${tel}`}>{copy.phone}</a> : null}
+                {copy.phone && copy.email ? " · " : null}
+                {copy.email ? <a href={`mailto:${copy.email}`}>{copy.email}</a> : null}
               </div>
             </div>
-            <a className="site-credit" href="https://ztrack.app/" target="_blank" rel="noopener noreferrer">
-              Desarrollado por equipo ZTRACK
-            </a>
+            {copy.credit ? (
+              copy.creditUrl ? (
+                <a className="site-credit" href={copy.creditUrl} target="_blank" rel="noopener noreferrer">{copy.credit}</a>
+              ) : (
+                <span className="site-credit">{copy.credit}</span>
+              )
+            ) : null}
           </div>
         </div>
       </footer>
-      <CookieBanner />
+      <CookieBanner copy={copy} forceCookie={forceCookie} />
     </>
   );
 }

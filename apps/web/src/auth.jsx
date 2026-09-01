@@ -28,6 +28,7 @@ export const ROLE_NAV = {
     { to: "/app/personas", label: "Personas" },
     { to: "/app/maestros", label: "Maestros" },
     { to: "/app/configuracion", label: "Configuración" },
+    { to: "/app/catalogo-textos", label: "Textos del catálogo" },
     { to: "/app/auditoria", label: "Auditoría" },
     { to: "/app/compras/facturas", label: "Compras" },
     { to: "/app/almacen/recepcion", label: "Recepción" },
@@ -39,6 +40,7 @@ export const ROLE_NAV = {
     { to: "/app/precios", label: "Reglas de precio" },
     { to: "/app/equipo", label: "Equipo" },
     { to: "/app/configuracion", label: "Configuración" },
+    { to: "/app/catalogo-textos", label: "Textos del catálogo" },
     { to: "/app/catalogo-media", label: "Ficha catálogo" },
   ],
   vendedor: [

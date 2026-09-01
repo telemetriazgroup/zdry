@@ -22,6 +22,7 @@ import { AuthUser } from "../auth/auth.types";
 import { type DealStatus, holdClockPaused } from "../deal-close/deal-close.types";
 import { applyShowPrice, DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
 import { isMediaApproved, PHOTO_STATUS_ACTIVE } from "../domain/catalog-media";
+import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { isOwnSaleStock } from "../domain/iso6346";
 import {
@@ -167,6 +168,11 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       (c.status === "Disponible" || c.status === "Reservado") &&
       isMediaApproved(c.mediaStatus)
     );
+  }
+
+  async catalogCopy() {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: CATALOG_COPY_KEY } });
+    return normalizeCatalogCopy(row?.value);
   }
 
   async catalogMeta() {

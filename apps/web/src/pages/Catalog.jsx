@@ -1,12 +1,35 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, ApiError, apiUrl, publicUrl } from "../api.js";
+import { api, ApiError, apiUrl, goAppRoot, publicUrl } from "../api.js";
 import { useAuth } from "../auth.jsx";
+import { DEFAULT_CATALOG_COPY, mergeCatalogCopy } from "../catalog-copy.js";
 import SiteFooter from "./SiteFooter.jsx";
 
 const CART_KEY = "zdry_cart";
 const money = (n) => (n == null ? null : "$" + Math.round(Number(n)).toLocaleString("en-US"));
 const GALLERY_MS = 3500;
+const LEAD_MS = 5000;
+
+function HeroLeadCarousel({ leads }) {
+  const items = leads?.length ? leads : [" "];
+  const [i, setI] = useState(0);
+  const [on, setOn] = useState(true);
+  useEffect(() => { setI(0); }, [items.join("\n")]);
+  useEffect(() => {
+    if (items.length <= 1) return undefined;
+    const t = setInterval(() => {
+      setOn(false);
+      window.setTimeout(() => {
+        setI((x) => (x + 1) % items.length);
+        setOn(true);
+      }, 380);
+    }, LEAD_MS);
+    return () => clearInterval(t);
+  }, [items.join("\n")]);
+  return (
+    <p className={`lead hero-lead ${on ? "on" : "off"}`} aria-live="polite">{items[i % items.length]}</p>
+  );
+}
 
 function publishedSlots(u) {
   if (Array.isArray(u?.photos) && u.photos.length) return u.photos;
@@ -70,6 +93,7 @@ export default function Catalog() {
   const [error, setError] = useState("");
   const [zoneId, setZoneId] = useState("fz1");
   const [freight, setFreight] = useState(null);
+  const [copy, setCopy] = useState(DEFAULT_CATALOG_COPY);
 
   const query = useMemo(() => {
     const p = new URLSearchParams();
@@ -84,6 +108,7 @@ export default function Catalog() {
 
   useEffect(() => {
     api("/catalog/meta").then(setMeta).catch(() => {});
+    api("/catalog/copy").then((d) => setCopy(mergeCatalogCopy(d))).catch(() => {});
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -203,7 +228,7 @@ export default function Catalog() {
     }
   }
 
-  const unitWord = data.total === 1 ? "unidad disponible" : "unidades disponibles";
+  const unitWord = data.total === 1 ? copy.stockSingular : copy.stockPlural;
 
   return (
     <div className="site-page">
@@ -218,14 +243,14 @@ export default function Catalog() {
           ) : null}
           <div className="topbar-tools">
             <button className="cart-pill" type="button" onClick={() => setQuoteOpen(true)}>
-              🛒 <span className="cart-label">Cotización</span> <span>{cart.length}</span>
+              🛒 <span className="cart-label">{copy.cartLabel}</span> <span>{cart.length}</span>
             </button>
             {user ? (
-              <button className="btn-ghost btn-salir-ghost" type="button" onClick={async () => { await logout(); nav("/"); }}>
-                Salir
+              <button className="btn-ghost btn-salir-ghost" type="button" onClick={async () => { await logout(); goAppRoot(); }}>
+                {copy.logoutLabel}
               </button>
             ) : (
-              <Link to="/login" className="navtab">Entrar</Link>
+              <Link to="/login" className="navtab">{copy.loginLabel}</Link>
             )}
           </div>
         </div>
@@ -233,39 +258,36 @@ export default function Catalog() {
 
       <div className="hero">
         <div className="hero-inner">
-          <p className="hero-kicker">Venta y alquiler · Contenedores dry · Callao</p>
-          <h1>Contenedores dry listos para vender o alquilar</h1>
-          <p className="lead">Stock propio en patio. 20&apos; y 40&apos; inspeccionados, con fotos reales de la unidad. Elige el ISO y cotiza en minutos, sin compromiso.</p>
+          <p className="hero-kicker">{copy.heroKicker}</p>
+          <h1>{copy.heroTitle}</h1>
+          <HeroLeadCarousel leads={copy.heroLeads} />
           <ul className="hero-pills">
-            <li>Venta inmediata</li>
-            <li>Alquiler operativo</li>
-            <li>Fotos de inspección</li>
-            <li>Retiro en Callao</li>
+            {(copy.heroPills || []).map((p) => <li key={p}>{p}</li>)}
           </ul>
           <div className="quickfilter">
             <div className="qf-row">
               <div className="qf-field qf-search">
-                <label>Buscar</label>
-                <input value={filters.q} placeholder="ISO, fabricante…" onChange={(e) => { setPage(1); setFilters({ ...filters, q: e.target.value }); }} />
+                <label>{copy.searchLabel}</label>
+                <input value={filters.q} placeholder={copy.searchPlaceholder} onChange={(e) => { setPage(1); setFilters({ ...filters, q: e.target.value }); }} />
               </div>
               <div className="qf-field">
-                <label>Tipo</label>
+                <label>{copy.typeLabel}</label>
                 <select value={filters.type} onChange={(e) => { setPage(1); setFilters({ ...filters, type: e.target.value }); }}>
-                  <option value="">Todos</option>
+                  <option value="">{copy.typeAll}</option>
                   {(meta?.types || []).map((t) => <option key={t.code} value={t.code}>{t.label}</option>)}
                 </select>
               </div>
               <div className="qf-field">
-                <label>Condición</label>
+                <label>{copy.conditionLabel}</label>
                 <select value={filters.cat} onChange={(e) => { setPage(1); setFilters({ ...filters, cat: e.target.value }); }}>
-                  <option value="">Todas</option>
+                  <option value="">{copy.conditionAll}</option>
                   {(meta?.categories || []).map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
                 </select>
               </div>
               <div className="qf-field">
-                <label>Depósito</label>
+                <label>{copy.depotLabel}</label>
                 <select value={filters.depot} onChange={(e) => { setPage(1); setFilters({ ...filters, depot: e.target.value }); }}>
-                  <option value="">Todos</option>
+                  <option value="">{copy.depotAll}</option>
                   {(meta?.depots || []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </select>
               </div>
@@ -282,30 +304,28 @@ export default function Catalog() {
             <span className="stock-n">{data.total}</span>
             <span className="stock-copy">
               <b>{unitWord}</b>
-              <small>Para venta o alquiler · stock propio</small>
+              <small>{copy.stockHint}</small>
             </span>
           </div>
           <label className="stock-sort">
-            Ordenar
+            {copy.sortLabel}
             <select value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}>
-              <option value="">ISO</option>
-              <option value="price">Precio</option>
-              <option value="year">Año</option>
+              <option value="">{copy.sortIso}</option>
+              <option value="price">{copy.sortPrice}</option>
+              <option value="year">{copy.sortYear}</option>
             </select>
           </label>
         </div>
-        <div className="value-row">
-          <div className="value-card">
-            <b>Venta</b>
-            <p>Unidades propias, listas para retiro. Cotiza el ISO que ves, no un modelo genérico.</p>
-          </div>
-          <div className="value-card">
-            <b>Alquiler</b>
-            <p>Dry para obra, depósito temporal o exportación. La solicitud llega al comercial.</p>
-          </div>
-          <div className="value-card">
-            <b>Inspección</b>
-            <p>Fotos reales de cada contenedor en patio: puertas, piso, techo y laterales.</p>
+        <div className="steps-block">
+          <h3 className="steps-title">{copy.stepsTitle}</h3>
+          <div className="value-row">
+            {(copy.steps || []).map((s, i) => (
+              <div className="value-card step-card" key={s.title + i}>
+                <span className="step-n">{i + 1}</span>
+                <b>{s.title}</b>
+                <p>{s.body}</p>
+              </div>
+            ))}
           </div>
         </div>
         <div className="grid">
@@ -329,10 +349,10 @@ export default function Catalog() {
                   {u.showPrice ? (
                     <div className="card-price">{money(u.gross)} <small>+ IGV incluido aprox. · neto {money(u.priceList)}</small></div>
                   ) : (
-                    <div className="price-cta">💬 Solicitar precio</div>
+                    <div className="price-cta">💬 {copy.requestPrice}</div>
                   )}
                   <button className="link-btn" type="button" onClick={() => addToCart(u.iso)} disabled={u.status === "Reservado"}>
-                    {cart.includes(u.iso) ? "En cotización" : "Agregar"}
+                    {cart.includes(u.iso) ? copy.inQuote : copy.addToQuote}
                   </button>
                 </div>
               </div>
@@ -340,7 +360,7 @@ export default function Catalog() {
           ))}
         </div>
         {data.total === 0 ? (
-          <p className="empty-stock">No hay unidades publicadas con esos filtros. Prueba otro tipo, condición o depósito.</p>
+          <p className="empty-stock">{copy.emptyStock}</p>
         ) : null}
         <div className="pager">
           {Array.from({ length: data.pages }, (_, i) => (
@@ -349,7 +369,7 @@ export default function Catalog() {
         </div>
       </div>
 
-      <SiteFooter />
+      <SiteFooter copy={copy} />
 
       {pdp ? (
         <div className="overlay open" onClick={(e) => { if (e.target === e.currentTarget) nav("/"); }}>

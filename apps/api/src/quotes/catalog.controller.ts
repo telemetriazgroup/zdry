@@ -32,6 +32,12 @@ export class CatalogController {
   }
 
   @Public()
+  @Get("copy")
+  copy() {
+    return this.quotes.catalogCopy();
+  }
+
+  @Public()
   @Get("freight")
   freight(@Query("zoneId") zoneId: string, @Query("types") types: string, @Query("vehicle") vehicle?: string) {
     return this.quotes.freightPreview(zoneId, (types || "").split(",").filter(Boolean), vehicle);

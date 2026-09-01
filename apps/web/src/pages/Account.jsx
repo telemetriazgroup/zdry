@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, apiUpload, ApiError, publicUrl } from "../api.js";
+import { api, apiUpload, ApiError, goAppRoot, publicUrl } from "../api.js";
 import { useAuth } from "../auth.jsx";
 import SiteFooter from "./SiteFooter.jsx";
 
@@ -146,7 +146,7 @@ export default function Account() {
           </nav>
           <div className="topbar-tools">
             <span className="topbar-user">{user.name}</span>
-            <button className="btn-primary btn-salir" type="button" onClick={() => logout()}>Salir</button>
+            <button className="btn-primary btn-salir" type="button" onClick={async () => { await logout(); goAppRoot(); }}>Salir</button>
           </div>
         </div>
       </header>

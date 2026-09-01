@@ -1,12 +1,20 @@
 import { useEffect, useState } from "react";
-import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { AuthProvider, homeFor, ROLE_LABELS, useAuth } from "./auth.jsx";
 import Login from "./pages/Login.jsx";
 import Shell from "./pages/Shell.jsx";
 import Catalog from "./pages/Catalog.jsx";
 import Account from "./pages/Account.jsx";
 import Legal from "./pages/Legal.jsx";
-import { apiUrl } from "./api.js";
+import { apiUrl, ensureAppSlash } from "./api.js";
+
+function TrailingSlashFix() {
+  const loc = useLocation();
+  useEffect(() => {
+    ensureAppSlash();
+  }, [loc.pathname]);
+  return null;
+}
 
 function DemoBanner() {
   const [on, setOn] = useState(false);
@@ -72,6 +80,7 @@ function Guest({ children }) {
 export default function App() {
   return (
     <AuthProvider>
+      <TrailingSlashFix />
       <DemoBanner />
       <ImpersonationBar />
       <Routes>

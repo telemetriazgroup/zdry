@@ -1,5 +1,19 @@
 /** Prefijo público: todo vive bajo /zdry/ (ip:28080/zdry/…). */
 export const BASE_PATH = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+/** Raíz con barra final. Sin ella el navegador pierde /zdry/ y los assets. */
+export const APP_ROOT = `${BASE_PATH || ""}/`;
+
+export function ensureAppSlash() {
+  if (typeof window === "undefined") return;
+  const { pathname, search, hash } = window.location;
+  if (pathname === BASE_PATH) {
+    window.history.replaceState(null, "", `${APP_ROOT}${search}${hash}`);
+  }
+}
+
+export function goAppRoot() {
+  window.location.assign(APP_ROOT);
+}
 
 export function apiUrl(path) {
   const p = path.startsWith("/") ? path : `/${path}`;
