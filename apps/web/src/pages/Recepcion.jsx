@@ -22,6 +22,7 @@ export default function Recepcion() {
     discount: 0,
   });
   const [isoHint, setIsoHint] = useState(null);
+  const [bust, setBust] = useState(0);
 
   async function loadPending() {
     const rows = await api("/warehouse/pending");
@@ -138,6 +139,7 @@ export default function Recepcion() {
     try {
       const next = await apiUpload(`/warehouse/units/${inspectIso}/photos`, fd);
       setUnit(next);
+      setBust(Date.now());
     } catch (e) {
       setError(e.message);
     }
@@ -174,17 +176,23 @@ export default function Recepcion() {
   if (mode === "nuevo") {
     const custody = form.category === "almacenaje_cliente";
     return (
-      <div className="panel">
-        <button className="btn-ghost" type="button" onClick={() => { setMode("bandeja"); setError(""); setMsg(""); }}>← Volver</button>
+      <div className="panel recv-page">
+        <button className="btn-ghost recv-back" type="button" onClick={() => { setMode("bandeja"); setError(""); setMsg(""); }}>← Volver</button>
         <h3 style={{ marginTop: 10 }}>Nuevo ingreso — {custody ? "almacenaje de cliente tercero" : "compra sin factura (reentrega)"}</h3>
-        <p className="section-sub">Esta unidad no tiene ningún registro previo en el sistema, así que se identifica con su código ISO — guiado y validado en vivo, no como un dato libre. Año, fabricante, fotos, tara/peso y posición de patio se completan justo después, en la inspección física que continúa automáticamente al registrar.</p>
+        <p className="section-sub recv-lead">Esta unidad no tiene ningún registro previo en el sistema, así que se identifica con su código ISO — guiado y validado en vivo, no como un dato libre. Año, fabricante, fotos, tara/peso y posición de patio se completan justo después, en la inspección física que continúa automáticamente al registrar.</p>
+        <p className="section-sub recv-lead-short">Escribe el ISO de la placa. Luego sigue la inspección con fotos.</p>
         {error ? <div className="err">{error}</div> : null}
         <div className="form-grid">
           <div>
             <label>Código ISO *</label>
             <input
+              className="recv-iso"
               value={form.iso}
               placeholder="Ej. ZDRU1234565"
+              autoCapitalize="characters"
+              autoCorrect="off"
+              spellCheck={false}
+              inputMode="text"
               onChange={(e) => setForm({ ...form, iso: e.target.value.toUpperCase() })}
             />
             <div style={{ fontSize: 11, marginTop: 4 }}>
@@ -232,7 +240,7 @@ export default function Recepcion() {
             </div>
           </div>
         ) : null}
-        <button className="btn-primary" type="button" style={{ marginTop: 12 }} onClick={submitNuevo}>Registrar → continuar con la inspección física</button>
+        <button className="btn-primary recv-submit" type="button" style={{ marginTop: 12 }} onClick={submitNuevo}>Registrar e inspeccionar</button>
       </div>
     );
   }
@@ -242,31 +250,35 @@ export default function Recepcion() {
     const missing = unit.dataMissing || [];
     return (
       <>
-        <div className="unit-picker">
-          <button className="btn-ghost" type="button" onClick={() => { setInspectIso(null); setMode("bandeja"); loadPending(); }}>← Volver a la bandeja de pendientes</button>
-          <span className="badge-scope" style={{ background: "var(--navy)" }}>📱 Toma la foto con tu celular o cárgala desde el escritorio</span>
+        <div className="unit-picker recv-inspect-bar">
+          <button className="btn-ghost recv-back" type="button" onClick={() => { setInspectIso(null); setMode("bandeja"); loadPending(); }}>← Bandeja</button>
+          <span className="badge-scope recv-hint" style={{ background: "var(--navy)" }}>Toca una casilla para usar la cámara</span>
         </div>
         {error ? <div className="err">{error}</div> : null}
         {msg ? <div className="ok-msg">{msg}</div> : null}
-        <div className="dash-grid">
+        <div className="dash-grid recv-inspect">
           <div className="panel">
-            <h3>Inspección multimedia — {unit.iso} <span className="badge-scope" style={{ background: unit.intakeType === "compra" ? "#2f9e44" : unit.intakeType === "almacenaje_cliente" ? "#495057" : "#c9720b" }}>{unit.intakeLabel}</span></h3>
-            <p className="section-sub">Toca cada casilla para adjuntar la foto o el video correspondiente.</p>
-            <div className="checklist">
+            <h3 className="recv-iso-title">{unit.iso} <span className="badge-scope" style={{ background: unit.intakeType === "compra" ? "#2f9e44" : unit.intakeType === "almacenaje_cliente" ? "#495057" : "#c9720b" }}>{unit.intakeLabel}</span></h3>
+            <p className="section-sub">Toca cada casilla: en el celular abre la cámara trasera.</p>
+            <div className="checklist recv-checklist">
               {labels.map((lab, i) => {
                 const done = i < 9 ? unit.photos[i] : unit.hasVideo;
-                const bg = done && i < 9 ? { backgroundImage: `url(${apiUrl(`/warehouse/units/${unit.iso}/photos/${i}`)})`, backgroundSize: "cover", backgroundPosition: "center", color: "#fff", textShadow: "0 1px 3px rgba(0,0,0,.7)" } : undefined;
                 return (
-                  <label key={lab} className={`check-item ${done ? "done" : ""}`} style={bg}>
+                  <label key={lab} className={`check-item ${done ? "done" : ""}`}>
+                    {done && i < 9 ? (
+                      <img className="check-thumb" src={`${apiUrl(`/warehouse/units/${unit.iso}/photos/${i}`)}?t=${bust}`} alt={lab} />
+                    ) : null}
                     <input
                       type="file"
                       accept={i < 9 ? "image/*" : "video/*"}
                       capture="environment"
                       style={{ display: "none" }}
-                      onChange={(e) => uploadSlot(i < 9 ? i : "video", e.target.files?.[0])}
+                      onChange={(e) => { uploadSlot(i < 9 ? i : "video", e.target.files?.[0]); e.target.value = ""; }}
                     />
-                    <span className="n">{i < 9 ? i + 1 : "▶"}</span>
-                    {lab}{done ? " ✓" : ""}
+                    <span className="check-copy">
+                      <span className="n">{i < 9 ? i + 1 : "▶"}</span>
+                      {lab}{done ? " ✓" : ""}
+                    </span>
                   </label>
                 );
               })}
@@ -281,9 +293,9 @@ export default function Recepcion() {
                 <small>{unit.gateOut ? `Registrado — $${meta.serviceRates.gate_out} aplicado` : `Registrar salida del patio ($${meta.serviceRates.gate_out})`}</small>
               </button>
             </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-              <button className="btn-ghost" type="button" onClick={() => api(`/warehouse/units/${unit.iso}/service`, { method: "POST", body: { key: "reparacion" } }).then(setUnit).catch((e) => setError(e.message))}>+ Registrar reparación (${meta.serviceRates.reparacion})</button>
-              <button className="btn-ghost" type="button" onClick={() => api(`/warehouse/units/${unit.iso}/service`, { method: "POST", body: { key: "lavado" } }).then(setUnit).catch((e) => setError(e.message))}>+ Registrar lavado (${meta.serviceRates.lavado})</button>
+            <div className="recv-services">
+              <button className="btn-ghost" type="button" onClick={() => api(`/warehouse/units/${unit.iso}/service`, { method: "POST", body: { key: "reparacion" } }).then(setUnit).catch((e) => setError(e.message))}>+ Reparación (${meta.serviceRates.reparacion})</button>
+              <button className="btn-ghost" type="button" onClick={() => api(`/warehouse/units/${unit.iso}/service`, { method: "POST", body: { key: "lavado" } }).then(setUnit).catch((e) => setError(e.message))}>+ Lavado (${meta.serviceRates.lavado})</button>
             </div>
           </div>
           <div className="panel">
@@ -336,9 +348,11 @@ export default function Recepcion() {
                 onBlur={(e) => patchField("inspectionNotes", e.target.value)}
               />
             </div>
-            <button className="btn-primary" type="button" style={{ width: "100%", marginTop: 14 }} disabled={missing.length > 0} onClick={confirm}>✓ Confirmar recepción e inspección → Layout</button>
-            {missing.length ? <p style={{ fontSize: 11, color: "var(--text-3)", marginTop: 6 }}>Completa año y fabricante para habilitar el botón.</p> : null}
           </div>
+        </div>
+        <div className="recv-confirm-bar">
+          <button className="btn-primary" type="button" disabled={missing.length > 0} onClick={confirm}>✓ Confirmar recepción → Patio</button>
+          {missing.length ? <p className="recv-confirm-hint">Completa año y fabricante para habilitar.</p> : null}
         </div>
       </>
     );
@@ -347,24 +361,31 @@ export default function Recepcion() {
   const intakeColor = (t) => (t === "compra" ? "#2f9e44" : t === "almacenaje_cliente" ? "#495057" : "#c9720b");
 
   return (
-    <div className="panel">
+    <div className="panel recv-page">
       <h3>Recepción e inspección</h3>
-      <p className="section-sub">Un solo flujo: una recepción genera de inmediato su inspección física, sin pasos separados. El número de contenedor no se escribe libremente sin control — si ya existe un registro pendiente (factura de compra emitida, o un alquiler que se devuelve) lo eliges de una lista, y así el ISO siempre permite la gestión del inventario. Solo cuando la unidad no tiene ningún registro previo en el sistema (compra por reentregar sin factura aún, o almacenaje de un cliente tercero) se identifica con su código ISO, validado en vivo mientras se escribe.</p>
+      <p className="section-sub recv-lead">Un solo flujo: una recepción genera de inmediato su inspección física, sin pasos separados. El número de contenedor no se escribe libremente sin control — si ya existe un registro pendiente (factura de compra emitida, o un alquiler que se devuelve) lo eliges de una lista, y así el ISO siempre permite la gestión del inventario. Solo cuando la unidad no tiene ningún registro previo en el sistema (compra por reentregar sin factura aún, o almacenaje de un cliente tercero) se identifica con su código ISO, validado en vivo mientras se escribe.</p>
+      <p className="section-sub recv-lead-short">Elige un pendiente o registra un ingreso nuevo. En el celular las fotos se toman con la cámara.</p>
       {error ? <div className="err">{error}</div> : null}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+      <div className="recv-actions">
         <button className="btn-ghost" type="button" onClick={() => { setForm({ ...form, category: "pendiente_factura", iso: "" }); setMode("nuevo"); setError(""); }}>
-          + Nuevo ingreso — compra sin factura (reentrega)
+          <span className="recv-full">+ Nuevo ingreso — compra sin factura (reentrega)</span>
+          <span className="recv-short">+ Compra sin factura</span>
         </button>
         <button className="btn-ghost" type="button" onClick={() => { setForm({ ...form, category: "almacenaje_cliente", iso: "" }); setMode("nuevo"); setError(""); }}>
-          + Nuevo ingreso — almacenaje de cliente tercero
+          <span className="recv-full">+ Nuevo ingreso — almacenaje de cliente tercero</span>
+          <span className="recv-short">+ Almacenaje de cliente</span>
         </button>
-        <button className="btn-ghost" type="button" onClick={() => setMode("devolucion")}>↩ Registrar devolución de alquiler</button>
+        <button className="btn-ghost" type="button" onClick={() => setMode("devolucion")}>
+          <span className="recv-full">↩ Registrar devolución de alquiler</span>
+          <span className="recv-short">↩ Devolución alquiler</span>
+        </button>
       </div>
       {pending.length ? (
         <>
-          <h3 style={{ marginTop: 0 }}>Pendientes de inspección física ({pending.length})</h3>
-          <p className="section-sub">Contenedores con registro ya en el sistema (por factura de compra, o recién identificados aquí) que faltan pasar su inspección física — fotos, datos y confirmación. Toca uno para continuar.</p>
-          <div className="tablewrap">
+          <h3 style={{ marginTop: 0 }}>Pendientes ({pending.length})</h3>
+          <p className="section-sub recv-lead">Contenedores con registro ya en el sistema (por factura de compra, o recién identificados aquí) que faltan pasar su inspección física — fotos, datos y confirmación. Toca uno para continuar.</p>
+          <p className="section-sub recv-lead-short">Toca una unidad para continuar la inspección.</p>
+          <div className="tablewrap recv-table">
             <table className="data">
               <thead>
                 <tr><th>ISO</th><th>Tipo</th><th>Condición</th><th>Depósito</th><th>Origen del ingreso</th><th>Motivo pendiente</th></tr>
@@ -382,6 +403,26 @@ export default function Recepcion() {
                 ))}
               </tbody>
             </table>
+          </div>
+          <div className="recv-cards">
+            {pending.map((u) => (
+              <button
+                key={u.iso}
+                type="button"
+                className="recv-card"
+                onClick={() => { setInspectIso(u.iso); setMode("inspect"); setError(""); }}
+              >
+                <div className="recv-card-top">
+                  <b className="card-iso">{u.iso}</b>
+                  <span className="badge-scope" style={{ background: intakeColor(u.intakeType) }}>{u.intakeLabel}</span>
+                </div>
+                <div className="recv-card-meta">{u.typeLabel} · <span style={{ color: u.catColor }}>{u.catLabel}</span></div>
+                <div className="recv-card-meta">{u.depotName}</div>
+                <div className="recv-card-missing">
+                  {u.missing.map((r) => <span key={r} className="badge-scope" style={{ background: "#c9720b" }}>{r}</span>)}
+                </div>
+              </button>
+            ))}
           </div>
         </>
       ) : (

@@ -188,7 +188,23 @@ table.data td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-s
 .link-btn:hover { text-decoration: underline; }
 .dash-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; }
 @media (max-width: 900px) { .dash-grid { grid-template-columns: 1fr; } }
-.cost-line { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.recv-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.recv-short { display: none; }
+.recv-lead-short { display: none; }
+.recv-cards { display: none; }
+.recv-iso {
+  width: 100%; letter-spacing: .04em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700;
+}
+.recv-iso-title { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 18px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.recv-services { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.recv-confirm-bar { margin-top: 14px; }
+.recv-confirm-bar .btn-primary { width: 100%; }
+.recv-confirm-hint { font-size: 11px; color: var(--text-3); margin-top: 6px; }
+.check-item { position: relative; overflow: hidden; min-height: 72px; }
+.check-thumb { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.check-copy { position: relative; z-index: 1; display: block; }
+.check-item.done { color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.75); background-color: #12203a; border-color: var(--green); }
 .cost-line b { font-weight: 700; }
 tr.expandable { cursor: pointer; }
 tr.expandable:hover { background: #f8f9fb; }
@@ -504,7 +520,39 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .demo-bar { padding: 8px 12px; font-size: 12px; }
   .login-card { padding: 24px 18px; }
   .subtab { flex: 1 1 auto; text-align: center; }
-  .checklist { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+  .checklist { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .check-item { min-height: 96px; padding: 14px 8px; font-size: 13px; font-weight: 700; }
+  .check-item .n { font-size: 22px; }
+  .recv-lead { display: none; }
+  .recv-lead-short { display: block; }
+  .recv-full { display: none; }
+  .recv-short { display: inline; }
+  .recv-actions .btn-ghost { width: 100%; min-height: 48px; text-align: left; justify-content: flex-start; }
+  .recv-table { display: none; }
+  .recv-cards { display: flex; flex-direction: column; gap: 10px; }
+  .recv-card {
+    display: block; width: 100%; text-align: left;
+    background: #fff; border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px; box-shadow: var(--shadow); min-height: 72px;
+  }
+  .recv-card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .recv-card-meta { font-size: 13px; color: var(--text-2); margin-top: 2px; }
+  .recv-card-missing { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .recv-submit { width: 100%; min-height: 48px; }
+  .recv-back { width: 100%; }
+  .recv-hint { white-space: normal; line-height: 1.3; }
+  .recv-iso { font-size: 18px !important; min-height: 48px; padding: 12px; }
+  .recv-services { flex-direction: column; }
+  .recv-services .btn-ghost { width: 100%; }
+  .recv-confirm-bar {
+    position: sticky; bottom: 0; z-index: 12;
+    background: var(--bg); margin: 12px -12px 0; padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -6px 16px rgba(18,32,58,.06);
+  }
+  .role-desc { display: none; }
+  .recv-inspect-bar { margin-bottom: 10px; }
+  .cost-line { flex-wrap: wrap; gap: 4px; }
   .media-slots { grid-template-columns: repeat(3, 1fr); }
   input, select, textarea { font-size: 16px !important; }
   table.data input, table.data select { min-width: 88px; }
