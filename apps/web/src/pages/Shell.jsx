@@ -158,13 +158,22 @@ export default function Shell() {
             <Route path="compras/dam" element={<Gate nav={nav} role={user.role} path="/app/compras/dam"><Compras /></Gate>} />
             <Route path="almacen/recepcion" element={<Gate nav={nav} role={user.role} path="/app/almacen/recepcion"><Recepcion /></Gate>} />
             <Route path="almacen/patio" element={<Gate nav={nav} role={user.role} path="/app/almacen/patio"><Patio /></Gate>} />
-            <Route path="almacen/despachos" element={<Gate nav={nav} role={user.role} path="/app/almacen/despachos"><ComingSoon title="Despachos" sprint="6" /></Gate>} />
+            <Route path="almacen/despachos" element={<Gate nav={nav} role={user.role} path="/app/almacen/despachos"><Restricted title="Despachos" /></Gate>} />
             <Route path="catalogo-textos" element={<Gate nav={nav} role={user.role} path="/app/catalogo-textos"><CatalogCopy /></Gate>} />
             <Route path="catalogo-media" element={<Gate nav={nav} role={user.role} path="/app/catalogo-media"><CatalogMedia /></Gate>} />
             <Route path="*" element={<Navigate to="/app" replace />} />
           </Routes>
         </div>
       </div>
+    </div>
+  );
+}
+
+function Restricted({ title }) {
+  return (
+    <div className="panel">
+      <h3>{title}</h3>
+      <p className="section-sub">Restringido</p>
     </div>
   );
 }
