@@ -6,6 +6,13 @@ export function apiUrl(path) {
   return `${BASE_PATH}/api${p}`;
 }
 
+export function formatWhen(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("es-PE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 export function publicUrl(path) {
   const p = path.startsWith("/") ? path : `/${path}`;
   return `${BASE_PATH}${p}`;

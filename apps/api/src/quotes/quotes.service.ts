@@ -148,7 +148,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
 
   private async catalogWhere(): Promise<Prisma.ContainerWhereInput> {
     return {
-      ...(await this.prisma.hideDemo()),
+      ...(await this.prisma.liveContainers()),
       intakeType: { in: ["compra", "pendiente_factura"] },
       physicallyReceived: true,
       status: { in: ["Disponible", "Reservado"] },
@@ -160,6 +160,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c) return false;
     if (c.demo && !(await this.prisma.demoOn())) return false;
+    if (c.archivedAt) return false;
     return (
       isOwnSaleStock(c.intakeType) &&
       c.physicallyReceived &&

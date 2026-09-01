@@ -26,7 +26,7 @@ function allowed(nav, pathname, role) {
 }
 
 export default function Shell() {
-  const { user, nav, logout } = useAuth();
+  const { user, nav, logout, avatarUrl } = useAuth();
   const navigate = useNavigate();
   const loc = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -64,10 +64,8 @@ export default function Shell() {
     navigate("/login");
   }
 
-  const items = [
-    ...nav.map((item) => ({ ...item, icon: iconFor(item.to) })),
-    { to: "/app/perfil", label: "Mi perfil", icon: "user" },
-  ];
+  const items = nav.map((item) => ({ ...item, icon: iconFor(item.to) }));
+  const initials = (user.name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 
   const links = items.map((item) => (
     <NavLink
@@ -93,14 +91,6 @@ export default function Shell() {
         </div>
         <nav className="sidebar-nav">{links}</nav>
         <div className="sidebar-foot">
-          <div className="sidebar-user">
-            <b className="nav-label">{user.name}</b>
-            <span className="badge-role">{ROLE_LABELS[user.role]}</span>
-          </div>
-          <button className="btn-primary sidebar-logout" type="button" onClick={onLogout}>
-            <span className="nav-label">Salir</span>
-            <span className="logout-short" aria-hidden>⎋</span>
-          </button>
           <button
             type="button"
             className="sidebar-collapse"
@@ -128,9 +118,18 @@ export default function Shell() {
             <div className="brand brand-mobile">
               <img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" />
             </div>
-            <div className="topbar-tools">
-              <span className="badge-role">{ROLE_LABELS[user.role]}</span>
-              <span className="topbar-user">{user.name}</span>
+            <div className="topbar-tools account-bar">
+              <NavLink to="/app/perfil" className="account-chip" title="Mi perfil">
+                {avatarUrl ? (
+                  <img className="avatar" src={avatarUrl} alt="" />
+                ) : (
+                  <span className="avatar avatar-fallback" aria-hidden>{initials}</span>
+                )}
+                <span className="account-meta">
+                  <b className="topbar-user">{user.name}</b>
+                  <span className="badge-role">{ROLE_LABELS[user.role]}</span>
+                </span>
+              </NavLink>
               <button className="btn-primary btn-salir" type="button" onClick={onLogout}>Salir</button>
             </div>
           </div>

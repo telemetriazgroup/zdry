@@ -79,7 +79,7 @@ export class PurchasesService {
     const [extras, dam] = await Promise.all([
       this.prisma.pendingExtraCost.count({ where: extrasWhere }),
       this.prisma.container.count({
-        where: { intakeType: { in: ["compra", "pendiente_factura"] }, damNumber: null, ...(await this.prisma.hideDemo()) },
+        where: { intakeType: { in: ["compra", "pendiente_factura"] }, damNumber: null, ...(await this.prisma.liveContainers()) },
       }),
     ]);
     return { extras, dam };
@@ -200,6 +200,8 @@ export class PurchasesService {
             bl: line.bl || "",
             manifest: line.manifest || "",
             purchaseInvoiceId: pi.id,
+            registeredById: user.id,
+            registeredByName: user.name,
           },
         });
         const extraNote = line.isoOverride ? ` Excepción ISO: ${line.isoExceptionReason}.` : "";
@@ -208,7 +210,7 @@ export class PurchasesService {
           data: {
             iso: line.iso,
             type: "Ingreso",
-            detail: `Unidad registrada por factura de compra ${number} — proveedor ${input.providerName.trim()} — precio USD ${Number(line.price).toFixed(2)}. Pendiente de recepción física en Almacén.${extraNote}${docs}`,
+            detail: `Unidad registrada por ${user.name} en factura de compra ${number} — proveedor ${input.providerName.trim()} — precio USD ${Number(line.price).toFixed(2)}. Pendiente de recepción física en Almacén.${extraNote}${docs}`,
           },
         });
       }
@@ -274,7 +276,7 @@ export class PurchasesService {
 
   async damPending() {
     const rows = await this.prisma.container.findMany({
-        where: { intakeType: { in: ["compra", "pendiente_factura"] }, damNumber: null, ...(await this.prisma.hideDemo()) },
+        where: { intakeType: { in: ["compra", "pendiente_factura"] }, damNumber: null, ...(await this.prisma.liveContainers()) },
       include: { depot: { select: { name: true } }, purchaseInvoice: { select: { number: true } } },
       orderBy: { createdAt: "asc" },
     });
@@ -283,7 +285,7 @@ export class PurchasesService {
 
   async damDone() {
     const rows = await this.prisma.container.findMany({
-        where: { damNumber: { not: null }, ...(await this.prisma.hideDemo()) },
+        where: { damNumber: { not: null }, ...(await this.prisma.liveContainers()) },
       orderBy: { nationalizedAt: "desc" },
       take: 50,
     });
@@ -337,7 +339,7 @@ export class PurchasesService {
   async listContainersForRole(role: AuthUser["role"]) {
     const [rows, visRows] = await Promise.all([
       this.prisma.container.findMany({
-        where: await this.prisma.hideDemo(),
+        where: await this.prisma.liveContainers(),
         include: { depot: { select: { name: true } } },
         orderBy: { createdAt: "desc" },
       }),

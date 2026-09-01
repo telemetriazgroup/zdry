@@ -35,6 +35,7 @@ model User {
   customerId       String?
   customer         Customer?  @relation(fields: [customerId], references: [id])
   demo             Boolean    @default(false)
+  avatarKey        String?
   createdAt        DateTime   @default(now())
   updatedAt        DateTime   @updatedAt
   auditLogs        AuditLog[]
@@ -109,6 +110,12 @@ model Container {
   purchaseInvoiceId  String?
   purchaseInvoice    PurchaseInvoice?    @relation(fields: [purchaseInvoiceId], references: [id])
   demo               Boolean             @default(false)
+  registeredById     String?
+  registeredByName   String?
+  archivedAt         DateTime?
+  archiveReason      String?
+  archivedById       String?
+  archivedByName     String?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
   history            ContainerHistory[]
@@ -122,6 +129,7 @@ model Container {
   @@index([commercialStatus])
   @@index([mediaStatus])
   @@index([demo])
+  @@index([archivedAt])
 }
 
 model ContainerHistory {

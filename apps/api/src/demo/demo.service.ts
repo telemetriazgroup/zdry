@@ -622,6 +622,7 @@ export class DemoService {
           mediaApprovedBy: plan.approveMedia ? admin?.id || user.id : null,
           showPriceOverride: plan.manufacturer === "CIMC" ? true : null,
           demo: true,
+          registeredByName: "Sistema (demo)",
           history: {
             create: { type: "Demo", detail: "Unidad cargada por modo demostración (convive con producción)." },
           },

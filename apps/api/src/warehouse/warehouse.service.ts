@@ -133,7 +133,7 @@ export class WarehouseService {
       this.prisma.containerType.findMany(),
       this.prisma.category.findMany(),
       this.prisma.container.findMany({
-        where: { status: { not: "Vendido" }, ...(await this.prisma.hideDemo()) },
+        where: { status: { not: "Vendido" }, ...(await this.prisma.liveContainers()) },
         include: { depot: true },
         orderBy: { createdAt: "desc" },
       }),
@@ -156,6 +156,8 @@ export class WarehouseService {
           intakeType: c.intakeType,
           intakeLabel: intakeTypeLabel(c.intakeType),
           status: c.status,
+          registeredByName: c.registeredByName || "—",
+          createdAt: c.createdAt,
           missing,
         };
       })
@@ -234,13 +236,15 @@ export class WarehouseService {
             ownerCustomerId: category === "almacenaje_cliente" ? input.customerId : null,
             storageDiscountPct: category === "almacenaje_cliente" ? discount : 0,
             cbm: defaultCbm(typeRow.code),
+            registeredById: user.id,
+            registeredByName: user.name,
           },
         });
         await tx.containerHistory.create({
           data: {
             iso,
             type: "Ingreso",
-            detail: `Unidad registrada en Recepción (sin registro previo) — intake: ${category === "almacenaje_cliente" ? "almacenaje de cliente" : "pendiente de factura"}. Continúa de inmediato con la inspección física.`,
+            detail: `Unidad registrada en Recepción por ${user.name} — intake: ${category === "almacenaje_cliente" ? "almacenaje de cliente" : "pendiente de factura"}. Continúa de inmediato con la inspección física.`,
           },
         });
       });
@@ -447,6 +451,49 @@ export class WarehouseService {
     return { ...obj, contentType: mimeType || obj.contentType };
   }
 
+  async archive(iso: string, reason: string, user: AuthUser, ip?: string) {
+    const why = (reason || "").trim();
+    if (why.length < 4) throw new BadRequestException("Indica el motivo del archivo (mínimo 4 caracteres).");
+    const c = await this.loadUnit(iso);
+    if (c.archivedAt) throw new BadRequestException("Esta unidad ya está archivada.");
+    if (c.status === "Vendido") throw new BadRequestException("No se puede archivar una unidad vendida.");
+    const updated = await this.prisma.container.update({
+      where: { iso: c.iso },
+      data: {
+        archivedAt: new Date(),
+        archiveReason: why,
+        archivedById: user.id,
+        archivedByName: user.name,
+        lado: null,
+        ruma: null,
+        columna: null,
+        nivel: null,
+        mediaStatus: c.mediaStatus === "aprobado" ? "oculto" : c.mediaStatus,
+      },
+    });
+    await this.prisma.containerHistory.create({
+      data: {
+        iso: c.iso,
+        type: "Archivo",
+        detail: `Unidad archivada por ${user.name}: ${why}`,
+      },
+    });
+    await this.audit.log({
+      user,
+      action: "archive",
+      entity: "Container",
+      entityId: c.iso,
+      after: { reason: why },
+      ip,
+    });
+    return {
+      iso: updated.iso,
+      archivedAt: updated.archivedAt,
+      archiveReason: updated.archiveReason,
+      archivedByName: updated.archivedByName,
+    };
+  }
+
   async confirm(iso: string, user: AuthUser, ip?: string) {
     const c = await this.loadUnit(iso);
     const missing = inspectDataMissing(c);
@@ -547,7 +594,7 @@ export class WarehouseService {
       this.prisma.category.findMany(),
       this.prisma.depot.findMany({ where: ACTIVE_MASTER, orderBy: { name: "asc" } }),
       this.getLayoutRules(),
-      this.prisma.container.findMany({ where: { depotId, ...(await this.prisma.hideDemo()) } }),
+      this.prisma.container.findMany({ where: { depotId, ...(await this.prisma.liveContainers()) } }),
     ]);
     const typeMap = Object.fromEntries(types.map((t) => [t.code, t]));
     const catMap = Object.fromEntries(categories.map((c) => [c.code, c]));
@@ -768,6 +815,7 @@ export class WarehouseService {
       },
     });
     if (!c) throw new NotFoundException("Contenedor no encontrado.");
+    if (c.archivedAt) throw new BadRequestException("Esta unidad está archivada.");
     return c;
   }
 
@@ -807,6 +855,9 @@ export class WarehouseService {
       intakeType: c.intakeType,
       intakeLabel: intakeTypeLabel(c.intakeType),
       physicallyReceived: c.physicallyReceived,
+      registeredByName: c.registeredByName || "—",
+      createdAt: c.createdAt,
+      archivedAt: c.archivedAt,
       ownerCustomer: c.ownerCustomer,
       storageDiscountPct: Number(c.storageDiscountPct),
       photos: photoSlots,

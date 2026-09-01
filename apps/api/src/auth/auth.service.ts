@@ -1,10 +1,14 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import { Response } from "express";
 import * as argon2 from "argon2";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
+import { StorageService } from "../storage/storage.service";
 import { AuthUser } from "./auth.types";
+import { extForInspectionMime, sniffInspectionPhotoMime } from "../domain/inspection-media";
+
+const MAX_AVATAR_BYTES = 4 * 1024 * 1024;
 
 const ACCESS_MS = 15 * 60 * 1000;
 const REFRESH_MS = 7 * 24 * 60 * 60 * 1000;
@@ -15,6 +19,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly audit: AuditService,
+    private readonly storage: StorageService,
   ) {}
 
   private cookiePath() {
@@ -71,12 +76,13 @@ export class AuthService {
       name: user.name,
       role: user.role,
       customerId: user.customerId ?? null,
+      hasAvatar: !!user.hasAvatar,
       impersonator: user.impersonator ?? null,
     };
   }
 
   private asAuth(
-    user: { id: string; email: string; name: string; role: AuthUser["role"]; customerId?: string | null },
+    user: { id: string; email: string; name: string; role: AuthUser["role"]; customerId?: string | null; avatarKey?: string | null },
     impersonator?: AuthUser["impersonator"],
   ): AuthUser {
     return {
@@ -85,6 +91,7 @@ export class AuthService {
       name: user.name,
       role: user.role,
       customerId: user.customerId ?? null,
+      hasAvatar: !!user.avatarKey,
       impersonator: impersonator ?? null,
     };
   }
@@ -312,5 +319,57 @@ export class AuthService {
     });
     await this.audit.log({ user, action: "change_password", entity: "User", entityId: user.id });
     return { ok: true };
+  }
+
+  async uploadAvatar(user: AuthUser, file: Express.Multer.File | undefined, ip?: string) {
+    if (!file?.buffer?.length) throw new BadRequestException("Selecciona una foto.");
+    if (file.size > MAX_AVATAR_BYTES) throw new BadRequestException("La foto no puede superar 4 MB.");
+    let mime: string;
+    try {
+      mime = sniffInspectionPhotoMime(file.buffer);
+    } catch (e) {
+      throw new BadRequestException((e as Error).message);
+    }
+    const row = await this.prisma.user.findUnique({ where: { id: user.id } });
+    if (!row) throw new UnauthorizedException("Sesión inválida");
+    const key = `users/${user.id}/avatar.${extForInspectionMime(mime)}`;
+    if (row.avatarKey && row.avatarKey !== key) {
+      try {
+        await this.storage.delete(row.avatarKey);
+      } catch {
+        /* ignore stale key */
+      }
+    }
+    await this.storage.put(key, file.buffer, mime);
+    const updated = await this.prisma.user.update({
+      where: { id: user.id },
+      data: { avatarKey: key },
+    });
+    await this.audit.log({ user, action: "update_avatar", entity: "User", entityId: user.id, ip });
+    return this.toPublic(this.asAuth(updated, user.impersonator));
+  }
+
+  async openAvatar(user: AuthUser) {
+    const row = await this.prisma.user.findUnique({ where: { id: user.id } });
+    if (!row?.avatarKey) throw new NotFoundException("Sin foto de perfil.");
+    return this.storage.get(row.avatarKey);
+  }
+
+  async deleteAvatar(user: AuthUser, ip?: string) {
+    const row = await this.prisma.user.findUnique({ where: { id: user.id } });
+    if (!row) throw new UnauthorizedException("Sesión inválida");
+    if (row.avatarKey) {
+      try {
+        await this.storage.delete(row.avatarKey);
+      } catch {
+        /* ignore */
+      }
+    }
+    const updated = await this.prisma.user.update({
+      where: { id: user.id },
+      data: { avatarKey: null },
+    });
+    await this.audit.log({ user, action: "delete_avatar", entity: "User", entityId: user.id, ip });
+    return this.toPublic(this.asAuth(updated, user.impersonator));
   }
 }

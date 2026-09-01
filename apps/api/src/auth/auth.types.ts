@@ -6,6 +6,7 @@ export type AuthUser = {
   name: string;
   role: Role;
   customerId?: string | null;
+  hasAvatar?: boolean;
   impersonator?: { id: string; email: string; name: string; role: Role } | null;
 };
 

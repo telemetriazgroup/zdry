@@ -108,6 +108,16 @@ export class WarehouseController {
     });
   }
 
+  @Post("units/:iso/archive")
+  archive(
+    @Param("iso") iso: string,
+    @Body() body: { reason?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.archive(iso, body.reason || "", user, req.ip);
+  }
+
   @Post("units/:iso/confirm")
   confirm(@Param("iso") iso: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.warehouse.confirm(iso, user, req.ip);

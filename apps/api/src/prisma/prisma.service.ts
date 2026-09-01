@@ -33,6 +33,11 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     return (await this.demoOn()) ? {} : { demo: false };
   }
 
+  /** Contenedores operativos: no archivados y, si el modo demo está apagado, sin filas demo. */
+  async liveContainers(): Promise<{ archivedAt: null; demo?: false }> {
+    return { archivedAt: null, ...(await this.hideDemo()) };
+  }
+
   async setDemoMode(on: boolean) {
     await this.appSetting.upsert({
       where: { key: DEMO_MODE_KEY },

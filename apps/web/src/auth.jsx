@@ -76,6 +76,7 @@ export function homeFor(user) {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
+  const [avatarRev, setAvatarRev] = useState(0);
 
   useEffect(() => {
     api("/auth/me")
@@ -88,34 +89,37 @@ export function AuthProvider({ children }) {
     () => ({
       user,
       ready,
+      avatarRev,
+      avatarUrl: user?.hasAvatar ? `${apiUrl("/auth/avatar")}?t=${avatarRev || user.id}` : null,
       nav: user ? ROLE_NAV[user.role] || [] : [],
       async login(email, password) {
         const d = await api("/auth/login", { method: "POST", body: { email, password } });
         setUser(d.user);
+        setAvatarRev(Date.now());
         return d.user;
       },
       async register(body) {
         const d = await api("/auth/register", { method: "POST", body });
         setUser(d.user);
+        setAvatarRev(Date.now());
         return d.user;
       },
       async refreshUser(next) {
-        if (next?.id) {
-          setUser(next);
-          return next;
-        }
-        const d = await api("/auth/me");
-        setUser(d.user);
-        return d.user;
+        const u = next?.id ? next : (await api("/auth/me")).user;
+        setUser(u);
+        setAvatarRev(Date.now());
+        return u;
       },
       async impersonate(userId) {
         const d = await api("/auth/impersonate", { method: "POST", body: { userId } });
         setUser(d.user);
+        setAvatarRev(Date.now());
         return d.user;
       },
       async stopImpersonation() {
         const d = await api("/auth/stop-impersonate", { method: "POST", body: {} });
         setUser(d.user);
+        setAvatarRev(Date.now());
         return d.user;
       },
       async logout() {
@@ -125,9 +129,10 @@ export function AuthProvider({ children }) {
           await fetch(apiUrl("/auth/logout-all"), { method: "POST", credentials: "include" });
         }
         setUser(null);
+        setAvatarRev(0);
       },
     }),
-    [user, ready],
+    [user, ready, avatarRev],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

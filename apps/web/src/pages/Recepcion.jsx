@@ -1,7 +1,61 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, apiUpload, apiUrl } from "../api.js";
+import { api, apiUpload, apiUrl, formatWhen } from "../api.js";
 import { parseIso6346 } from "../iso6346.js";
+
+const ARCHIVE_PRESETS = ["Contenedor mal ingresado", "Información incorrecta"];
+
+function ArchiveForm({ iso, onDone, onCancel }) {
+  const [preset, setPreset] = useState(ARCHIVE_PRESETS[0]);
+  const [other, setOther] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function submit() {
+    const reason = preset === "otro" ? other.trim() : preset;
+    if (reason.length < 4) {
+      setErr("Indica el motivo (mínimo 4 caracteres).");
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      await api(`/warehouse/units/${iso}/archive`, { method: "POST", body: { reason } });
+      onDone(iso, reason);
+    } catch (e) {
+      setErr(e.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="archive-box" onClick={(e) => e.stopPropagation()}>
+      <b>Archivar {iso}</b>
+      <p className="section-sub">Sale de recepción, patio y catálogo. El ISO queda reservado.</p>
+      <select value={preset} onChange={(e) => setPreset(e.target.value)}>
+        {ARCHIVE_PRESETS.map((r) => <option key={r} value={r}>{r}</option>)}
+        <option value="otro">Otro motivo…</option>
+      </select>
+      {preset === "otro" ? (
+        <textarea
+          rows={2}
+          value={other}
+          onChange={(e) => setOther(e.target.value)}
+          placeholder="Describe el motivo"
+        />
+      ) : null}
+      {err ? <div className="err">{err}</div> : null}
+      <div className="action-row">
+        <button className="btn-primary" type="button" disabled={busy} onClick={submit}>Archivar</button>
+        <button className="btn-ghost" type="button" disabled={busy} onClick={onCancel}>Cancelar</button>
+      </div>
+    </div>
+  );
+}
+
+function whoLine(u) {
+  return `Registró ${u.registeredByName || "—"} · ${formatWhen(u.createdAt)}`;
+}
 
 export default function Recepcion() {
   const navigate = useNavigate();
@@ -23,6 +77,7 @@ export default function Recepcion() {
   });
   const [isoHint, setIsoHint] = useState(null);
   const [bust, setBust] = useState(0);
+  const [archiving, setArchiving] = useState(null);
 
   async function loadPending() {
     const rows = await api("/warehouse/pending");
@@ -179,8 +234,7 @@ export default function Recepcion() {
       <div className="panel recv-page">
         <button className="btn-ghost recv-back" type="button" onClick={() => { setMode("bandeja"); setError(""); setMsg(""); }}>← Volver</button>
         <h3 style={{ marginTop: 10 }}>Nuevo ingreso — {custody ? "almacenaje de cliente tercero" : "compra sin factura (reentrega)"}</h3>
-        <p className="section-sub recv-lead">Esta unidad no tiene ningún registro previo en el sistema, así que se identifica con su código ISO — guiado y validado en vivo, no como un dato libre. Año, fabricante, fotos, tara/peso y posición de patio se completan justo después, en la inspección física que continúa automáticamente al registrar.</p>
-        <p className="section-sub recv-lead-short">Escribe el ISO de la placa. Luego sigue la inspección con fotos.</p>
+        <p className="section-sub">Escribe el ISO de la placa. Luego sigue la inspección con fotos.</p>
         {error ? <div className="err">{error}</div> : null}
         <div className="form-grid">
           <div>
@@ -259,6 +313,7 @@ export default function Recepcion() {
         <div className="dash-grid recv-inspect">
           <div className="panel">
             <h3 className="recv-iso-title">{unit.iso} <span className="badge-scope" style={{ background: unit.intakeType === "compra" ? "#2f9e44" : unit.intakeType === "almacenaje_cliente" ? "#495057" : "#c9720b" }}>{unit.intakeLabel}</span></h3>
+            <p className="recv-who">{whoLine(unit)}</p>
             <p className="section-sub">Toca cada casilla: en el celular abre la cámara trasera.</p>
             <div className="checklist recv-checklist">
               {labels.map((lab, i) => {
@@ -353,6 +408,15 @@ export default function Recepcion() {
         <div className="recv-confirm-bar">
           <button className="btn-primary" type="button" disabled={missing.length > 0} onClick={confirm}>✓ Confirmar recepción → Patio</button>
           {missing.length ? <p className="recv-confirm-hint">Completa año y fabricante para habilitar.</p> : null}
+          {archiving === unit.iso ? (
+            <ArchiveForm
+              iso={unit.iso}
+              onDone={(iso) => { setArchiving(null); setInspectIso(null); setMode("bandeja"); setMsg(`${iso} archivado.`); loadPending(); }}
+              onCancel={() => setArchiving(null)}
+            />
+          ) : (
+            <button className="btn-ghost recv-archive-btn" type="button" onClick={() => setArchiving(unit.iso)}>Archivar esta unidad</button>
+          )}
         </div>
       </>
     );
@@ -363,9 +427,9 @@ export default function Recepcion() {
   return (
     <div className="panel recv-page">
       <h3>Recepción e inspección</h3>
-      <p className="section-sub recv-lead">Un solo flujo: una recepción genera de inmediato su inspección física, sin pasos separados. El número de contenedor no se escribe libremente sin control — si ya existe un registro pendiente (factura de compra emitida, o un alquiler que se devuelve) lo eliges de una lista, y así el ISO siempre permite la gestión del inventario. Solo cuando la unidad no tiene ningún registro previo en el sistema (compra por reentregar sin factura aún, o almacenaje de un cliente tercero) se identifica con su código ISO, validado en vivo mientras se escribe.</p>
-      <p className="section-sub recv-lead-short">Elige un pendiente o registra un ingreso nuevo. En el celular las fotos se toman con la cámara.</p>
+      <p className="section-sub">Elige un pendiente o registra un ingreso nuevo. En el celular las fotos se toman con la cámara.</p>
       {error ? <div className="err">{error}</div> : null}
+      {msg ? <div className="ok-msg">{msg}</div> : null}
       <div className="recv-actions">
         <button className="btn-ghost" type="button" onClick={() => { setForm({ ...form, category: "pendiente_factura", iso: "" }); setMode("nuevo"); setError(""); }}>
           <span className="recv-full">+ Nuevo ingreso — compra sin factura (reentrega)</span>
@@ -383,22 +447,33 @@ export default function Recepcion() {
       {pending.length ? (
         <>
           <h3 style={{ marginTop: 0 }}>Pendientes ({pending.length})</h3>
-          <p className="section-sub recv-lead">Contenedores con registro ya en el sistema (por factura de compra, o recién identificados aquí) que faltan pasar su inspección física — fotos, datos y confirmación. Toca uno para continuar.</p>
-          <p className="section-sub recv-lead-short">Toca una unidad para continuar la inspección.</p>
+          <p className="section-sub">Toca una unidad para continuar la inspección.</p>
           <div className="tablewrap recv-table">
             <table className="data">
               <thead>
-                <tr><th>ISO</th><th>Tipo</th><th>Condición</th><th>Depósito</th><th>Origen del ingreso</th><th>Motivo pendiente</th></tr>
+                <tr><th>ISO</th><th>Tipo</th><th>Condición</th><th>Depósito</th><th>Origen</th><th>Registró</th><th>Motivo pendiente</th><th></th></tr>
               </thead>
               <tbody>
                 {pending.map((u) => (
-                  <tr key={u.iso} className="expandable" onClick={() => { setInspectIso(u.iso); setMode("inspect"); setError(""); }}>
+                  <tr key={u.iso} className="expandable" onClick={() => { if (archiving !== u.iso) { setInspectIso(u.iso); setMode("inspect"); setError(""); } }}>
                     <td><b>{u.iso}</b></td>
                     <td>{u.typeLabel}</td>
                     <td style={{ color: u.catColor }}>{u.catLabel}</td>
                     <td>{u.depotName}</td>
                     <td><span className="badge-scope" style={{ background: intakeColor(u.intakeType) }}>{u.intakeLabel}</span></td>
+                    <td className="recv-who">{u.registeredByName || "—"}<br />{formatWhen(u.createdAt)}</td>
                     <td>{u.missing.map((r) => <span key={r} className="badge-scope" style={{ background: "#c9720b", marginRight: 4 }}>{r}</span>)}</td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      {archiving === u.iso ? (
+                        <ArchiveForm
+                          iso={u.iso}
+                          onDone={(iso) => { setArchiving(null); setMsg(`${iso} archivado.`); loadPending(); }}
+                          onCancel={() => setArchiving(null)}
+                        />
+                      ) : (
+                        <button className="btn-ghost recv-archive-btn" type="button" onClick={() => setArchiving(u.iso)}>Archivar</button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -406,22 +481,33 @@ export default function Recepcion() {
           </div>
           <div className="recv-cards">
             {pending.map((u) => (
-              <button
-                key={u.iso}
-                type="button"
-                className="recv-card"
-                onClick={() => { setInspectIso(u.iso); setMode("inspect"); setError(""); }}
-              >
-                <div className="recv-card-top">
-                  <b className="card-iso">{u.iso}</b>
-                  <span className="badge-scope" style={{ background: intakeColor(u.intakeType) }}>{u.intakeLabel}</span>
-                </div>
-                <div className="recv-card-meta">{u.typeLabel} · <span style={{ color: u.catColor }}>{u.catLabel}</span></div>
-                <div className="recv-card-meta">{u.depotName}</div>
-                <div className="recv-card-missing">
-                  {u.missing.map((r) => <span key={r} className="badge-scope" style={{ background: "#c9720b" }}>{r}</span>)}
-                </div>
-              </button>
+              <div key={u.iso} className="recv-card">
+                <button
+                  type="button"
+                  className="recv-card-open"
+                  onClick={() => { setInspectIso(u.iso); setMode("inspect"); setError(""); }}
+                >
+                  <div className="recv-card-top">
+                    <b className="card-iso">{u.iso}</b>
+                    <span className="badge-scope" style={{ background: intakeColor(u.intakeType) }}>{u.intakeLabel}</span>
+                  </div>
+                  <div className="recv-card-meta">{u.typeLabel} · <span style={{ color: u.catColor }}>{u.catLabel}</span></div>
+                  <div className="recv-card-meta">{u.depotName}</div>
+                  <div className="recv-who">{whoLine(u)}</div>
+                  <div className="recv-card-missing">
+                    {u.missing.map((r) => <span key={r} className="badge-scope" style={{ background: "#c9720b" }}>{r}</span>)}
+                  </div>
+                </button>
+                {archiving === u.iso ? (
+                  <ArchiveForm
+                    iso={u.iso}
+                    onDone={(iso) => { setArchiving(null); setMsg(`${iso} archivado.`); loadPending(); }}
+                    onCancel={() => setArchiving(null)}
+                  />
+                ) : (
+                  <button className="btn-ghost recv-archive-btn" type="button" onClick={() => setArchiving(u.iso)}>Archivar</button>
+                )}
+              </div>
             ))}
           </div>
         </>

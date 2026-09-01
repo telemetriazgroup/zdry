@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, apiUpload, ApiError, apiUrl } from "../api.js";
+import { api, apiUpload, ApiError, apiUrl, formatWhen } from "../api.js";
 import { useAuth } from "../auth.jsx";
 
 const STATUS = {
@@ -137,10 +137,7 @@ export default function CatalogMedia() {
   return (
     <>
       <h2 className="section-title">Ficha multimedia del catálogo</h2>
-      <p className="section-sub">
-        El rechazo es por foto, no por publicación: la imagen pasa al historial de esa unidad y el hueco queda libre.
-        Publicar u ocultar el catálogo es independiente. Admin y Gerencia ven todas las fotos (activas e historial).
-      </p>
+      <p className="section-sub">Fotos de inspección, publicar u ocultar el catálogo. Rechazar una foto la manda al historial de esa unidad.</p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
 
@@ -150,13 +147,14 @@ export default function CatalogMedia() {
           <div className="tablewrap">
             <table className="data">
               <thead>
-                <tr><th>ISO</th><th>Tipo</th><th>Fotos</th><th>Historial</th><th>Video</th><th>Catálogo</th></tr>
+                <tr><th>ISO</th><th>Tipo</th><th>Ingreso</th><th>Fotos</th><th>Historial</th><th>Video</th><th>Catálogo</th></tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.iso} className="expandable" onClick={() => open(r.iso)}>
                     <td className="card-iso">{r.iso}{r.demo ? <span className="demo-chip">DEMO</span> : null}</td>
                     <td>{r.type}</td>
+                    <td className="recv-who">{r.registeredByName || "—"}<br />{formatWhen(r.createdAt)}</td>
                     <td>{r.photoCount}</td>
                     <td>{r.historyCount || "—"}</td>
                     <td>{r.hasVideo ? "sí" : "—"}</td>
@@ -174,6 +172,7 @@ export default function CatalogMedia() {
           <div className="panel">
             <h3>{unit.iso}</h3>
             <p className="section-sub">{unit.type} · {unit.cat} · {unit.depotName} · {unit.manufacturer} {unit.year || ""}</p>
+            <p className="recv-who">Ingresó {unit.registeredByName || "—"} · {formatWhen(unit.createdAt)}</p>
             <div style={{ color: st.color, fontWeight: 800, marginBottom: 10 }}>{st.label}</div>
             <p className="section-sub">{photoCount} foto{photoCount === 1 ? "" : "s"} activa{photoCount === 1 ? "" : "s"}{unit.hasVideo ? " · video 360°" : ""}{(unit.history || []).length ? ` · ${(unit.history || []).length} en historial` : ""}.</p>
 

@@ -33,7 +33,7 @@ export class CatalogMediaService {
   async list() {
     const rows = await this.prisma.container.findMany({
       where: {
-        ...(await this.prisma.hideDemo()),
+        ...(await this.prisma.liveContainers()),
         intakeType: { in: ["compra", "pendiente_factura"] },
         status: { in: ["Disponible", "Reservado", "Pendiente de ingreso"] },
         OR: [{ physicallyReceived: true }, { lado: { not: null } }],
@@ -62,6 +62,8 @@ export class CatalogMediaService {
         invoicePending: c.invoicePending,
         intakeType: c.intakeType,
         demo: c.demo,
+        registeredByName: c.registeredByName || "—",
+        createdAt: c.createdAt,
       };
     });
   }
@@ -72,6 +74,7 @@ export class CatalogMediaService {
       include: { depot: true, photos: true },
     });
     if (!c) throw new NotFoundException("Unidad no encontrada.");
+    if (c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
     const active = c.photos.filter((p) => p.status === PHOTO_STATUS_ACTIVE);
     const history = c.photos
       .filter((p) => p.status === PHOTO_STATUS_REJECTED)
@@ -105,12 +108,15 @@ export class CatalogMediaService {
       mediaApprovedBy: c.mediaApprovedBy,
       updatedAt: c.updatedAt,
       photoLabels: PHOTO_LABELS,
+      registeredByName: c.registeredByName || "—",
+      createdAt: c.createdAt,
     };
   }
 
   async patchNotes(iso: string, inspectionNotes: string, user: AuthUser, ip?: string) {
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c) throw new NotFoundException("Unidad no encontrada.");
+    if (c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
     await this.prisma.container.update({
       where: { iso },
       data: { inspectionNotes: inspectionNotes || "" },
@@ -150,6 +156,7 @@ export class CatalogMediaService {
       include: { photos: ACTIVE_PHOTOS },
     });
     if (!c) throw new NotFoundException("Unidad no encontrada.");
+    if (c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
     if (c.photos.length < 1) {
       throw new BadRequestException("Publica al menos una foto de inspección para el catálogo.");
     }
@@ -173,6 +180,7 @@ export class CatalogMediaService {
     this.assertApprover(user);
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c) throw new NotFoundException("Unidad no encontrada.");
+    if (c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
     await this.prisma.container.update({
       where: { iso },
       data: {

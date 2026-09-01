@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Post, Put, Req, Res } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Post, Put, Req, Res, StreamableFile, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
+import { memoryStorage } from "multer";
 import { Request, Response } from "express";
 import { AuthService } from "./auth.service";
 import { Public } from "./public.decorator";
@@ -98,5 +100,29 @@ export class AuthController {
   @Post("forgot-password")
   forgot(@Body() body: { email?: string }, @Req() req: Request) {
     return this.auth.forgotPassword(body.email || "", req.ip);
+  }
+
+  @Post("avatar")
+  @UseInterceptors(FileInterceptor("file", { storage: memoryStorage(), limits: { fileSize: 4 * 1024 * 1024 } }))
+  uploadAvatar(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.auth.uploadAvatar(user, file, req.ip);
+  }
+
+  @Get("avatar")
+  async avatar(@CurrentUser() user: AuthUser) {
+    const obj = await this.auth.openAvatar(user);
+    return new StreamableFile(obj.stream, {
+      type: obj.contentType || "image/jpeg",
+      length: obj.contentLength,
+    });
+  }
+
+  @Delete("avatar")
+  deleteAvatar(@CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.auth.deleteAvatar(user, req.ip);
   }
 }
