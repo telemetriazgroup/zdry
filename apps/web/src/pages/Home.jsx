@@ -13,7 +13,7 @@ export default function Home() {
   return (
     <>
       <h2 className="section-title">Inicio — {ROLE_LABELS[user.role]}</h2>
-      <p className="section-sub">Sesión real. El menú de arriba es el de tu cuenta; no hay cambio de rol con un clic.</p>
+      <p className="section-sub">Sesión real. El menú de la izquierda es el de tu cuenta; no hay cambio de rol con un clic.</p>
       <div className="tile-row">
         <div className="tile"><div className="v">{user.name.split(" ")[0]}</div><div className="l">{user.email}</div></div>
         <div className="tile"><div className="v">{health?.ok ? "OK" : "…"}</div><div className="l">API</div></div>

@@ -152,7 +152,7 @@ export default function Catalog() {
       return;
     }
     if (user.role !== "cliente") {
-      setError("El catálogo cotiza con una cuenta de cliente. Entra con cliente@andina.pe o crea una cuenta nueva.");
+      setError("El catálogo cotiza con una cuenta de cliente. Cierra la sesión de staff y entra o crea una cuenta de cliente.");
       return;
     }
     try {

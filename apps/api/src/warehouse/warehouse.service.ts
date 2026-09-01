@@ -43,6 +43,7 @@ import {
   posLabel,
   validateMove,
 } from "../domain/yard";
+import { PHOTO_STATUS_ACTIVE, PHOTO_STATUS_REJECTED } from "../domain/catalog-media";
 
 const LAYOUT_RULES_KEY = "layout_rules";
 const YARD_CONFIG_KEY = "yard_config";
@@ -50,6 +51,8 @@ const YARD_CONFIG_KEY = "yard_config";
 type ContainerRow = Prisma.ContainerGetPayload<{
   include: { depot: true; photos: true; ownerCustomer: { select: { id: true; companyName: true; rucDni: true } } };
 }>;
+
+const ACTIVE_PHOTOS = { where: { status: PHOTO_STATUS_ACTIVE } };
 
 @Injectable()
 export class WarehouseService {
@@ -330,9 +333,6 @@ export class WarehouseService {
         data: {
           video360Key: storageKey,
           video360Mime: mime,
-          mediaStatus: "pendiente",
-          mediaApprovedAt: null,
-          mediaApprovedBy: null,
         },
       });
       await this.audit.log({
@@ -359,19 +359,29 @@ export class WarehouseService {
       throw new BadRequestException((e as Error).message);
     }
     const ext = extForInspectionMime(mime);
-    const storageKey = `warehouse/${c.iso}/photo-${slot}.${ext}`;
+    const photoId = randomUUID();
+    const storageKey = `warehouse/${c.iso}/photos/${photoId}.${ext}`;
     await this.storage.put(storageKey, file.buffer, mime);
     const originalName = String(file.originalname || `foto-${slot + 1}.${ext}`)
       .replace(/[/\\]/g, "_")
       .slice(0, 180);
-    await this.prisma.inspectionPhoto.upsert({
-      where: { iso_slot: { iso: c.iso, slot } },
-      update: { storageKey, mimeType: mime, originalName, sizeBytes: file.size },
-      create: { iso: c.iso, slot, storageKey, mimeType: mime, originalName, sizeBytes: file.size },
+    const previous = await this.prisma.inspectionPhoto.findFirst({
+      where: { iso: c.iso, slot, status: PHOTO_STATUS_ACTIVE },
     });
-    await this.prisma.container.update({
-      where: { iso: c.iso },
-      data: { mediaStatus: "pendiente", mediaApprovedAt: null, mediaApprovedBy: null },
+    if (previous) {
+      await this.archivePhoto(previous, user, "Reemplazada por una foto nueva");
+    }
+    await this.prisma.inspectionPhoto.create({
+      data: {
+        id: photoId,
+        iso: c.iso,
+        slot,
+        storageKey,
+        mimeType: mime,
+        originalName,
+        sizeBytes: file.size,
+        status: PHOTO_STATUS_ACTIVE,
+      },
     });
     await this.audit.log({
       user,
@@ -384,8 +394,41 @@ export class WarehouseService {
     return this.getUnit(c.iso);
   }
 
+  async archivePhoto(
+    photo: { id: string; iso: string; storageKey: string; mimeType: string },
+    user: AuthUser,
+    note: string,
+  ) {
+    const ext = photo.storageKey.split(".").pop() || "bin";
+    const histKey = `warehouse/${photo.iso}/history/${photo.id}.${ext}`;
+    let key = photo.storageKey;
+    if (photo.storageKey !== histKey) {
+      try {
+        const buf = await this.storage.getBuffer(photo.storageKey);
+        await this.storage.put(histKey, buf.buffer, photo.mimeType || buf.contentType || "application/octet-stream");
+        key = histKey;
+      } catch {
+        key = photo.storageKey;
+      }
+    }
+    await this.prisma.inspectionPhoto.update({
+      where: { id: photo.id },
+      data: {
+        status: PHOTO_STATUS_REJECTED,
+        rejectedAt: new Date(),
+        rejectedById: user.id,
+        rejectedByName: user.name,
+        rejectNote: note,
+        storageKey: key,
+      },
+    });
+  }
+
   async openPhoto(iso: string, slotRaw: string) {
-    const c = await this.prisma.container.findUnique({ where: { iso }, include: { photos: true } });
+    const c = await this.prisma.container.findUnique({
+      where: { iso },
+      include: { photos: ACTIVE_PHOTOS },
+    });
     if (!c) throw new NotFoundException("Contenedor no encontrado.");
     if (slotRaw === "video" || slotRaw === "9") {
       if (!c.video360Key) throw new NotFoundException("Sin video 360.");
@@ -397,6 +440,11 @@ export class WarehouseService {
     if (!photo) throw new NotFoundException("Sin foto en ese slot.");
     const obj = await this.storage.get(photo.storageKey);
     return { ...obj, contentType: photo.mimeType || obj.contentType };
+  }
+
+  async openStoredPhoto(storageKey: string, mimeType?: string) {
+    const obj = await this.storage.get(storageKey);
+    return { ...obj, contentType: mimeType || obj.contentType };
   }
 
   async confirm(iso: string, user: AuthUser, ip?: string) {
@@ -715,7 +763,7 @@ export class WarehouseService {
       where: { iso },
       include: {
         depot: true,
-        photos: true,
+        photos: ACTIVE_PHOTOS,
         ownerCustomer: { select: { id: true, companyName: true, rucDni: true } },
       },
     });
@@ -731,7 +779,7 @@ export class WarehouseService {
   ) {
     const typeRow = types.find((t) => t.code === c.type);
     const catRow = categories.find((x) => x.code === c.cat);
-    const photoSlots = Array.from({ length: 9 }, (_, i) => !!c.photos.find((p) => p.slot === i));
+    const photoSlots = Array.from({ length: 9 }, (_, i) => !!c.photos.find((p) => p.slot === i && p.status !== PHOTO_STATUS_REJECTED));
     return {
       iso: c.iso,
       type: c.type,

@@ -233,17 +233,23 @@ model Customer {
 }
 
 model InspectionPhoto {
-  id           String    @id @default(uuid())
-  iso          String
-  container    Container @relation(fields: [iso], references: [iso], onDelete: Cascade)
-  slot         Int
-  storageKey   String
-  mimeType     String
-  originalName String
-  sizeBytes    Int
-  createdAt    DateTime  @default(now())
+  id             String    @id @default(uuid())
+  iso            String
+  container      Container @relation(fields: [iso], references: [iso], onDelete: Cascade)
+  slot           Int
+  storageKey     String
+  mimeType       String
+  originalName   String
+  sizeBytes      Int
+  status         String    @default("activa")
+  rejectedAt     DateTime?
+  rejectedById   String?
+  rejectedByName String?
+  rejectNote     String?
+  createdAt      DateTime  @default(now())
 
-  @@unique([iso, slot])
+  @@index([iso, status])
+  @@index([iso, slot])
 }
 
 model ContainerPosition {

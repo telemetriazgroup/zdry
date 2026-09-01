@@ -34,6 +34,16 @@ export class CatalogMediaController {
     return this.media.list();
   }
 
+  @Get(":iso/history/:id")
+  async historyPhoto(@Param("iso") iso: string, @Param("id") id: string) {
+    const obj = await this.media.openHistoryPhoto(iso, id);
+    return new StreamableFile(obj.stream, {
+      type: obj.contentType || "application/octet-stream",
+      length: obj.contentLength,
+      disposition: "inline",
+    });
+  }
+
   @Get(":iso/photos/:slot")
   async photo(@Param("iso") iso: string, @Param("slot") slot: string) {
     const obj = await this.media.openPhoto(iso, slot);
@@ -76,20 +86,38 @@ export class CatalogMediaController {
     return this.media.upload(iso, slot, file, user, req.ip);
   }
 
+  @Post(":iso/photos/:slot/reject")
+  @Roles("admin", "gerente")
+  rejectPhoto(
+    @Param("iso") iso: string,
+    @Param("slot") slot: string,
+    @Body() body: { note?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.media.rejectPhoto(iso, Number(slot), body.note || "", user, req.ip);
+  }
+
+  @Post(":iso/history/:id/restore")
+  @Roles("admin", "gerente")
+  restorePhoto(
+    @Param("iso") iso: string,
+    @Param("id") id: string,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.media.restorePhoto(iso, id, user, req.ip);
+  }
+
   @Post(":iso/approve")
   @Roles("admin", "gerente")
   approve(@Param("iso") iso: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.media.approve(iso, user, req.ip);
   }
 
-  @Post(":iso/reject")
+  @Post(":iso/hide")
   @Roles("admin", "gerente")
-  reject(
-    @Param("iso") iso: string,
-    @Body() body: { note?: string },
-    @CurrentUser() user: AuthUser,
-    @Req() req: Request,
-  ) {
-    return this.media.reject(iso, body.note || "", user, req.ip);
+  hide(@Param("iso") iso: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.media.hide(iso, user, req.ip);
   }
 }

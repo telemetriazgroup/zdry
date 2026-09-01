@@ -13,7 +13,7 @@ export default function Login() {
   const nav = useNavigate();
   const [params] = useSearchParams();
   const [mode, setMode] = useState(params.get("intent") === "quote" ? "register" : "login");
-  const [email, setEmail] = useState("cliente@andina.pe");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [companyName, setCompanyName] = useState("");
@@ -42,7 +42,6 @@ export default function Login() {
     <div className="login-wrap">
       <form className="login-card" onSubmit={submit}>
         <Link to="/"><img className="logo" src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" /></Link>
-        <div className="tag">Venta y alquiler de contenedores</div>
         {mode === "register" ? (
           <>
             <p className="section-sub" style={{ textAlign: "left" }}>
@@ -61,7 +60,7 @@ export default function Login() {
         <label>Correo</label>
         <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="username" />
         <label>Contraseña</label>
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" placeholder="Zdry123!" />
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
         {error ? <div className="err">{error}</div> : null}
         <button className="btn-primary" type="submit" disabled={pending}>
           {pending ? "…" : mode === "register" ? "Crear cuenta" : "Entrar"}
@@ -69,10 +68,6 @@ export default function Login() {
         <button className="link-btn" type="button" onClick={() => setMode(mode === "login" ? "register" : "login")}>
           {mode === "login" ? "¿No tienes cuenta? Regístrate" : "Ya tengo cuenta"}
         </button>
-        <div className="demo-users">
-          Usuarios seed (clave <b>Zdry123!</b>):<br />
-          cliente@andina.pe · vendedor@zdry.pe · admin@zdry.pe · gerente@zdry.pe · compras@zdry.pe · almacen@zdry.pe
-        </div>
       </form>
     </div>
   );

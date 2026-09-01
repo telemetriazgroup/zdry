@@ -21,7 +21,7 @@ import { DealCloseService } from "../deal-close/deal-close.service";
 import { AuthUser } from "../auth/auth.types";
 import { type DealStatus, holdClockPaused } from "../deal-close/deal-close.types";
 import { applyShowPrice, DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
-import { isMediaApproved } from "../domain/catalog-media";
+import { isMediaApproved, PHOTO_STATUS_ACTIVE } from "../domain/catalog-media";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { isOwnSaleStock } from "../domain/iso6346";
 import {
@@ -152,6 +152,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       intakeType: { in: ["compra", "pendiente_factura"] },
       physicallyReceived: true,
       status: { in: ["Disponible", "Reservado"] },
+      mediaStatus: "aprobado",
     };
   }
 
@@ -162,7 +163,8 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     return (
       isOwnSaleStock(c.intakeType) &&
       c.physicallyReceived &&
-      (c.status === "Disponible" || c.status === "Reservado")
+      (c.status === "Disponible" || c.status === "Reservado") &&
+      isMediaApproved(c.mediaStatus)
     );
   }
 
@@ -224,7 +226,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       this.prisma.container.count({ where }),
       this.prisma.container.findMany({
         where,
-        include: { depot: true, photos: { select: { slot: true } } },
+        include: { depot: true, photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { slot: true } } },
         orderBy,
         skip: (page - 1) * PAGE_SIZE,
         take: PAGE_SIZE,
@@ -279,7 +281,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   async catalogUnit(iso: string) {
     const c = await this.prisma.container.findUnique({
       where: { iso },
-      include: { depot: true, photos: { select: { slot: true } } },
+      include: { depot: true, photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { slot: true } } },
     });
     if (!c || !(await this.isCatalogVisible(iso))) throw new NotFoundException("Unidad no disponible en catálogo.");
     const [vis, pricing, typeRow, catRow] = await Promise.all([
@@ -335,7 +337,9 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     if (!(await this.isCatalogVisible(iso))) throw new NotFoundException("Foto no disponible.");
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c || !isMediaApproved(c.mediaStatus)) throw new NotFoundException("Ficha multimedia aún no publicada.");
-    const photo = await this.prisma.inspectionPhoto.findUnique({ where: { iso_slot: { iso, slot } } });
+    const photo = await this.prisma.inspectionPhoto.findFirst({
+      where: { iso, slot, status: PHOTO_STATUS_ACTIVE },
+    });
     if (!photo) throw new NotFoundException("Foto no encontrada.");
     const obj = await this.storage.get(photo.storageKey);
     return new StreamableFile(obj.stream, { type: obj.contentType || photo.mimeType, disposition: "inline" });
