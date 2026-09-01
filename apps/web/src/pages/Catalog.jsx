@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError, apiUrl, publicUrl } from "../api.js";
 import { useAuth } from "../auth.jsx";
+import SiteFooter from "./SiteFooter.jsx";
 
 const CART_KEY = "zdry_cart";
 const money = (n) => (n == null ? null : "$" + Math.round(Number(n)).toLocaleString("en-US"));
@@ -202,8 +203,10 @@ export default function Catalog() {
     }
   }
 
+  const unitWord = data.total === 1 ? "unidad disponible" : "unidades disponibles";
+
   return (
-    <>
+    <div className="site-page">
       <header className="topbar">
         <div className="topbar-inner topbar-public">
           <Link to="/" className="brand"><img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" /></Link>
@@ -230,8 +233,15 @@ export default function Catalog() {
 
       <div className="hero">
         <div className="hero-inner">
-          <h1>¿Qué necesitas almacenar o transportar?</h1>
-          <p className="lead">Filtra por tamaño, condición y depósito, revisa la inspección multimedia estandarizada de cada unidad y cotiza en segundos. Solo mostramos unidades propias disponibles para la venta.</p>
+          <p className="hero-kicker">Venta y alquiler · Contenedores dry · Callao</p>
+          <h1>Contenedores dry listos para vender o alquilar</h1>
+          <p className="lead">Stock propio en patio. 20&apos; y 40&apos; inspeccionados, con fotos reales de la unidad. Elige el ISO y cotiza en minutos, sin compromiso.</p>
+          <ul className="hero-pills">
+            <li>Venta inmediata</li>
+            <li>Alquiler operativo</li>
+            <li>Fotos de inspección</li>
+            <li>Retiro en Callao</li>
+          </ul>
           <div className="quickfilter">
             <div className="qf-row">
               <div className="qf-field qf-search">
@@ -267,13 +277,36 @@ export default function Catalog() {
       <div className="view active catalog-wrap">
         {error ? <div className="err">{error}</div> : null}
         {msg ? <div className="ok-msg">{msg}</div> : null}
-        <div className="catalog-toolbar">
-          <div className="result-count">{data.total} unidades en catálogo</div>
-          <select value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}>
-            <option value="">ISO</option>
-            <option value="price">Precio</option>
-            <option value="year">Año</option>
-          </select>
+        <div className="stock-bar">
+          <div className="stock-count">
+            <span className="stock-n">{data.total}</span>
+            <span className="stock-copy">
+              <b>{unitWord}</b>
+              <small>Para venta o alquiler · stock propio</small>
+            </span>
+          </div>
+          <label className="stock-sort">
+            Ordenar
+            <select value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}>
+              <option value="">ISO</option>
+              <option value="price">Precio</option>
+              <option value="year">Año</option>
+            </select>
+          </label>
+        </div>
+        <div className="value-row">
+          <div className="value-card">
+            <b>Venta</b>
+            <p>Unidades propias, listas para retiro. Cotiza el ISO que ves, no un modelo genérico.</p>
+          </div>
+          <div className="value-card">
+            <b>Alquiler</b>
+            <p>Dry para obra, depósito temporal o exportación. La solicitud llega al comercial.</p>
+          </div>
+          <div className="value-card">
+            <b>Inspección</b>
+            <p>Fotos reales de cada contenedor en patio: puertas, piso, techo y laterales.</p>
+          </div>
         </div>
         <div className="grid">
           {data.items.map((u) => (
@@ -306,12 +339,17 @@ export default function Catalog() {
             </article>
           ))}
         </div>
+        {data.total === 0 ? (
+          <p className="empty-stock">No hay unidades publicadas con esos filtros. Prueba otro tipo, condición o depósito.</p>
+        ) : null}
         <div className="pager">
           {Array.from({ length: data.pages }, (_, i) => (
             <button key={i} className={`btn-ghost ${page === i + 1 ? "active" : ""}`} type="button" onClick={() => setPage(i + 1)}>{i + 1}</button>
           ))}
         </div>
       </div>
+
+      <SiteFooter />
 
       {pdp ? (
         <div className="overlay open" onClick={(e) => { if (e.target === e.currentTarget) nav("/"); }}>
@@ -477,6 +515,6 @@ export default function Catalog() {
           </div>
         </div>
       ) : null}
-    </>
+    </div>
   );
 }

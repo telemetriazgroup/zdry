@@ -5,6 +5,7 @@ import Login from "./pages/Login.jsx";
 import Shell from "./pages/Shell.jsx";
 import Catalog from "./pages/Catalog.jsx";
 import Account from "./pages/Account.jsx";
+import Legal from "./pages/Legal.jsx";
 import { apiUrl } from "./api.js";
 
 function DemoBanner() {
@@ -76,6 +77,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Catalog />} />
         <Route path="/u/:iso" element={<Catalog />} />
+        <Route path="/legal/:slug" element={<Legal />} />
         <Route path="/login" element={<Guest><Login /></Guest>} />
         <Route path="/mi-cuenta" element={<ClientGuard><Account /></ClientGuard>} />
         <Route path="/app/*" element={<StaffGuard><Shell /></StaffGuard>} />
