@@ -30,8 +30,13 @@ export const DEFAULT_CATALOG_COPY = {
     { title: "Recibe tu dry", body: "Coordinamos el despacho del equipo hasta tu planta." },
   ],
   requestPrice: "Solicitar precio",
+  requestQuote: "Solicitar cotización",
   addToQuote: "Agregar",
   inQuote: "En cotización",
+  whatsapp: "",
+  whatsappCta: "WhatsApp",
+  whatsappMessage: "Hola, me interesa el contenedor {iso} ({type}, {cat}) — {price}. ¿Sigue disponible?",
+  whatsappCartMessage: "Hola, quiero cotizar estas unidades: {isos}. ¿Siguen disponibles?",
   emptyStock: "No hay unidades publicadas con esos filtros. Prueba otro tipo, condición o depósito.",
   cartLabel: "Cotización",
   loginLabel: "Entrar",
@@ -82,6 +87,40 @@ export function mergeCatalogCopy(raw) {
       body: text(rawSteps[i]?.body, def.body),
     })),
   };
+}
+
+export const STEP_ICONS = [
+  "/brand/step-elige.png",
+  "/brand/step-paga.png",
+  "/brand/step-recibe.png",
+];
+
+export function whatsappDigits(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+export function whatsappUrl(copy, message) {
+  const n = whatsappDigits(copy?.whatsapp) || whatsappDigits(copy?.phone);
+  const q = message ? `?text=${encodeURIComponent(message)}` : "";
+  return n ? `https://wa.me/${n}${q}` : `https://wa.me/${q}`;
+}
+
+export function unitWhatsAppMessage(copy, unit) {
+  const price = unit?.showPrice && unit.gross != null
+    ? `precio $${Math.round(Number(unit.gross)).toLocaleString("en-US")}`
+    : "precio a consultar";
+  const tpl = copy?.whatsappMessage || DEFAULT_CATALOG_COPY.whatsappMessage;
+  return tpl
+    .replaceAll("{iso}", unit?.iso || "")
+    .replaceAll("{type}", unit?.typeLabel || unit?.type || "")
+    .replaceAll("{cat}", unit?.catLabel || "")
+    .replaceAll("{price}", price);
+}
+
+export function cartWhatsAppMessage(copy, isos) {
+  const tpl = copy?.whatsappCartMessage || DEFAULT_CATALOG_COPY.whatsappCartMessage;
+  const list = (isos || []).filter(Boolean).join(", ") || "unidades del catálogo";
+  return tpl.replaceAll("{isos}", list);
 }
 
 export function legalParagraphs(body) {

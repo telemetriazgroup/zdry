@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError, publicUrl } from "../api.js";
-import { DEFAULT_CATALOG_COPY, mergeCatalogCopy } from "../catalog-copy.js";
+import { DEFAULT_CATALOG_COPY, STEP_ICONS, mergeCatalogCopy } from "../catalog-copy.js";
 import SiteFooter from "./SiteFooter.jsx";
 
 function Field({ label, hint, children }) {
@@ -85,7 +85,10 @@ function ClientPreview({ copy }) {
             <div className="value-row">
               {(copy.steps || []).map((s, i) => (
                 <div className="value-card step-card" key={i}>
-                  <span className="step-n">{i + 1}</span>
+                  <div className="step-icon-wrap">
+                    <img className="step-icon" src={publicUrl(STEP_ICONS[i] || STEP_ICONS[0])} alt="" />
+                    <span className="step-n">{i + 1}</span>
+                  </div>
                   <b>{s.title}</b>
                   <p>{s.body}</p>
                 </div>
@@ -98,8 +101,8 @@ function ClientPreview({ copy }) {
               <div className="card-title">40&apos; Standard</div>
               <div className="card-iso">ZDRU0000000</div>
               <div className="card-footer">
-                <div className="price-cta">💬 {copy.requestPrice}</div>
-                <span className="link-btn">{copy.addToQuote}</span>
+                <div className="price-cta">{copy.requestPrice}</div>
+                <span className="link-btn">{copy.requestQuote}</span>
               </div>
             </div>
           </article>
@@ -204,6 +207,7 @@ export default function CatalogCopy() {
             <h3>Botones y barra</h3>
             <div className="form-grid">
               <Field label="Solicitar precio"><input value={copy.requestPrice} onChange={(e) => set("requestPrice", e.target.value)} /></Field>
+              <Field label="Solicitar cotización"><input value={copy.requestQuote} onChange={(e) => set("requestQuote", e.target.value)} /></Field>
               <Field label="Agregar"><input value={copy.addToQuote} onChange={(e) => set("addToQuote", e.target.value)} /></Field>
               <Field label="Ya en cotización"><input value={copy.inQuote} onChange={(e) => set("inQuote", e.target.value)} /></Field>
               <Field label="Carrito"><input value={copy.cartLabel} onChange={(e) => set("cartLabel", e.target.value)} /></Field>
@@ -211,6 +215,18 @@ export default function CatalogCopy() {
               <Field label="Salir"><input value={copy.logoutLabel} onChange={(e) => set("logoutLabel", e.target.value)} /></Field>
             </div>
             <Field label="Sin stock"><textarea rows={2} value={copy.emptyStock} onChange={(e) => set("emptyStock", e.target.value)} /></Field>
+            <h3 style={{ marginTop: 16 }}>WhatsApp</h3>
+            <p className="section-sub">Cotizar y pedir precio abren este chat. Número con código de país, solo dígitos (ej. 51987654321). Si lo dejas vacío se usa el teléfono del pie.</p>
+            <div className="form-grid">
+              <Field label="Número WhatsApp"><input value={copy.whatsapp} onChange={(e) => set("whatsapp", e.target.value)} placeholder="51987654321" /></Field>
+              <Field label="Etiqueta del botón"><input value={copy.whatsappCta} onChange={(e) => set("whatsappCta", e.target.value)} /></Field>
+            </div>
+            <Field label="Mensaje al pedir una unidad" hint="Usa {iso} {type} {cat} {price}.">
+              <textarea rows={3} value={copy.whatsappMessage} onChange={(e) => set("whatsappMessage", e.target.value)} />
+            </Field>
+            <Field label="Mensaje del carrito" hint="Usa {isos}.">
+              <textarea rows={2} value={copy.whatsappCartMessage} onChange={(e) => set("whatsappCartMessage", e.target.value)} />
+            </Field>
           </div>
 
           <div className="panel">

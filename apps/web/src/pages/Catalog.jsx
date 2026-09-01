@@ -2,7 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError, apiUrl, goAppRoot, goCatalogHome, publicUrl } from "../api.js";
 import { useAuth } from "../auth.jsx";
-import { DEFAULT_CATALOG_COPY, mergeCatalogCopy } from "../catalog-copy.js";
+import {
+  DEFAULT_CATALOG_COPY,
+  STEP_ICONS,
+  cartWhatsAppMessage,
+  mergeCatalogCopy,
+  unitWhatsAppMessage,
+  whatsappUrl,
+} from "../catalog-copy.js";
 import SiteFooter from "./SiteFooter.jsx";
 
 const CART_KEY = "zdry_cart";
@@ -34,6 +41,23 @@ function HeroLeadCarousel({ leads }) {
 function publishedSlots(u) {
   if (Array.isArray(u?.photos) && u.photos.length) return u.photos;
   return (u?.photoSlots || []).map((ok, i) => (ok ? i : null)).filter((x) => x !== null);
+}
+
+function WaIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <path fill="currentColor" d="M17.47 14.38c-.28-.14-1.66-.82-1.92-.91-.26-.1-.44-.14-.63.14-.18.27-.72.9-.88 1.08-.16.18-.33.2-.61.07-.28-.14-1.18-.43-2.25-1.38-.83-.74-1.39-1.65-1.55-1.93-.16-.28-.02-.43.12-.57.13-.13.28-.33.42-.5.14-.16.18-.28.28-.46.09-.19.05-.35-.02-.49-.07-.14-.63-1.51-.86-2.07-.23-.55-.46-.47-.63-.48h-.54c-.18 0-.48.07-.73.35-.26.28-.96.94-.96 2.3 0 1.35 1 2.67 1.13 2.85.14.19 1.92 2.93 4.65 4.11.65.28 1.16.45 1.56.57.65.21 1.25.18 1.72.11.53-.08 1.63-.67 1.86-1.31.23-.64.23-1.19.16-1.31-.07-.11-.25-.18-.53-.32zM12.04 21.5h-.01A9.46 9.46 0 0 1 7.3 20.2L3 21.4l1.23-4.2A9.47 9.47 0 0 1 2.5 12C2.5 6.76 6.78 2.5 12.03 2.5 17.3 2.5 21.5 6.76 21.5 12c0 5.24-4.22 9.5-9.46 9.5zm0-17.3C7.48 4.2 3.8 7.86 3.8 12c0 1.64.48 3.24 1.4 4.62l-.91 3.13 3.22-.85a8.16 8.16 0 0 0 4.52 1.35h.01c4.55 0 8.25-3.68 8.25-8.25 0-4.56-3.7-8.25-8.25-8.25z" />
+    </svg>
+  );
+}
+
+function WhatsAppLink({ href, children, className = "btn-whatsapp" }) {
+  return (
+    <a className={className} href={href} target="_blank" rel="noopener noreferrer">
+      <WaIcon />
+      <span>{children}</span>
+    </a>
+  );
 }
 
 function mediaSrc(iso, slot, version) {
@@ -111,6 +135,12 @@ export default function Catalog() {
     api("/catalog/copy").then((d) => setCopy(mergeCatalogCopy(d))).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    const lock = Boolean(pdp || quoteOpen);
+    document.body.classList.toggle("modal-locked", lock);
+    return () => document.body.classList.remove("modal-locked");
+  }, [pdp, quoteOpen]);
+
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
@@ -152,10 +182,6 @@ export default function Catalog() {
 
   function closeUnit() {
     goCatalogHome(nav);
-  }
-
-  function addToCart(iso) {
-    setCart((c) => (c.includes(iso) ? c : [...c, iso]));
   }
 
   function removeFromCart(iso) {
@@ -325,7 +351,10 @@ export default function Catalog() {
           <div className="value-row">
             {(copy.steps || []).map((s, i) => (
               <div className="value-card step-card" key={s.title + i}>
-                <span className="step-n">{i + 1}</span>
+                <div className="step-icon-wrap">
+                  <img className="step-icon" src={publicUrl(STEP_ICONS[i] || STEP_ICONS[0])} alt="" />
+                  <span className="step-n">{i + 1}</span>
+                </div>
                 <b>{s.title}</b>
                 <p>{s.body}</p>
               </div>
@@ -353,11 +382,13 @@ export default function Catalog() {
                   {u.showPrice ? (
                     <div className="card-price">{money(u.gross)} <small>+ IGV incluido aprox. · neto {money(u.priceList)}</small></div>
                   ) : (
-                    <div className="price-cta">💬 {copy.requestPrice}</div>
+                    <WhatsAppLink className="price-cta price-cta-wa" href={whatsappUrl(copy, unitWhatsAppMessage(copy, u))}>
+                      {copy.requestPrice}
+                    </WhatsAppLink>
                   )}
-                  <button className="link-btn" type="button" onClick={() => addToCart(u.iso)} disabled={u.status === "Reservado"}>
-                    {cart.includes(u.iso) ? copy.inQuote : copy.addToQuote}
-                  </button>
+                  <WhatsAppLink className="link-btn" href={whatsappUrl(copy, unitWhatsAppMessage(copy, u))}>
+                    {u.showPrice ? copy.requestQuote : copy.whatsappCta}
+                  </WhatsAppLink>
                 </div>
               </div>
             </article>
@@ -377,7 +408,7 @@ export default function Catalog() {
 
       {pdp ? (
         <div className="overlay open" onClick={(e) => { if (e.target === e.currentTarget) closeUnit(); }}>
-          <div className="modal">
+          <div className="modal pdp-modal">
             <div className="modal-head">
               <div>
                 <h3>{pdp.typeLabel} · {pdp.iso}</h3>
@@ -464,11 +495,24 @@ export default function Catalog() {
                   </div>
                   {freight ? <div className="freight-result show">≈ {money(freight.minSell)} · {freight.km} km · {freight.days} día(s)</div> : null}
                 </div>
-                <button className="btn-primary" style={{ marginTop: 16, width: "100%" }} type="button" disabled={pdp.reserved} onClick={() => { addToCart(pdp.iso); setQuoteOpen(true); }}>
-                  {pdp.reserved ? "Reservado" : "Agregar a cotización"}
-                </button>
+                <div className="pdp-cta-inline">
+                  {pdp.reserved ? (
+                    <button className="btn-primary" style={{ marginTop: 16, width: "100%" }} type="button" disabled>Reservado</button>
+                  ) : (
+                    <WhatsAppLink href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp))}>
+                      {pdp.showPrice ? copy.requestQuote : copy.requestPrice}
+                    </WhatsAppLink>
+                  )}
+                </div>
               </div>
             </div>
+            {pdp.reserved ? null : (
+              <div className="pdp-cta-bar">
+                <WhatsAppLink href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp))}>
+                  {pdp.showPrice ? copy.requestQuote : copy.requestPrice}
+                </WhatsAppLink>
+              </div>
+            )}
           </div>
         </div>
       ) : null}
@@ -481,7 +525,10 @@ export default function Catalog() {
               <button className="modal-close" type="button" onClick={() => setQuoteOpen(false)}>✕</button>
             </div>
             <div className="modal-body single">
-              {cart.length === 0 ? <p className="section-sub">Tu cotización está vacía. El catálogo es público: puedes agregar unidades sin cuenta.</p> : (
+              <WhatsAppLink href={whatsappUrl(copy, cart.length ? cartWhatsAppMessage(copy, cart) : cartWhatsAppMessage(copy, []))}>
+                {copy.whatsappCta} · {copy.requestQuote}
+              </WhatsAppLink>
+              {cart.length === 0 ? <p className="section-sub" style={{ marginTop: 12 }}>O arma una lista y te llevamos esas unidades al chat.</p> : (
                 <ul>{cart.map((iso) => (
                   <li key={iso} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0" }}>
                     <span className="card-iso">{iso}</span>

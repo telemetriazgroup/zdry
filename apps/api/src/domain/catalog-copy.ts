@@ -25,8 +25,13 @@ export type CatalogCopy = {
   stepsTitle: string;
   steps: CatalogStep[];
   requestPrice: string;
+  requestQuote: string;
   addToQuote: string;
   inQuote: string;
+  whatsapp: string;
+  whatsappCta: string;
+  whatsappMessage: string;
+  whatsappCartMessage: string;
   emptyStock: string;
   cartLabel: string;
   loginLabel: string;
@@ -84,8 +89,13 @@ export const DEFAULT_CATALOG_COPY: CatalogCopy = {
     { title: "Recibe tu dry", body: "Coordinamos el despacho del equipo hasta tu planta." },
   ],
   requestPrice: "Solicitar precio",
+  requestQuote: "Solicitar cotización",
   addToQuote: "Agregar",
   inQuote: "En cotización",
+  whatsapp: "",
+  whatsappCta: "WhatsApp",
+  whatsappMessage: "Hola, me interesa el contenedor {iso} ({type}, {cat}) — {price}. ¿Sigue disponible?",
+  whatsappCartMessage: "Hola, quiero cotizar estas unidades: {isos}. ¿Siguen disponibles?",
   emptyStock: "No hay unidades publicadas con esos filtros. Prueba otro tipo, condición o depósito.",
   cartLabel: "Cotización",
   loginLabel: "Entrar",
@@ -157,8 +167,13 @@ export function normalizeCatalogCopy(raw: unknown): CatalogCopy {
     stepsTitle: asText(src.stepsTitle, d.stepsTitle),
     steps,
     requestPrice: asText(src.requestPrice, d.requestPrice),
+    requestQuote: asText(src.requestQuote, d.requestQuote),
     addToQuote: asText(src.addToQuote, d.addToQuote),
     inQuote: asText(src.inQuote, d.inQuote),
+    whatsapp: asText(src.whatsapp, d.whatsapp),
+    whatsappCta: asText(src.whatsappCta, d.whatsappCta),
+    whatsappMessage: asText(src.whatsappMessage, d.whatsappMessage),
+    whatsappCartMessage: asText(src.whatsappCartMessage, d.whatsappCartMessage),
     emptyStock: asText(src.emptyStock, d.emptyStock),
     cartLabel: asText(src.cartLabel, d.cartLabel),
     loginLabel: asText(src.loginLabel, d.loginLabel),
