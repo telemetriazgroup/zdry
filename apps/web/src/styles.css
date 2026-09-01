@@ -190,7 +190,10 @@ table.data td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-s
 .dash-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; }
 @media (max-width: 900px) {
   .dash-grid { grid-template-columns: 1fr; }
-  .value-row { grid-template-columns: 1fr; }
+  .value-row { grid-template-columns: 1fr; gap: 10px; }
+  .step-card { padding: 18px 16px 16px; }
+  .step-icon-wrap, .step-icon { width: 96px; height: 96px; }
+  .step-icon { border-radius: 18px; }
 }
 .recv-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
 .recv-short { display: none; }
@@ -321,25 +324,29 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .value-card p { color: var(--text-2); font-size: 13px; line-height: 1.4; }
 .steps-block { margin-bottom: 18px; }
 .steps-title { font-size: 18px; color: var(--navy); margin: 0 0 12px; letter-spacing: -0.01em; }
-.step-card { padding-top: 16px; display: flex; flex-direction: column; align-items: flex-start; }
+.step-card {
+  padding: 22px 18px 18px;
+  display: flex; flex-direction: column; align-items: center;
+  text-align: center;
+}
 .step-icon-wrap {
   position: relative;
-  width: 72px; height: 72px;
-  margin-bottom: 12px;
+  width: 120px; height: 120px;
+  margin: 0 auto 14px;
 }
 .step-icon {
-  width: 72px; height: 72px;
+  width: 120px; height: 120px;
   object-fit: cover; display: block;
-  border-radius: 16px;
+  border-radius: 22px;
   background: #f7f1e8;
-  box-shadow: 0 4px 12px rgba(18, 32, 58, .08);
+  box-shadow: 0 6px 16px rgba(18, 32, 58, .1);
 }
 .step-n {
   position: absolute; left: -6px; top: -6px;
   display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 26px; border-radius: 50%;
+  width: 28px; height: 28px; border-radius: 50%;
   background: var(--orange); color: #fff;
-  font-size: 12px; font-weight: 800;
+  font-size: 13px; font-weight: 800;
   box-shadow: 0 2px 6px rgba(217, 98, 47, .35);
 }
 .empty-stock { text-align: center; color: var(--text-2); font-weight: 600; padding: 24px 8px; }
@@ -425,6 +432,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .copy-preview-site .hero { margin-bottom: 0; padding: 24px 16px 72px; }
 .copy-preview-site .hero h1 { font-size: 22px; }
 .copy-preview-site .catalog-wrap { padding: 20px 12px 24px; }
+.copy-preview-site .step-icon-wrap, .copy-preview-site .step-icon { width: 72px; height: 72px; }
+.copy-preview-site .step-icon { border-radius: 14px; }
 .copy-preview-site .cookie-bar { position: sticky; bottom: 0; }
 .copy-preview-site .site-footer { padding-bottom: 20px; }
 
@@ -695,6 +704,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .stock-bar { padding: 12px 14px; }
   .stock-sort, .stock-sort select { width: 100%; }
   .value-row { grid-template-columns: 1fr; }
+  .steps-title { text-align: center; font-size: 17px; }
+  .step-card { padding: 20px 16px 16px; }
+  .step-icon-wrap, .step-icon { width: 88px; height: 88px; }
+  .step-icon { border-radius: 18px; }
+  .step-n { width: 26px; height: 26px; font-size: 12px; }
   .site-footer { padding: 24px 16px 88px; }
   .site-footer-top { flex-direction: column; align-items: flex-start; }
   .site-credit { white-space: normal; }
