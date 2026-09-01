@@ -3,16 +3,48 @@ export const BASE_PATH = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 /** Raíz con barra final. Sin ella el navegador pierde /zdry/ y los assets. */
 export const APP_ROOT = `${BASE_PATH || ""}/`;
 
+export function rewriteAppRootUrl(url) {
+  if (url == null || typeof window === "undefined") return url;
+  try {
+    const u = new URL(String(url), window.location.origin);
+    if (u.pathname === BASE_PATH) return `${APP_ROOT}${u.search}${u.hash}`;
+  } catch {
+    /* ignore */
+  }
+  return url;
+}
+
 export function ensureAppSlash() {
   if (typeof window === "undefined") return;
   const { pathname, search, hash } = window.location;
   if (pathname === BASE_PATH) {
-    window.history.replaceState(null, "", `${APP_ROOT}${search}${hash}`);
+    window.history.replaceState(window.history.state, "", `${APP_ROOT}${search}${hash}`);
   }
+}
+
+let historyPatched = false;
+export function installHistorySlashFix() {
+  if (historyPatched || typeof window === "undefined") return;
+  historyPatched = true;
+  const push = window.history.pushState.bind(window.history);
+  const replace = window.history.replaceState.bind(window.history);
+  window.history.pushState = (data, unused, url) => {
+    push(data, unused, url === undefined ? url : rewriteAppRootUrl(url));
+  };
+  window.history.replaceState = (data, unused, url) => {
+    replace(data, unused, url === undefined ? url : rewriteAppRootUrl(url));
+  };
+  ensureAppSlash();
 }
 
 export function goAppRoot() {
   window.location.assign(APP_ROOT);
+}
+
+/** Cierra ficha / vuelve al catálogo sin dejar la URL en /zdry (sin barra). */
+export function goCatalogHome(navigate) {
+  if (typeof navigate === "function") navigate("/", { replace: true });
+  ensureAppSlash();
 }
 
 export function apiUrl(path) {

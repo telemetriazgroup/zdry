@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, ApiError, apiUrl, goAppRoot, publicUrl } from "../api.js";
+import { api, ApiError, apiUrl, goAppRoot, goCatalogHome, publicUrl } from "../api.js";
 import { useAuth } from "../auth.jsx";
 import { DEFAULT_CATALOG_COPY, mergeCatalogCopy } from "../catalog-copy.js";
 import SiteFooter from "./SiteFooter.jsx";
@@ -148,6 +148,10 @@ export default function Catalog() {
 
   function openUnit(iso) {
     nav(`/u/${iso}`);
+  }
+
+  function closeUnit() {
+    goCatalogHome(nav);
   }
 
   function addToCart(iso) {
@@ -372,14 +376,14 @@ export default function Catalog() {
       <SiteFooter copy={copy} />
 
       {pdp ? (
-        <div className="overlay open" onClick={(e) => { if (e.target === e.currentTarget) nav("/"); }}>
+        <div className="overlay open" onClick={(e) => { if (e.target === e.currentTarget) closeUnit(); }}>
           <div className="modal">
             <div className="modal-head">
               <div>
                 <h3>{pdp.typeLabel} · {pdp.iso}</h3>
                 <div className="muted">{pdp.catLabel} · {pdp.depotName}</div>
               </div>
-              <button className="modal-close" type="button" onClick={() => nav("/")}>✕</button>
+              <button className="modal-close" type="button" onClick={closeUnit}>✕</button>
             </div>
             <div className="modal-body">
               <div>
