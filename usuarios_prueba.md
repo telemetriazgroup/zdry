@@ -8,6 +8,7 @@ Clave de todos (salvo que se haya cambiado): **`Zdry123!`**
 
 | Correo | Nombre | Rol |
 |---|---|---|
+| `superadmin@zdry.pe` | Superadmin ZDRY | Superadmin (Odoo, textos del catálogo, respaldo y vaciado) |
 | `admin@zdry.pe` | Ana Admin | Administrador Total |
 | `gerente@zdry.pe` | Gabriel Gerente | Gerente de Ventas |
 | `vendedor@zdry.pe` | Valeria Vendedor | Vendedor / Comercial |

@@ -234,7 +234,7 @@ export class AccountController {
 }
 
 @Controller("admin")
-@Roles("admin")
+@Roles("admin", "superadmin")
 export class AdminOdooController {
   constructor(private readonly quotes: QuotesService) {}
 

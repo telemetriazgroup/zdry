@@ -4,6 +4,7 @@ import { api, apiUrl } from "./api.js";
 const AuthContext = createContext(null);
 
 export const ROLE_LABELS = {
+  superadmin: "Superadmin",
   admin: "Administrador Total",
   gerente: "Gerente de Ventas",
   vendedor: "Vendedor / Comercial",
@@ -13,6 +14,7 @@ export const ROLE_LABELS = {
 };
 
 export const ROLE_DESC = {
+  superadmin: "Integraciones, textos del catálogo, respaldos internos y vaciado del sistema.",
   admin: "Ve inventario con costo real, personas, maestros y configuración.",
   gerente: "Define reglas de precio y visibilidad. No ve FOB ni C_T.",
   vendedor: "Cotiza, valida comprobantes y confirma asignación. Nunca ve el costo real.",
@@ -22,6 +24,12 @@ export const ROLE_DESC = {
 };
 
 export const ROLE_NAV = {
+  superadmin: [
+    { to: "/app", label: "Inicio", end: true },
+    { to: "/app/integraciones", label: "Integración Odoo" },
+    { to: "/app/catalogo-textos", label: "Textos del catálogo" },
+    { to: "/app/respaldo", label: "Respaldo y recuperación" },
+  ],
   admin: [
     { to: "/app", label: "Inicio", end: true },
     { to: "/app/inventario", label: "Inventario y costos" },

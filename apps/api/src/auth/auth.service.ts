@@ -234,6 +234,7 @@ export class AuthService {
     if (!targetId || targetId === admin.id) throw new BadRequestException("Elige un usuario distinto.");
     const target = await this.prisma.user.findUnique({ where: { id: targetId } });
     if (!target) throw new BadRequestException("Usuario no encontrado.");
+    if (target.role === "superadmin") throw new ForbiddenException("No se puede abrir la sesión del superadmin.");
     if (!target.active) throw new BadRequestException("Ese usuario está inactivo.");
     const targetAuth = this.asAuth(target, {
       id: admin.id,

@@ -26,6 +26,7 @@ import {
 } from "./demo-dataset";
 
 const PROTECTED_EMAILS = [
+  "superadmin@zdry.pe",
   "admin@zdry.pe",
   "gerente@zdry.pe",
   "vendedor@zdry.pe",
@@ -205,6 +206,10 @@ export class DemoService {
 
   async listBackups() {
     return this.prisma.dataBackup.findMany({ orderBy: { createdAt: "desc" }, take: 50 });
+  }
+
+  async exportSnapshot() {
+    return this.buildSnapshot();
   }
 
   async restore(id: string, user: AuthUser, ip?: string) {

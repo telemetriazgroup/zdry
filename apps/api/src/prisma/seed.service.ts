@@ -35,6 +35,9 @@ const DEPOTS = [
   { name: "Patio Paita", city: "Paita", address: "Zona Industrial Paita", dailyRateTeu: 1.0, lat: -5.0892, lng: -81.1144 },
 ];
 
+const SUPERADMIN = { email: "superadmin@zdry.pe", name: "Superadmin ZDRY", role: "superadmin" as const };
+const INIT_KEY = "system_initialized";
+
 const USERS: { email: string; name: string; role: Role }[] = [
   { email: "admin@zdry.pe", name: "Ana Admin", role: "admin" },
   { email: "gerente@zdry.pe", name: "Gabriel Gerente", role: "gerente" },
@@ -52,12 +55,31 @@ export class SeedService implements OnModuleInit {
   async onModuleInit() {
     const hash = await argon2.hash(PASSWORD);
 
-    for (const u of USERS) {
-      await this.prisma.user.upsert({
-        where: { email: u.email },
-        update: { name: u.name, role: u.role, active: true },
-        create: { ...u, passwordHash: hash },
-      });
+    await this.prisma.user.upsert({
+      where: { email: SUPERADMIN.email },
+      update: { name: SUPERADMIN.name, role: "superadmin", active: true },
+      create: { ...SUPERADMIN, passwordHash: hash },
+    });
+
+    const initialized = await this.prisma.appSetting.findUnique({ where: { key: INIT_KEY } });
+    if (!initialized) {
+      for (const u of USERS) {
+        await this.prisma.user.upsert({
+          where: { email: u.email },
+          update: { name: u.name, role: u.role, active: true },
+          create: { ...u, passwordHash: hash },
+        });
+      }
+    } else {
+      for (const u of USERS) {
+        const existing = await this.prisma.user.findUnique({ where: { email: u.email } });
+        if (existing) {
+          await this.prisma.user.update({
+            where: { email: u.email },
+            data: { name: u.name, role: u.role },
+          });
+        }
+      }
     }
 
     for (const t of TYPES) {
@@ -81,7 +103,7 @@ export class SeedService implements OnModuleInit {
       await this.prisma.depot.createMany({ data: DEPOTS.map((d) => ({ ...d, protected: true })) });
     }
 
-    if ((await this.prisma.customer.count()) === 0) {
+    if (!initialized && (await this.prisma.customer.count()) === 0) {
       await this.prisma.customer.createMany({
         data: [
           { rucDni: "20123456789", companyName: "Logística Andina SAC", email: "compras@andina.pe", phone: "+51 999 111 222", risk: RiskGrade.A },
@@ -155,7 +177,7 @@ export class SeedService implements OnModuleInit {
     }
 
     const andina = await this.prisma.customer.findFirst({ where: { companyName: "Logística Andina SAC" } });
-    if (andina) {
+    if (andina && !initialized) {
       await this.prisma.user.upsert({
         where: { email: "cliente@andina.pe" },
         update: { name: "Compras Andina", role: "cliente", active: true, customerId: andina.id },
@@ -168,6 +190,12 @@ export class SeedService implements OnModuleInit {
         },
       });
     }
+
+    await this.prisma.appSetting.upsert({
+      where: { key: INIT_KEY },
+      update: {},
+      create: { key: INIT_KEY, value: { at: new Date().toISOString() } },
+    });
 
     const pricing = await this.prisma.pricingRule.findMany();
     const rules = pricing.length
@@ -192,6 +220,6 @@ export class SeedService implements OnModuleInit {
       });
     }
 
-    this.log.log(`Seed listo. Usuarios: ${USERS.map((u) => u.email).join(", ")}, cliente@andina.pe / clave ${PASSWORD}`);
+    this.log.log(`Seed listo. Superadmin ${SUPERADMIN.email}; staff: ${USERS.map((u) => u.email).join(", ")} / clave ${PASSWORD}`);
   }
 }

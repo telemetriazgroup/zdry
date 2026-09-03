@@ -4,6 +4,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -77,5 +78,28 @@ export class StorageService implements OnModuleInit {
 
   async delete(key: string) {
     await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
+  }
+
+  async listKeys(prefix = ""): Promise<string[]> {
+    const keys: string[] = [];
+    let token: string | undefined;
+    do {
+      const out = await this.s3.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: prefix || undefined,
+          ContinuationToken: token,
+        }),
+      );
+      for (const obj of out.Contents || []) {
+        if (obj.Key) keys.push(obj.Key);
+      }
+      token = out.IsTruncated ? out.NextContinuationToken : undefined;
+    } while (token);
+    return keys;
+  }
+
+  isArchiveKey(key: string) {
+    return key.startsWith("backups/") || key.startsWith("system-backups/");
   }
 }

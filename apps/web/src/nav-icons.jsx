@@ -41,6 +41,8 @@ export function iconFor(path) {
   if (path.includes("compras")) return "receipt";
   if (path.includes("recepcion")) return "inbox";
   if (path.includes("patio")) return "grid";
+  if (path.includes("integraciones")) return "gear";
+  if (path.includes("respaldo")) return "file";
   if (path.includes("catalogo-textos")) return "tag";
   if (path.includes("catalogo-media")) return "camera";
   if (path.includes("perfil")) return "user";

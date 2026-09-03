@@ -17,6 +17,7 @@ import { WarehouseModule } from "./warehouse/warehouse.module";
 import { QuotesModule } from "./quotes/quotes.module";
 import { CatalogMediaModule } from "./catalog-media/catalog-media.module";
 import { DemoModule } from "./demo/demo.module";
+import { SuperadminModule } from "./superadmin/superadmin.module";
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { DemoModule } from "./demo/demo.module";
     CatalogMediaModule,
     ConfigAppModule,
     DemoModule,
+    SuperadminModule,
   ],
   controllers: [HealthController],
   providers: [SeedService],

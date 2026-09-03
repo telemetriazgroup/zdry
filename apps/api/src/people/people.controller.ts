@@ -93,7 +93,7 @@ export class PeopleController {
   @Get("collaborators")
   async collaborators() {
     const rows = await this.prisma.user.findMany({
-      where: await this.prisma.hideDemo(),
+      where: { ...(await this.prisma.hideDemo()), role: { not: "superadmin" } },
       orderBy: { name: "asc" },
     });
     return rows.map(({ passwordHash, refreshTokenHash, ...u }) => u);
@@ -106,6 +106,7 @@ export class PeopleController {
     @Req() req: Request,
   ) {
     if (!body.email || !body.name || !body.role) throw new BadRequestException("Email, nombre y rol son obligatorios");
+    if (body.role === "superadmin") throw new BadRequestException("El rol superadmin no se asigna desde Personas.");
     const password = body.password || process.env.SEED_PASSWORD || "Zdry123!";
     const row = await this.prisma.user.create({
       data: {
@@ -138,6 +139,7 @@ export class PeopleController {
     if (password.length < 8) throw new BadRequestException("La clave debe tener al menos 8 caracteres.");
     const row = await this.prisma.user.findUnique({ where: { id } });
     if (!row) throw new BadRequestException("Usuario no encontrado.");
+    if (row.role === "superadmin") throw new BadRequestException("No se puede restablecer la clave del superadmin aquí.");
     await this.prisma.user.update({ where: { id }, data: { passwordHash: await argon2.hash(password) } });
     await this.audit.log({ user, action: "reset_password", entity: "User", entityId: id, ip: req.ip });
     return { ok: true };

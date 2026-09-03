@@ -17,6 +17,8 @@ import QuotesHub from "./QuotesHub.jsx";
 import CatalogMedia from "./CatalogMedia.jsx";
 import CatalogCopy from "./CatalogCopy.jsx";
 import Profile from "./Profile.jsx";
+import OdooIntegrations from "./OdooIntegrations.jsx";
+import SystemBackup from "./SystemBackup.jsx";
 
 const SIDEBAR_KEY = "zdry.sidebarCollapsed";
 
@@ -161,6 +163,8 @@ export default function Shell() {
             <Route path="almacen/despachos" element={<Gate nav={nav} role={user.role} path="/app/almacen/despachos"><Restricted title="Despachos" /></Gate>} />
             <Route path="catalogo-textos" element={<Gate nav={nav} role={user.role} path="/app/catalogo-textos"><CatalogCopy /></Gate>} />
             <Route path="catalogo-media" element={<Gate nav={nav} role={user.role} path="/app/catalogo-media"><CatalogMedia /></Gate>} />
+            <Route path="integraciones" element={<Gate nav={nav} role={user.role} path="/app/integraciones"><OdooIntegrations /></Gate>} />
+            <Route path="respaldo" element={<Gate nav={nav} role={user.role} path="/app/respaldo"><SystemBackup /></Gate>} />
             <Route path="*" element={<Navigate to="/app" replace />} />
           </Routes>
         </div>

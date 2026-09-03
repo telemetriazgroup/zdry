@@ -48,12 +48,14 @@ export class ConfigController {
   }
 
   @Get("catalog-copy")
+  @Roles("admin", "gerente", "superadmin")
   async getCatalogCopy() {
     const row = await this.prisma.appSetting.findUnique({ where: { key: CATALOG_COPY_KEY } });
     return normalizeCatalogCopy(row?.value);
   }
 
   @Put("catalog-copy")
+  @Roles("admin", "gerente", "superadmin")
   async putCatalogCopy(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser, @Req() req: Request) {
     const value = normalizeCatalogCopy(body);
     await this.prisma.appSetting.upsert({
