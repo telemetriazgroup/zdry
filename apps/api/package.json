@@ -21,6 +21,7 @@
     "argon2": "^0.43.1",
     "cookie-parser": "^1.4.7",
     "ioredis": "^5.11.1",
+    "jimp": "^0.22.12",
     "multer": "^2.3.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",

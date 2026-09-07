@@ -18,6 +18,7 @@ import { QuotesModule } from "./quotes/quotes.module";
 import { CatalogMediaModule } from "./catalog-media/catalog-media.module";
 import { DemoModule } from "./demo/demo.module";
 import { SuperadminModule } from "./superadmin/superadmin.module";
+import { OdooImportModule } from "./odoo-import/odoo-import.module";
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { SuperadminModule } from "./superadmin/superadmin.module";
     ConfigAppModule,
     DemoModule,
     SuperadminModule,
+    OdooImportModule,
   ],
   controllers: [HealthController],
   providers: [SeedService],

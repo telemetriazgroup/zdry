@@ -117,13 +117,32 @@ model Container {
   archiveReason      String?
   archivedById       String?
   archivedByName     String?
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
-  history            ContainerHistory[]
-  photos             InspectionPhoto[]
-  positions          ContainerPosition[]
+  intakeOrigin       String              @default("manual")
+  odooLotId          Int?
+  odooLocation       String?
+  odooDua            String?
+  odooPoName         String?
+  odooPoId           Int?
+  odooVendorName     String?
+  odooBillName       String?
+  odooUnitPrice      Decimal?            @db.Decimal(12, 2)
+  originCountry      String?
+  conditionFloor     String?
+  conditionRoof      String?
+  conditionDoors     String?
+  conditionPaint     String?
+  odooSource              Json?
+  fieldRegularizedAt      DateTime?
+  fieldRegularizedByName  String?
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+  history                 ContainerHistory[]
+  photos                  InspectionPhoto[]
+  positions               ContainerPosition[]
 
   @@index([depotId])
+  @@index([odooLotId])
+  @@index([intakeOrigin])
   @@index([status])
   @@index([damNumber])
   @@index([depotId, lado])
@@ -131,6 +150,8 @@ model Container {
   @@index([mediaStatus])
   @@index([demo])
   @@index([archivedAt])
+  @@index([fieldRegularizedAt])
+  @@index([mediaApprovedAt])
 }
 
 model ContainerHistory {
@@ -247,6 +268,7 @@ model InspectionPhoto {
   container      Container @relation(fields: [iso], references: [iso], onDelete: Cascade)
   slot           Int
   storageKey     String
+  publicKey      String?
   mimeType       String
   originalName   String
   sizeBytes      Int
@@ -464,6 +486,70 @@ model Dispatch {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  @@index([status])
+}
+
+model OdooLotCandidate {
+  id             String    @id @default(uuid())
+  odooLotId      Int       @unique
+  odooWriteDate  DateTime?
+  serialRaw      String
+  isoNormalized  String
+  iso6346Ok      Boolean   @default(false)
+  productName    String    @default("")
+  productCode    String    @default("")
+  locationName   String    @default("")
+  locationOdooId Int?
+  qtyOnHand      Float     @default(0)
+  color          String?
+  tareKg         Int?
+  mgwKg          Int?
+  year           Int?
+  manufacturer   String?
+  dua            String?
+  odooPoName     String?
+  odooPoId       Int?
+  odooVendorName String?
+  odooBillName   String?
+  odooUnitPrice  Decimal?  @db.Decimal(12, 2)
+  originCountry  String?
+  material       String?
+  zgroupCode     String?
+  zdryType       String?
+  zdryCat        String?
+  zdryNotes      String    @default("")
+  localTouched   Boolean   @default(false)
+  odooSyncStatus String    @default("live")
+  odooSyncError  String?
+  payload        Json?
+  status         String    @default("pending")
+  containerIso   String?
+  lastSyncedAt   DateTime  @default(now())
+  assimilatedAt  DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  writebacks     OdooFieldWriteback[]
+
+  @@index([isoNormalized])
+  @@index([status])
+  @@index([lastSyncedAt])
+  @@index([odooSyncStatus])
+}
+
+model OdooFieldWriteback {
+  id          String           @id @default(uuid())
+  candidateId String
+  candidate   OdooLotCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  field       String
+  value       Json
+  status      String           @default("pending")
+  attempts    Int              @default(0)
+  lastError   String?
+  sentAt      DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([candidateId, status])
   @@index([status])
 }
 

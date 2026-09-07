@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, apiUpload, ApiError, apiUrl, formatWhen } from "../api.js";
 import { useAuth } from "../auth.jsx";
+
+const GRADES = [
+  { value: "", label: "—" },
+  { value: "bueno", label: "Bueno" },
+  { value: "regular", label: "Regular" },
+  { value: "malo", label: "Malo" },
+];
 
 const STATUS = {
   pendiente: { label: "Pendiente de publicación", color: "#c9720b" },
@@ -24,6 +32,7 @@ export default function CatalogMedia() {
   const [iso, setIso] = useState("");
   const [unit, setUnit] = useState(null);
   const [notes, setNotes] = useState("");
+  const [conds, setConds] = useState({ conditionFloor: "", conditionRoof: "", conditionDoors: "", conditionPaint: "" });
   const [rejectNote, setRejectNote] = useState("");
   const [rejectingSlot, setRejectingSlot] = useState(null);
   const [error, setError] = useState("");
@@ -31,6 +40,7 @@ export default function CatalogMedia() {
   const [bust, setBust] = useState(0);
   const [preview, setPreview] = useState(null);
   const [histPreview, setHistPreview] = useState(null);
+  const [portrait, setPortrait] = useState({});
 
   const loadList = useCallback(() => {
     api("/catalog-media").then(setRows).catch((e) => setError(e.message));
@@ -46,8 +56,15 @@ export default function CatalogMedia() {
     setMsg("");
     const u = await api(`/catalog-media/${nextIso}`);
     setIso(nextIso);
+    setPortrait({});
     setUnit(u);
     setNotes(u.inspectionNotes || "");
+    setConds({
+      conditionFloor: u.conditionFloor || "",
+      conditionRoof: u.conditionRoof || "",
+      conditionDoors: u.conditionDoors || "",
+      conditionPaint: u.conditionPaint || "",
+    });
     setBust(Date.now());
     setPreview(firstPreview(u));
     setHistPreview(null);
@@ -65,12 +82,22 @@ export default function CatalogMedia() {
 
   async function saveNotes() {
     try {
-      const u = await api(`/catalog-media/${iso}`, { method: "PATCH", body: { inspectionNotes: notes } });
-      await applyUnit(u, "Descripción guardada. Publicar u ocultar el catálogo no cambia.");
+      const u = await api(`/catalog-media/${iso}`, {
+        method: "PATCH",
+        body: { inspectionNotes: notes, ...conds },
+      });
+      setConds({
+        conditionFloor: u.conditionFloor || "",
+        conditionRoof: u.conditionRoof || "",
+        conditionDoors: u.conditionDoors || "",
+        conditionPaint: u.conditionPaint || "",
+      });
+      await applyUnit(u, "Evaluación y descripción guardadas. No salen al catálogo público.");
     } catch (e) {
       setError(e instanceof ApiError ? e.message : e.message);
     }
   }
+
 
   async function upload(slot, file) {
     if (!file || !iso) return;
@@ -86,10 +113,26 @@ export default function CatalogMedia() {
     }
   }
 
+  function markOrientation(slot, el) {
+    if (!el?.naturalWidth) return;
+    const vertical = el.naturalHeight > el.naturalWidth;
+    setPortrait((p) => (p[slot] === vertical ? p : { ...p, [slot]: vertical }));
+  }
+
   async function publish() {
+    const names = unit?.photoLabels || meta.photoLabels || [];
+    const verticals = Object.entries(portrait)
+      .filter(([, v]) => v)
+      .map(([slot]) => `${Number(slot) + 1}. ${names[Number(slot)] || `Foto ${Number(slot) + 1}`}`);
+    if (verticals.length) {
+      const ok = window.confirm(
+        `Estas fotos están en vertical y no cubren el ancho de la ficha web (quedan bandas a los lados):\n\n${verticals.join("\n")}\n\n¿Publicar igual? Lo ideal es reemplazarlas por fotos horizontales del contenedor.`,
+      );
+      if (!ok) return;
+    }
     try {
       const u = await api(`/catalog-media/${iso}/approve`, { method: "POST", body: {} });
-      await applyUnit(u, "Visible en el catálogo público. El cliente solo ve las fotos activas.");
+      await applyUnit(u, "Visible en el catálogo. Las fotos horizontales cubren todo el ancho. El original de patio no se toca.");
     } catch (e) {
       setError(e instanceof ApiError ? e.message : e.message);
     }
@@ -137,13 +180,20 @@ export default function CatalogMedia() {
   return (
     <>
       <h2 className="section-title">Ficha multimedia del catálogo</h2>
-      <p className="section-sub">Fotos de inspección, publicar u ocultar el catálogo. Rechazar una foto la manda al historial de esa unidad.</p>
+      <p className="section-sub">Fotos de inspección, evaluación interna (piso / techo / puertas / pintura) y publicación. La marca de agua se aplica a la copia pública, no al original.</p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
 
       <div className="dash-grid">
         <div className="panel">
           <h3>Unidades en stock</h3>
+          {canApprove ? (
+            <p className="section-sub">
+              La marca de agua y el recorte de la ficha pública se configuran en{" "}
+              <Link to="/app/configuracion">Configuración</Link>
+              {meta.watermarkName ? ` (ahora: ${meta.watermarkName}).` : "."}
+            </p>
+          ) : null}
           <div className="tablewrap">
             <table className="data">
               <thead>
@@ -182,7 +232,12 @@ export default function CatalogMedia() {
               ) : previewingVideo ? (
                 <video key={videoSrc} src={videoSrc} controls autoPlay muted playsInline />
               ) : previewingPhoto ? (
-                <img key={photoSrc(preview.slot)} src={photoSrc(preview.slot)} alt={labels[preview.slot] || `Foto ${preview.slot + 1}`} />
+                <img
+                  key={photoSrc(preview.slot)}
+                  src={photoSrc(preview.slot)}
+                  alt={labels[preview.slot] || `Foto ${preview.slot + 1}`}
+                  onLoad={(e) => markOrientation(preview.slot, e.currentTarget)}
+                />
               ) : (
                 <span className="muted">Carga una foto o elige una del historial para previsualizarla.</span>
               )}
@@ -193,14 +248,15 @@ export default function CatalogMedia() {
                 const filled = !!unit.photoSlots[i];
                 const active = !histPreview && preview?.type === "photo" && preview.slot === i;
                 const inputId = `media-photo-${unit.iso}-${i}`;
+                const vertical = !!portrait[i];
                 return (
-                  <div key={i} className={`media-slot ${filled ? "filled" : ""} ${active ? "active" : ""}`}>
+                  <div key={i} className={`media-slot ${filled ? "filled" : ""} ${active ? "active" : ""} ${vertical ? "portrait" : ""}`}>
                     {filled ? (
                       <>
                         <button type="button" className="media-slot-preview" onClick={() => { setHistPreview(null); setPreview({ type: "photo", slot: i }); }}>
-                          <img src={photoSrc(i)} alt={label} />
+                          <img src={photoSrc(i)} alt={label} onLoad={(e) => markOrientation(i, e.currentTarget)} />
                         </button>
-                        <span className="slot-label">{i + 1}. {label}</span>
+                        <span className="slot-label">{i + 1}. {label}{vertical ? " · vertical" : ""}</span>
                         <label className="replace" htmlFor={inputId}>Cambiar</label>
                         {canApprove ? (
                           <button
@@ -306,6 +362,24 @@ export default function CatalogMedia() {
               </div>
             ) : null}
 
+            <h4 style={{ fontSize: 14, margin: "16px 0 8px" }}>Evaluación interna</h4>
+            <p className="section-sub">Piso, techo, puertas y pintura. Solo staff; el cliente no lo ve.</p>
+            <div className="odoo-form">
+              {[
+                ["conditionFloor", "Piso"],
+                ["conditionRoof", "Techo"],
+                ["conditionDoors", "Puertas"],
+                ["conditionPaint", "Pintura"],
+              ].map(([key, label]) => (
+                <label key={key}>
+                  <span>{label}</span>
+                  <select value={conds[key] || ""} onChange={(e) => setConds((c) => ({ ...c, [key]: e.target.value }))}>
+                    {GRADES.map((g) => <option key={g.value || "empty"} value={g.value}>{g.label}</option>)}
+                  </select>
+                </label>
+              ))}
+            </div>
+
             <label style={{ marginTop: 16, display: "block" }}>Descripción para el cliente</label>
             <textarea
               value={notes}
@@ -314,7 +388,13 @@ export default function CatalogMedia() {
               style={{ width: "100%", padding: 8, border: "1px solid var(--line)", borderRadius: 7, font: "inherit" }}
               placeholder="Estado de la unidad, particularidades, qué ve el cliente en la ficha…"
             />
-            <button className="btn-ghost" type="button" style={{ marginTop: 8 }} onClick={saveNotes}>Guardar descripción</button>
+            <button className="btn-ghost" type="button" style={{ marginTop: 8 }} onClick={saveNotes}>Guardar evaluación y descripción</button>
+
+            {Object.values(portrait).some(Boolean) ? (
+              <div className="warn-inline" style={{ marginTop: 14 }}>
+                Hay fotos verticales. En la web no cubren el ancho (bandas a los lados). Cámbialas por tomas horizontales del contenedor antes de publicar.
+              </div>
+            ) : null}
 
             {canApprove ? (
               <div className="action-row" style={{ marginTop: 16 }}>

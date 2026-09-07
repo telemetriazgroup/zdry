@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, apiUpload, apiUrl, formatWhen } from "../api.js";
+import { useAuth } from "../auth.jsx";
 import { parseIso6346 } from "../iso6346.js";
 
 const ARCHIVE_PRESETS = ["Contenedor mal ingresado", "Información incorrecta"];
@@ -57,8 +58,19 @@ function whoLine(u) {
   return `Registró ${u.registeredByName || "—"} · ${formatWhen(u.createdAt)}`;
 }
 
+function OriginBadges({ u }) {
+  return (
+    <>
+      {u.intakeOrigin === "odoo" ? <span className="badge-scope" style={{ background: "#12203a" }}>Origen Odoo</span> : null}
+      {u.isoException ? <span className="badge-scope" style={{ background: "#c92a2a" }}>ISO a revisar</span> : null}
+    </>
+  );
+}
+
 export default function Recepcion() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const canSeeOdoo = user.role === "admin";
   const [meta, setMeta] = useState(null);
   const [pending, setPending] = useState([]);
   const [mode, setMode] = useState("bandeja");
@@ -78,6 +90,9 @@ export default function Recepcion() {
   const [isoHint, setIsoHint] = useState(null);
   const [bust, setBust] = useState(0);
   const [archiving, setArchiving] = useState(null);
+  const [odooPhotos, setOdooPhotos] = useState([]);
+  const [pickedAtt, setPickedAtt] = useState(null);
+  const [assigning, setAssigning] = useState(false);
 
   async function loadPending() {
     const rows = await api("/warehouse/pending");
@@ -103,12 +118,24 @@ export default function Recepcion() {
   useEffect(() => {
     if (!inspectIso) {
       setUnit(null);
+      setOdooPhotos([]);
+      setPickedAtt(null);
       return;
     }
     api(`/warehouse/units/${inspectIso}`)
       .then(setUnit)
       .catch((e) => setError(e.message));
   }, [inspectIso]);
+
+  useEffect(() => {
+    if (!canSeeOdoo || !unit?.odooLotId) {
+      setOdooPhotos([]);
+      return;
+    }
+    api(`/warehouse/units/${unit.iso}/odoo-photos`)
+      .then(setOdooPhotos)
+      .catch(() => setOdooPhotos([]));
+  }, [canSeeOdoo, unit?.iso, unit?.odooLotId]);
 
   useEffect(() => {
     const raw = form.iso.trim();
@@ -197,6 +224,26 @@ export default function Recepcion() {
       setBust(Date.now());
     } catch (e) {
       setError(e.message);
+    }
+  }
+
+  async function assignOdoo(attId, slot) {
+    if (!inspectIso || slot === "" || slot == null) return;
+    setAssigning(true);
+    setError("");
+    try {
+      const next = await api(`/warehouse/units/${inspectIso}/odoo-photos/${attId}/assign`, {
+        method: "POST",
+        body: { slot },
+      });
+      setUnit(next);
+      setBust(Date.now());
+      setPickedAtt(null);
+      setMsg(`Foto de Odoo asignada a la casilla ${Number(slot) + 1}. Queda para el catálogo web.`);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setAssigning(false);
     }
   }
 
@@ -312,9 +359,34 @@ export default function Recepcion() {
         {msg ? <div className="ok-msg">{msg}</div> : null}
         <div className="dash-grid recv-inspect">
           <div className="panel">
-            <h3 className="recv-iso-title">{unit.iso} <span className="badge-scope" style={{ background: unit.intakeType === "compra" ? "#2f9e44" : unit.intakeType === "almacenaje_cliente" ? "#495057" : "#c9720b" }}>{unit.intakeLabel}</span></h3>
+            <h3 className="recv-iso-title">
+              {unit.iso}{" "}
+              <span className="badge-scope" style={{ background: unit.intakeType === "compra" ? "#2f9e44" : unit.intakeType === "almacenaje_cliente" ? "#495057" : "#c9720b" }}>{unit.intakeLabel}</span>
+              <OriginBadges u={unit} />
+            </h3>
             <p className="recv-who">{whoLine(unit)}</p>
-            <p className="section-sub">Toca cada casilla: en el celular abre la cámara trasera.</p>
+            {unit.isoException ? (
+              <div className="iso-review-banner">
+                <b>ISO 6346 a revisar.</b> El serial vino de Odoo y no cumple el dígito de control o el formato. No bloqueó el alta.
+                {unit.isoExceptionReason ? <span> {unit.isoExceptionReason}</span> : null}
+                <div className="action-row">
+                  <button
+                    className="btn-primary"
+                    type="button"
+                    onClick={() => api(`/warehouse/units/${unit.iso}/iso-review`, { method: "POST", body: { note: "Revisado en campo" } }).then(setUnit).catch((e) => setError(e.message))}
+                  >
+                    Marcar ISO revisado
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            <p className="section-sub">
+              {unit.intakeOrigin === "odoo"
+                ? (canSeeOdoo
+                  ? "Asigna fotos de Odoo a las casillas (abajo) o toma otras. Quedan para el catálogo web."
+                  : "Unidad ya en almacén. Sube fotos de campo. No ves ni editas datos de Odoo.")
+                : "Toca cada casilla: en el celular abre la cámara trasera."}
+            </p>
             <div className="checklist recv-checklist">
               {labels.map((lab, i) => {
                 const done = i < 9 ? unit.photos[i] : unit.hasVideo;
@@ -355,40 +427,84 @@ export default function Recepcion() {
           </div>
           <div className="panel">
             <h3>Datos físicos de la unidad</h3>
-            <p className="section-sub">Estos datos no vienen en la factura del proveedor — los registra Almacén al recibir la unidad.</p>
-            <div className="form-grid">
-              <div><label>Tara (kg)</label><input type="number" defaultValue={unit.tareKg} key={`tare-${unit.tareKg}`} onBlur={(e) => patchField("tareKg", e.target.value)} /></div>
-              <div><label>Peso bruto máx. (kg)</label><input type="number" defaultValue={unit.mgwKg} key={`mgw-${unit.mgwKg}`} onBlur={(e) => patchField("mgwKg", e.target.value)} /></div>
-              <div>
-                <label>Color exterior</label>
-                <select value={!unit.color || unit.color === "—" ? "" : unit.color} onChange={(e) => patchField("color", e.target.value)}>
-                  <option value="">Selecciona…</option>
-                  {meta.colors.map((cl) => <option key={cl} value={cl}>{cl}</option>)}
-                </select>
+            <p className="section-sub">
+              {unit.intakeOrigin === "odoo" && !canSeeOdoo
+                ? "Solo notas y condición de campo. Quien publica evalúa y decide qué sale a la web."
+                : unit.intakeOrigin === "odoo"
+                  ? "Datos traídos de Odoo o pendientes. Confírmalos o corrígelos aquí."
+                  : "Estos datos no vienen en la factura del proveedor — los registra Almacén al recibir la unidad."}
+            </p>
+            {canSeeOdoo && (unit.odooSource || unit.odooLocation || unit.odooDua || unit.originCountry) ? (
+              <div className="odoo-source">
+                <b>Datos Odoo (solicitante)</b>
+                <p className="section-sub">Originales de Odoo. No bloquean. Quedan pendientes si ZDRY aún no los tiene.</p>
+                <dl>
+                  {unit.odooSource?.serialRaw ? <><dt>Serial</dt><dd>{unit.odooSource.serialRaw}</dd></> : null}
+                  {unit.odooSource?.productName || unit.odooSource?.productCode ? (
+                    <><dt>Producto</dt><dd>{unit.odooSource.productCode ? `[${unit.odooSource.productCode}] ` : ""}{unit.odooSource.productName}</dd></>
+                  ) : null}
+                  <dt>Ubicación</dt><dd>{unit.odooSource?.locationName || unit.odooLocation || "—"}</dd>
+                  <dt>Color</dt><dd>{unit.odooSource?.color || "—"}</dd>
+                  <dt>Tara</dt><dd>{unit.odooSource?.tareKg ?? "—"}</dd>
+                  <dt>Peso</dt><dd>{unit.odooSource?.mgwKg ?? "—"}</dd>
+                  <dt>Año</dt><dd>{unit.odooSource?.year ?? "—"}</dd>
+                  <dt>Fabricante</dt><dd>{unit.odooSource?.manufacturer || "—"}</dd>
+                  <dt>DUA</dt><dd>{unit.odooSource?.dua || unit.odooDua || "—"}</dd>
+                  <dt>Procedencia</dt><dd>{unit.odooSource?.originCountry || unit.originCountry || "—"}</dd>
+                  {unit.odooSource?.material ? <><dt>Material</dt><dd>{unit.odooSource.material}</dd></> : null}
+                </dl>
               </div>
+            ) : null}
+            <div className="form-grid">
+              {canSeeOdoo || unit.intakeOrigin !== "odoo" ? (
+                <>
+                  <div><label>Tara (kg)</label><input type="number" defaultValue={unit.tareKg} key={`tare-${unit.tareKg}`} onBlur={(e) => patchField("tareKg", e.target.value)} /></div>
+                  <div><label>Peso bruto máx. (kg)</label><input type="number" defaultValue={unit.mgwKg} key={`mgw-${unit.mgwKg}`} onBlur={(e) => patchField("mgwKg", e.target.value)} /></div>
+                  <div>
+                    <label>Color exterior</label>
+                    <select value={!unit.color || unit.color === "—" ? "" : unit.color} onChange={(e) => patchField("color", e.target.value)}>
+                      <option value="">Selecciona…</option>
+                      {meta.colors.map((cl) => <option key={cl} value={cl}>{cl}</option>)}
+                      {unit.color && unit.color !== "—" && !meta.colors.includes(unit.color) ? (
+                        <option value={unit.color}>{unit.color} (Odoo)</option>
+                      ) : null}
+                    </select>
+                  </div>
+                </>
+              ) : null}
               <div>
                 <label>Condición comercial</label>
                 <select value={unit.cat} onChange={(e) => patchField("cat", e.target.value)}>
                   {meta.categories.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
                 </select>
               </div>
-              <div>
-                <label>Año *</label>
-                <select value={unit.year || ""} onChange={(e) => patchField("year", e.target.value ? parseInt(e.target.value, 10) : null)}>
-                  <option value="">Selecciona…</option>
-                  {meta.years.map((y) => <option key={y} value={y}>{y}</option>)}
-                </select>
-              </div>
-              <div>
-                <label>Fabricante *</label>
-                <select value={!unit.manufacturer || unit.manufacturer === "—" ? "" : unit.manufacturer} onChange={(e) => patchField("manufacturer", e.target.value || "—")}>
-                  <option value="">—</option>
-                  {meta.manufacturers.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </div>
+              {canSeeOdoo || unit.intakeOrigin !== "odoo" ? (
+                <>
+                  <div>
+                    <label>{unit.intakeOrigin === "odoo" ? "Año" : "Año *"}</label>
+                    <select value={unit.year || ""} onChange={(e) => patchField("year", e.target.value ? parseInt(e.target.value, 10) : null)}>
+                      <option value="">Selecciona…</option>
+                      {meta.years.map((y) => <option key={y} value={y}>{y}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label>{unit.intakeOrigin === "odoo" ? "Fabricante" : "Fabricante *"}</label>
+                    <select value={!unit.manufacturer || unit.manufacturer === "—" ? "" : unit.manufacturer} onChange={(e) => patchField("manufacturer", e.target.value || "—")}>
+                      <option value="">—</option>
+                      {meta.manufacturers.map((m) => <option key={m} value={m}>{m}</option>)}
+                      {unit.manufacturer && unit.manufacturer !== "—" && !meta.manufacturers.includes(unit.manufacturer) ? (
+                        <option value={unit.manufacturer}>{unit.manufacturer} (Odoo)</option>
+                      ) : null}
+                    </select>
+                  </div>
+                </>
+              ) : null}
             </div>
             {missing.length ? (
-              <p style={{ fontSize: 11, color: "#c9720b", marginTop: 6, fontWeight: 700 }}>⚠ {missing.join(" · ")}</p>
+              <p style={{ fontSize: 11, color: "#c9720b", marginTop: 6, fontWeight: 700 }}>
+                ⚠ {missing.join(" · ")}
+                {unit.intakeOrigin === "odoo" ? " — queda pendiente, no bloquea." : ""}
+              </p>
             ) : (
               <p style={{ fontSize: 11, color: "#2f9e44", marginTop: 6, fontWeight: 700 }}>✓ Datos completos — listo para confirmar</p>
             )}
@@ -405,9 +521,58 @@ export default function Recepcion() {
             </div>
           </div>
         </div>
+        {canSeeOdoo && unit.intakeOrigin === "odoo" ? (
+          <div className="panel odoo-web-photos">
+            <h3>Fotos de Odoo (catálogo web)</h3>
+            <p className="section-sub">
+              Elige una foto y asígnala a una casilla, o toma otra con la cámara. Estas imágenes quedan para la venta en la web.
+            </p>
+            {!odooPhotos.length ? (
+              <p className="section-sub">Este lote no trajo fotos de Odoo, o el chatter no las devolvió.</p>
+            ) : (
+              <>
+                <div className="odoo-assign-thumbs">
+                  {odooPhotos.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`odoo-assign-thumb ${pickedAtt === p.id ? "on" : ""}`}
+                      onClick={() => setPickedAtt(pickedAtt === p.id ? null : p.id)}
+                    >
+                      <img src={apiUrl(`/warehouse/units/${unit.iso}/odoo-photos/${p.id}`)} alt={p.name} />
+                      <span>{p.name}</span>
+                    </button>
+                  ))}
+                </div>
+                {pickedAtt ? (
+                  <div className="odoo-assign-slots">
+                    <b>Asignar a casilla</b>
+                    {labels.slice(0, 9).map((lab, i) => (
+                      <button
+                        key={lab}
+                        type="button"
+                        className="btn-ghost"
+                        disabled={assigning}
+                        onClick={() => assignOdoo(pickedAtt, i)}
+                      >
+                        {i + 1}. {lab}{unit.photos[i] ? " (reemplazar)" : ""}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="section-sub">Toca una foto de Odoo y luego la casilla donde debe quedar.</p>
+                )}
+              </>
+            )}
+          </div>
+        ) : null}
         <div className="recv-confirm-bar">
-          <button className="btn-primary" type="button" disabled={missing.length > 0} onClick={confirm}>✓ Confirmar recepción → Patio</button>
-          {missing.length ? <p className="recv-confirm-hint">Completa año y fabricante para habilitar.</p> : null}
+          <button className="btn-primary" type="button" disabled={unit.intakeOrigin !== "odoo" && missing.length > 0} onClick={confirm}>✓ Confirmar recepción → Patio</button>
+          {unit.intakeOrigin === "odoo" ? (
+            <p className="recv-confirm-hint">Año, fabricante y fotos pueden quedar pendientes. Confirmar no los exige.</p>
+          ) : missing.length ? (
+            <p className="recv-confirm-hint">Completa año y fabricante para habilitar.</p>
+          ) : null}
           {archiving === unit.iso ? (
             <ArchiveForm
               iso={unit.iso}
@@ -427,7 +592,14 @@ export default function Recepcion() {
   return (
     <div className="panel recv-page">
       <h3>Recepción e inspección</h3>
-      <p className="section-sub">Elige un pendiente o registra un ingreso nuevo. En el celular las fotos se toman con la cámara.</p>
+      <p className="section-sub">
+        {canSeeOdoo
+          ? <>Elige un pendiente o registra un ingreso nuevo. En unidades Odoo asigna las fotos del chatter a las casillas del catálogo.{" "}
+            <Link to="/app/almacen/odoo" style={{ color: "var(--orange)", fontWeight: 700 }}>Bandeja Odoo</Link></>
+          : <>Registra un ingreso nuevo o completa pendientes. Las unidades de Odoo se regularizan en{" "}
+            <Link to="/app/almacen/campo" style={{ color: "var(--orange)", fontWeight: 700 }}>Patio — campo</Link>
+            , sin ver ni editar datos de Odoo.</>}
+      </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
       <div className="recv-actions">
@@ -455,8 +627,8 @@ export default function Recepcion() {
               </thead>
               <tbody>
                 {pending.map((u) => (
-                  <tr key={u.iso} className="expandable" onClick={() => { if (archiving !== u.iso) { setInspectIso(u.iso); setMode("inspect"); setError(""); } }}>
-                    <td><b>{u.iso}</b></td>
+                  <tr key={u.iso} className={`expandable ${u.isoException ? "iso-review-row" : ""}`} onClick={() => { if (archiving !== u.iso) { setInspectIso(u.iso); setMode("inspect"); setError(""); } }}>
+                    <td><b>{u.iso}</b> <OriginBadges u={u} /></td>
                     <td>{u.typeLabel}</td>
                     <td style={{ color: u.catColor }}>{u.catLabel}</td>
                     <td>{u.depotName}</td>
@@ -481,7 +653,7 @@ export default function Recepcion() {
           </div>
           <div className="recv-cards">
             {pending.map((u) => (
-              <div key={u.iso} className="recv-card">
+              <div key={u.iso} className={`recv-card ${u.isoException ? "iso-review-row" : ""}`}>
                 <button
                   type="button"
                   className="recv-card-open"
@@ -490,6 +662,7 @@ export default function Recepcion() {
                   <div className="recv-card-top">
                     <b className="card-iso">{u.iso}</b>
                     <span className="badge-scope" style={{ background: intakeColor(u.intakeType) }}>{u.intakeLabel}</span>
+                    <OriginBadges u={u} />
                   </div>
                   <div className="recv-card-meta">{u.typeLabel} · <span style={{ color: u.catColor }}>{u.catLabel}</span></div>
                   <div className="recv-card-meta">{u.depotName}</div>

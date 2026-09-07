@@ -76,13 +76,17 @@ export class PurchasesService {
     const extrasWhere: Prisma.PendingExtraCostWhereInput = demoOn
       ? { status: "pending" }
       : { status: "pending", invoice: { demo: false } };
-    const [extras, dam] = await Promise.all([
+    const live = await this.prisma.liveContainers();
+    const [extras, dam, odoo] = await Promise.all([
       this.prisma.pendingExtraCost.count({ where: extrasWhere }),
       this.prisma.container.count({
-        where: { intakeType: { in: ["compra", "pendiente_factura"] }, damNumber: null, ...(await this.prisma.liveContainers()) },
+        where: { intakeType: { in: ["compra", "pendiente_factura"] }, damNumber: null, ...live },
+      }),
+      this.prisma.container.count({
+        where: { intakeOrigin: "odoo", invoicePending: true, status: { not: "Vendido" }, ...live },
       }),
     ]);
-    return { extras, dam };
+    return { extras, dam, odoo };
   }
 
   async listInvoices() {
@@ -258,6 +262,117 @@ export class PurchasesService {
     });
 
     return this.presentInvoice(invoice);
+  }
+
+  async listOdooDebt() {
+    const rows = await this.prisma.container.findMany({
+      where: {
+        intakeOrigin: "odoo",
+        ...(await this.prisma.liveContainers()),
+        status: { not: "Vendido" },
+      },
+      include: { depot: { select: { name: true } }, purchaseInvoice: { select: { id: true, number: true } } },
+      orderBy: { iso: "asc" },
+    });
+    return rows.map((c) => ({
+      iso: c.iso,
+      depotName: c.depot.name,
+      invoicePending: c.invoicePending,
+      intakeType: c.intakeType,
+      odooDua: c.odooDua,
+      damNumber: c.damNumber,
+      odooPoName: c.odooPoName,
+      odooVendorName: c.odooVendorName,
+      odooBillName: c.odooBillName,
+      odooUnitPrice: c.odooUnitPrice != null ? Number(c.odooUnitPrice) : null,
+      fobCif: Number(c.fobCif),
+      purchaseInvoiceId: c.purchaseInvoiceId,
+      purchaseInvoiceNumber: c.purchaseInvoice?.number || null,
+    }));
+  }
+
+  async linkOdooDebt(
+    input: { isos?: string[]; invoiceId?: string },
+    user: AuthUser,
+    ip?: string,
+  ) {
+    const isos = [...new Set((input.isos || []).map((s) => String(s || "").trim().toUpperCase()).filter(Boolean))];
+    if (!isos.length) throw new BadRequestException("Elige al menos una unidad Odoo.");
+    const units = await this.prisma.container.findMany({
+      where: { iso: { in: isos }, intakeOrigin: "odoo", ...(await this.prisma.liveContainers()) },
+    });
+    if (units.length !== isos.length) {
+      throw new BadRequestException("Solo se enlazan unidades asimiladas desde Odoo y no archivadas.");
+    }
+
+    let invoice = input.invoiceId
+      ? await this.prisma.purchaseInvoice.findUnique({ where: { id: input.invoiceId } })
+      : null;
+    if (input.invoiceId && !invoice) throw new NotFoundException("Factura ZDRY no encontrada.");
+
+    if (!invoice) {
+      const first = units[0];
+      const number = first.odooBillName || first.odooPoName || `ODOO-${Date.now()}`;
+      const existing = await this.prisma.purchaseInvoice.findFirst({ where: { number } });
+      const amount = units.reduce((s, u) => s + Number(u.odooUnitPrice || 0), 0);
+      invoice = existing
+        || (await this.prisma.purchaseInvoice.create({
+          data: {
+            number,
+            providerName: first.odooVendorName || "Odoo",
+            incoterm: "FOB",
+            logistics: "reentrega",
+            amount,
+            extras: {},
+          },
+        }));
+    }
+
+    for (const u of units) {
+      const price = Number(u.odooUnitPrice || 0);
+      const line = await this.prisma.purchaseInvoiceLine.findFirst({
+        where: { invoiceId: invoice.id, iso: u.iso },
+      });
+      if (!line) {
+        await this.prisma.purchaseInvoiceLine.create({
+          data: {
+            invoiceId: invoice.id,
+            iso: u.iso,
+            type: u.type,
+            cat: u.cat,
+            year: u.year,
+            manufacturer: u.manufacturer,
+            price: price || Number(u.fobCif) || 0,
+          },
+        });
+      }
+      await this.prisma.container.update({
+        where: { iso: u.iso },
+        data: {
+          purchaseInvoiceId: invoice.id,
+          invoicePending: false,
+          intakeType: "compra",
+          fobCif: price > 0 ? price : u.fobCif,
+        },
+      });
+      await this.prisma.containerHistory.create({
+        data: {
+          iso: u.iso,
+          type: "Compras",
+          detail: `Deuda Odoo enlazada a factura ${invoice.number} por ${user.name}. OC ${u.odooPoName || "—"} · DUA crudo ${u.odooDua || "—"} (DAM aparte).`,
+        },
+      });
+    }
+
+    await this.audit.log({
+      user,
+      action: "odoo_purchase_link",
+      entity: "PurchaseInvoice",
+      entityId: invoice.id,
+      after: { isos, number: invoice.number },
+      ip,
+    });
+    return { ok: true, invoiceId: invoice.id, number: invoice.number, isos };
   }
 
   async pendingExtras() {

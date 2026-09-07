@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api.js";
 
 export default function OdooIntegrations() {
@@ -7,6 +8,7 @@ export default function OdooIntegrations() {
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [probe, setProbe] = useState(null);
 
   async function load() {
     const d = await api("/superadmin/odoo");
@@ -47,11 +49,34 @@ export default function OdooIntegrations() {
     <>
       <h2 className="section-title">Integración Odoo</h2>
       <p className="section-sub">
-        Contabilidad de ZDRY sale hacia Odoo cuando un comercial valida el pago. Aquí se configura el conector.
+        El conector usa las mismas credenciales para dos flechas: cierre de venta ZDRY → Odoo, y lectura de lotes DRY a la mano Odoo → ZDRY.
         La clave no se vuelve a mostrar; déjala en blanco si no la cambias.
       </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
+
+      <div className="action-row" style={{ marginBottom: 16 }}>
+        <button
+          className="btn-ghost"
+          type="button"
+          disabled={busy}
+          onClick={async () => {
+            setError("");
+            try {
+              const p = await api("/odoo-import/probe");
+              setProbe(p);
+              if (!p.ok) setError(p.message);
+            } catch (e) {
+              setError(e.message);
+            }
+          }}
+        >
+          Probar conexión
+        </button>
+        <Link className="btn-primary" to="/app/almacen/odoo">Bandeja DRY a la mano</Link>
+      </div>
+      {probe?.ok ? <div className="ok-msg">Conectado{probe.user?.name ? ` · ${probe.user.name}` : ""}.</div> : null}
+      {probe && !probe.ok ? <div className="err">{probe.message}</div> : null}
 
       <form className="panel" onSubmit={save} style={{ marginBottom: 18 }}>
         <h3>Conexión</h3>

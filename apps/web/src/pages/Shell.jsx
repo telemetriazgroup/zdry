@@ -13,18 +13,21 @@ import ComingSoon from "./ComingSoon.jsx";
 import Compras from "./Compras.jsx";
 import Recepcion from "./Recepcion.jsx";
 import Patio from "./Patio.jsx";
+import PatioCampo from "./PatioCampo.jsx";
 import QuotesHub from "./QuotesHub.jsx";
 import CatalogMedia from "./CatalogMedia.jsx";
 import CatalogCopy from "./CatalogCopy.jsx";
 import Profile from "./Profile.jsx";
 import OdooIntegrations from "./OdooIntegrations.jsx";
+import OdooBandeja from "./OdooBandeja.jsx";
 import SystemBackup from "./SystemBackup.jsx";
 
 const SIDEBAR_KEY = "zdry.sidebarCollapsed";
 
 function allowed(nav, pathname, role) {
   if ((role === "admin" || role === "compras") && pathname.startsWith("/app/compras")) return true;
-  if ((role === "admin" || role === "almacen") && (pathname.startsWith("/app/almacen/recepcion") || pathname.startsWith("/app/almacen/patio"))) return true;
+  if ((role === "admin" || role === "superadmin") && pathname.startsWith("/app/almacen/odoo")) return true;
+  if ((role === "admin" || role === "almacen") && (pathname.startsWith("/app/almacen/recepcion") || pathname.startsWith("/app/almacen/patio") || pathname.startsWith("/app/almacen/campo"))) return true;
   return nav.some((item) => (item.end ? pathname === item.to : pathname === item.to || pathname.startsWith(item.to + "/")));
 }
 
@@ -156,9 +159,12 @@ export default function Shell() {
             <Route path="seguimiento" element={<Gate nav={nav} role={user.role} path="/app/seguimiento"><QuotesHub /></Gate>} />
             <Route path="alquileres" element={<Gate nav={nav} role={user.role} path="/app/alquileres"><ComingSoon title="Contratos de alquiler" sprint="5" /></Gate>} />
             <Route path="compras/facturas" element={<Gate nav={nav} role={user.role} path="/app/compras/facturas"><Compras /></Gate>} />
+            <Route path="compras/odoo" element={<Gate nav={nav} role={user.role} path="/app/compras/odoo"><Compras /></Gate>} />
             <Route path="compras/extras" element={<Gate nav={nav} role={user.role} path="/app/compras/extras"><Compras /></Gate>} />
             <Route path="compras/dam" element={<Gate nav={nav} role={user.role} path="/app/compras/dam"><Compras /></Gate>} />
+            <Route path="almacen/odoo" element={<Gate nav={nav} role={user.role} path="/app/almacen/odoo"><OdooBandeja /></Gate>} />
             <Route path="almacen/recepcion" element={<Gate nav={nav} role={user.role} path="/app/almacen/recepcion"><Recepcion /></Gate>} />
+            <Route path="almacen/campo" element={<Gate nav={nav} role={user.role} path="/app/almacen/campo"><PatioCampo /></Gate>} />
             <Route path="almacen/patio" element={<Gate nav={nav} role={user.role} path="/app/almacen/patio"><Patio /></Gate>} />
             <Route path="almacen/despachos" element={<Gate nav={nav} role={user.role} path="/app/almacen/despachos"><Restricted title="Despachos" /></Gate>} />
             <Route path="catalogo-textos" element={<Gate nav={nav} role={user.role} path="/app/catalogo-textos"><CatalogCopy /></Gate>} />

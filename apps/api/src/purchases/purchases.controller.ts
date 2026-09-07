@@ -45,6 +45,20 @@ export class PurchasesController {
     return this.purchases.listInvoices();
   }
 
+  @Get("odoo-debt")
+  odooDebt() {
+    return this.purchases.listOdooDebt();
+  }
+
+  @Post("odoo-link")
+  linkOdoo(
+    @Body() body: { isos?: string[]; invoiceId?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.purchases.linkOdooDebt(body, user, req.ip);
+  }
+
   @Post("invoices")
   create(
     @Body()

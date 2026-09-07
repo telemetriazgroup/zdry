@@ -38,8 +38,11 @@ export function iconFor(path) {
   if (path.includes("auditoria")) return "clipboard";
   if (path.includes("compras/extras")) return "plus";
   if (path.includes("compras/dam")) return "file";
+  if (path.includes("compras/odoo")) return "boxes";
   if (path.includes("compras")) return "receipt";
+  if (path.includes("almacen/odoo")) return "boxes";
   if (path.includes("recepcion")) return "inbox";
+  if (path.includes("campo")) return "camera";
   if (path.includes("patio")) return "grid";
   if (path.includes("integraciones")) return "gear";
   if (path.includes("respaldo")) return "file";

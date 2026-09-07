@@ -15,11 +15,11 @@ export const ROLE_LABELS = {
 
 export const ROLE_DESC = {
   superadmin: "Integraciones, textos del catálogo, respaldos internos y vaciado del sistema.",
-  admin: "Ve inventario con costo real, personas, maestros y configuración.",
+  admin: "Ve inventario con costo real, personas, maestros, configuración, regularización Odoo y publicación del catálogo.",
   gerente: "Define reglas de precio y visibilidad. No ve FOB ni C_T.",
   vendedor: "Cotiza, valida comprobantes y confirma asignación. Nunca ve el costo real.",
-  compras: "Facturas de compra, extras y DAM. Ve costos de adquisición.",
-  almacen: "Recepción, patio y despachos. Sin precios ni costos.",
+  compras: "Facturas de compra, deuda Odoo, extras y DAM. Ve costos de adquisición.",
+  almacen: "Recepción de ingresos nuevos, patio de campo (fotos y notas) y despachos. No ve ni edita datos de Odoo. Sin precios ni costos.",
   cliente: "Reserva, negocia descuento con tu comercial y sube el comprobante de pago.",
 };
 
@@ -27,6 +27,7 @@ export const ROLE_NAV = {
   superadmin: [
     { to: "/app", label: "Inicio", end: true },
     { to: "/app/integraciones", label: "Integración Odoo" },
+    { to: "/app/almacen/odoo", label: "Odoo — regularizar" },
     { to: "/app/catalogo-textos", label: "Textos del catálogo" },
     { to: "/app/respaldo", label: "Respaldo y recuperación" },
   ],
@@ -40,6 +41,8 @@ export const ROLE_NAV = {
     { to: "/app/auditoria", label: "Auditoría" },
     { to: "/app/compras/facturas", label: "Compras" },
     { to: "/app/almacen/recepcion", label: "Recepción" },
+    { to: "/app/almacen/odoo", label: "Odoo — regularizar" },
+    { to: "/app/almacen/campo", label: "Patio — campo" },
     { to: "/app/almacen/patio", label: "Patio" },
     { to: "/app/catalogo-media", label: "Ficha catálogo" },
   ],
@@ -63,6 +66,7 @@ export const ROLE_NAV = {
   compras: [
     { to: "/app", label: "Inicio", end: true },
     { to: "/app/compras/facturas", label: "Facturas de compra" },
+    { to: "/app/compras/odoo", label: "Deuda Odoo" },
     { to: "/app/compras/extras", label: "Costos adicionales" },
     { to: "/app/compras/dam", label: "Nacionalización (DAM)" },
     { to: "/app/catalogo-media", label: "Ficha catálogo" },
@@ -70,6 +74,7 @@ export const ROLE_NAV = {
   almacen: [
     { to: "/app", label: "Inicio", end: true },
     { to: "/app/almacen/recepcion", label: "Recepción" },
+    { to: "/app/almacen/campo", label: "Patio — campo" },
     { to: "/app/almacen/patio", label: "Patio" },
     { to: "/app/almacen/despachos", label: "Despachos" },
     { to: "/app/catalogo-media", label: "Ficha catálogo" },

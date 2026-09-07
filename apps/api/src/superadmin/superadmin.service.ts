@@ -190,6 +190,8 @@ export class SuperadminService {
   }
 
   private async deleteOperationalData(keepUserId: string) {
+    await this.prisma.odooFieldWriteback.deleteMany();
+    await this.prisma.odooLotCandidate.deleteMany();
     await this.prisma.dispatch.deleteMany();
     await this.prisma.quote.deleteMany();
     await this.prisma.container.deleteMany();

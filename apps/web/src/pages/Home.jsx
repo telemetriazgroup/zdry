@@ -22,8 +22,9 @@ export default function Home() {
       <p className="section-sub" style={{ marginTop: 16 }}>
         El catálogo público está en <a href="/" style={{ color: "var(--orange)", fontWeight: 700 }}>/</a>.
         {user.role === "vendedor" ? " Usa Bandeja → Negociación → Pagos → Seguimiento para el cierre por comprobante." : ""}
-        {user.role === "superadmin" ? " Desde el menú configuras Odoo, editas los textos del catálogo y gestionas los respaldos internos." : ""}
-        {user.role === "admin" ? " La cola de Odoo la opera el superadmin en Integración Odoo." : ""}
+        {user.role === "superadmin" ? " Desde el menú configuras Odoo, buscas DRY a la mano, editas los textos del catálogo y gestionas los respaldos internos." : ""}
+        {user.role === "admin" ? " Regulariza DRY de Odoo en Odoo — regularizar y asigna fotos del chatter a las casillas del catálogo en Recepción." : ""}
+        {user.role === "almacen" ? " Si ves un DRY en campo, abre Patio — campo: sube fotos o notas. No ves ni editas Odoo. Quien publica evalúa." : ""}
       </p>
     </>
   );

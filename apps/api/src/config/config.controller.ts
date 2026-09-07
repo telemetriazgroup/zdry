@@ -10,6 +10,7 @@ import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
 
 export const CONFIG_SECTIONS = [
   { id: "catalog-copy", title: "Textos del catálogo", blurb: "Editor de la página pública: hero, pasos, pie y legales. Así lo ve el cliente." },
+  { id: "watermark", title: "Marca de agua del catálogo", blurb: "Logo que se repite sobre las fotos públicas. Si no subes uno, se usa zg_marca.png." },
   { id: "visibility", title: "Visibilidad de precios", blurb: "Reglas jerárquicas global → tipo → fabricante → unidad." },
   { id: "freight", title: "Tarifario de fletes", blurb: "Zonas, terrenos, márgenes min/rec/premium, vehículos." },
   { id: "rentals", title: "Reglas de alquiler", blurb: "Depreciación, márgenes, descuento por plazo y riesgo A–D." },
@@ -37,7 +38,7 @@ export class ConfigController {
     return {
       sections: CONFIG_SECTIONS.map((s) => ({
         ...s,
-        status: ["catalog-copy", "yard-columns", "visibility", "commercial-services"].includes(s.id)
+        status: ["catalog-copy", "watermark", "yard-columns", "visibility", "commercial-services"].includes(s.id)
           ? ("live" as const)
           : s.id === "freight"
             ? ("partial" as const)

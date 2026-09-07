@@ -391,9 +391,13 @@ export function inspectMissing(c: {
   physicallyReceived?: boolean;
   year?: number | null;
   manufacturer?: string | null;
+  isoException?: boolean;
+  photoCount?: number;
 }): string[] {
   const reasons: string[] = [];
   if (!c.physicallyReceived) reasons.push("Pendiente de ingreso físico");
+  if (c.isoException) reasons.push("ISO 6346 a revisar");
+  if (typeof c.photoCount === "number" && c.photoCount < 1) reasons.push("Falta foto");
   return reasons.concat(inspectDataMissing(c));
 }
 

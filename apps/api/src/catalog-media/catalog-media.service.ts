@@ -4,11 +4,15 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import { Readable } from "stream";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { WarehouseService } from "../warehouse/warehouse.service";
+import { StorageService } from "../storage/storage.service";
 import { AuthUser } from "../auth/auth.types";
 import { PHOTO_LABELS } from "../domain/yard";
+import { applyCatalogWatermark, loadDefaultWatermark } from "../domain/watermark";
+import { CONDITION_GRADES, parseCondition } from "../domain/odoo-purchase";
 import {
   MEDIA_APPROVER_ROLES,
   PHOTO_STATUS_ACTIVE,
@@ -17,6 +21,7 @@ import {
 } from "../domain/catalog-media";
 
 const ACTIVE_PHOTOS = { where: { status: PHOTO_STATUS_ACTIVE } };
+export const WATERMARK_KEY = "catalog_watermark";
 
 @Injectable()
 export class CatalogMediaService {
@@ -24,10 +29,19 @@ export class CatalogMediaService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly warehouse: WarehouseService,
+    private readonly storage: StorageService,
   ) {}
 
-  meta() {
-    return { photoLabels: PHOTO_LABELS, approverRoles: MEDIA_APPROVER_ROLES };
+  async meta() {
+    const custom = await this.customWatermarkKey();
+    return {
+      photoLabels: PHOTO_LABELS,
+      approverRoles: MEDIA_APPROVER_ROLES,
+      conditionGrades: CONDITION_GRADES,
+      watermarkReady: true,
+      watermarkSource: custom ? "custom" : "default",
+      watermarkName: custom ? custom.name : "zg_marca.png",
+    };
   }
 
   async list() {
@@ -61,6 +75,10 @@ export class CatalogMediaService {
         mediaApprovedAt: c.mediaApprovedAt,
         invoicePending: c.invoicePending,
         intakeType: c.intakeType,
+        conditionFloor: c.conditionFloor,
+        conditionRoof: c.conditionRoof,
+        conditionDoors: c.conditionDoors,
+        conditionPaint: c.conditionPaint,
         demo: c.demo,
         registeredByName: c.registeredByName || "—",
         createdAt: c.createdAt,
@@ -110,7 +128,81 @@ export class CatalogMediaService {
       photoLabels: PHOTO_LABELS,
       registeredByName: c.registeredByName || "—",
       createdAt: c.createdAt,
+      conditionFloor: c.conditionFloor,
+      conditionRoof: c.conditionRoof,
+      conditionDoors: c.conditionDoors,
+      conditionPaint: c.conditionPaint,
     };
+  }
+
+  async patchUnit(
+    iso: string,
+    body: {
+      inspectionNotes?: string;
+      conditionFloor?: string | null;
+      conditionRoof?: string | null;
+      conditionDoors?: string | null;
+      conditionPaint?: string | null;
+    },
+    user: AuthUser,
+    ip?: string,
+  ) {
+    const c = await this.prisma.container.findUnique({ where: { iso } });
+    if (!c) throw new NotFoundException("Unidad no encontrada.");
+    if (c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
+    const data: Record<string, string | null> = {};
+    if (body.inspectionNotes !== undefined) data.inspectionNotes = body.inspectionNotes || "";
+    for (const key of ["conditionFloor", "conditionRoof", "conditionDoors", "conditionPaint"] as const) {
+      if (body[key] !== undefined) data[key] = parseCondition(body[key]) || null;
+    }
+    await this.prisma.container.update({ where: { iso }, data });
+    await this.audit.log({
+      user,
+      action: "update",
+      entity: "CatalogMedia",
+      entityId: iso,
+      after: data,
+      ip,
+    });
+    return this.get(iso);
+  }
+
+  async putWatermark(file: { buffer: Buffer; originalname?: string } | undefined, user: AuthUser, ip?: string) {
+    this.assertApprover(user);
+    if (!file?.buffer?.length) throw new BadRequestException("Sube una imagen PNG o JPG para la marca de agua.");
+    const key = "catalog/watermark.png";
+    await this.storage.put(key, file.buffer, "image/png");
+    await this.prisma.appSetting.upsert({
+      where: { key: WATERMARK_KEY },
+      update: { value: { storageKey: key, name: file.originalname || "watermark" } },
+      create: { key: WATERMARK_KEY, value: { storageKey: key, name: file.originalname || "watermark" } },
+    });
+    const applied = await this.reapplyPublished();
+    await this.audit.log({ user, action: "update", entity: "AppSetting", entityId: WATERMARK_KEY, after: { applied }, ip });
+    return { ok: true, watermarkReady: true, watermarkSource: "custom", applied };
+  }
+
+  async resetWatermark(user: AuthUser, ip?: string) {
+    this.assertApprover(user);
+    await this.prisma.appSetting.deleteMany({ where: { key: WATERMARK_KEY } });
+    const applied = await this.reapplyPublished();
+    await this.audit.log({ user, action: "update", entity: "AppSetting", entityId: WATERMARK_KEY, after: { reset: true, applied }, ip });
+    return { ok: true, watermarkReady: true, watermarkSource: "default", applied };
+  }
+
+  async openWatermark() {
+    const custom = await this.customWatermarkKey();
+    if (custom?.storageKey) {
+      try {
+        const obj = await this.storage.get(custom.storageKey);
+        return { stream: obj.stream, contentType: obj.contentType || "image/png", contentLength: obj.contentLength };
+      } catch {
+        /* cae al predeterminado */
+      }
+    }
+    const buf = await loadDefaultWatermark();
+    if (!buf?.length) throw new NotFoundException("No hay marca de agua predeterminada.");
+    return { stream: Readable.from(buf), contentType: "image/png", contentLength: buf.length };
   }
 
   async patchNotes(iso: string, inspectionNotes: string, user: AuthUser, ip?: string) {
@@ -160,6 +252,7 @@ export class CatalogMediaService {
     if (c.photos.length < 1) {
       throw new BadRequestException("Publica al menos una foto de inspección para el catálogo.");
     }
+    await this.watermarkPublicCopies(c.iso, c.photos);
     await this.prisma.container.update({
       where: { iso },
       data: {
@@ -170,7 +263,7 @@ export class CatalogMediaService {
       },
     });
     await this.prisma.containerHistory.create({
-      data: { iso, type: "Catálogo", detail: `Ficha publicada en el catálogo por ${user.name}.` },
+      data: { iso, type: "Catálogo", detail: `Ficha publicada en el catálogo por ${user.name}. Marca de agua aplicada a copias públicas.` },
     });
     await this.audit.log({ user, action: "approve_media", entity: "Container", entityId: iso, ip });
     return this.get(iso);
@@ -261,6 +354,62 @@ export class CatalogMediaService {
     });
     await this.audit.log({ user, action: "restore_photo", entity: "InspectionPhoto", entityId: photo.id, after: { iso, slot: photo.slot }, ip });
     return this.get(iso);
+  }
+
+  private async customWatermarkKey() {
+    const wm = await this.prisma.appSetting.findUnique({ where: { key: WATERMARK_KEY } });
+    const value = wm?.value && typeof wm.value === "object" ? (wm.value as { storageKey?: string; name?: string }) : null;
+    if (!value?.storageKey) return null;
+    return { storageKey: value.storageKey, name: value.name || "watermark" };
+  }
+
+  private async getMarkBuffer() {
+    const custom = await this.customWatermarkKey();
+    if (custom?.storageKey) {
+      try {
+        const buf = await this.storage.getBuffer(custom.storageKey);
+        if (buf.buffer?.length) return buf.buffer;
+      } catch {
+        /* usa zg_marca.png */
+      }
+    }
+    return loadDefaultWatermark();
+  }
+
+  private async reapplyPublished() {
+    const units = await this.prisma.container.findMany({
+      where: { mediaStatus: "aprobado", archivedAt: null },
+      include: { photos: ACTIVE_PHOTOS },
+    });
+    let applied = 0;
+    for (const c of units) {
+      if (!c.photos.length) continue;
+      await this.watermarkPublicCopies(c.iso, c.photos);
+      await this.prisma.container.update({
+        where: { iso: c.iso },
+        data: { mediaApprovedAt: new Date() },
+      });
+      applied += 1;
+    }
+    return applied;
+  }
+
+  private async watermarkPublicCopies(
+    iso: string,
+    photos: { id: string; slot: number; storageKey: string; mimeType: string }[],
+  ) {
+    const mark = await this.getMarkBuffer();
+    for (const photo of photos) {
+      try {
+        const src = await this.storage.getBuffer(photo.storageKey);
+        const out = await applyCatalogWatermark(src.buffer, mark);
+        const publicKey = `public/${iso}/photos/${photo.slot}.jpg`;
+        await this.storage.put(publicKey, out.buffer, out.mime);
+        await this.prisma.inspectionPhoto.update({ where: { id: photo.id }, data: { publicKey } });
+      } catch {
+        /* si falla una foto, el resto sigue; el original no se toca */
+      }
+    }
   }
 
   private assertApprover(user: AuthUser) {

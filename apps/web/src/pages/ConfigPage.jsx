@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api.js";
+import { api, apiUpload, apiUrl, ApiError } from "../api.js";
 import { useAuth } from "../auth.jsx";
 
 function DemoPanel() {
@@ -142,6 +142,91 @@ function DemoPanel() {
   );
 }
 
+function WatermarkPanel({ onSaved, onError }) {
+  const [meta, setMeta] = useState({ watermarkSource: "default", watermarkName: "zg_marca.png" });
+  const [bust, setBust] = useState(Date.now());
+  const [busy, setBusy] = useState(false);
+
+  async function refresh() {
+    const d = await api("/catalog-media/meta");
+    setMeta(d);
+    setBust(Date.now());
+  }
+
+  useEffect(() => {
+    refresh().catch((e) => onError(e.message));
+  }, []);
+
+  async function upload(file) {
+    if (!file) return;
+    setBusy(true);
+    onError("");
+    onSaved("");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await apiUpload("/catalog-media/watermark", fd);
+      await refresh();
+      onSaved(`Marca de agua guardada. Se reaplicó a ${res.applied || 0} ficha(s) ya publicadas.`);
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reset() {
+    if (!window.confirm("¿Volver a zg_marca.png en las fotos públicas?")) return;
+    setBusy(true);
+    onError("");
+    onSaved("");
+    try {
+      const res = await api("/catalog-media/watermark", { method: "DELETE" });
+      await refresh();
+      onSaved(`Predeterminado zg_marca.png. Se reaplicó a ${res.applied || 0} ficha(s) publicadas.`);
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="panel" style={{ marginBottom: 18 }}>
+      <h3>Marca de agua del catálogo</h3>
+      <p className="section-sub">
+        Se repite sobre toda la foto pública (no sobre el original de patio). Si no subes una, se usa{" "}
+        <b>zg_marca.png</b>. Al publicar, la imagen se ajusta al recuadro de la ficha del cliente (sin franjas azules).
+      </p>
+      <div className="watermark-config">
+        <div className="watermark-preview">
+          <img src={`${apiUrl("/catalog-media/watermark")}?t=${bust}`} alt="Marca de agua actual" />
+        </div>
+        <div>
+          <p className="section-sub" style={{ marginTop: 0 }}>
+            Actual: {meta.watermarkSource === "custom" ? `personalizada (${meta.watermarkName})` : "predeterminada zg_marca.png"}
+          </p>
+          <div className="action-row">
+            <label className="btn-primary" style={{ display: "inline-block", cursor: busy ? "wait" : "pointer" }}>
+              {busy ? "Aplicando…" : "Subir logo"}
+              <input
+                type="file"
+                accept="image/png,image/jpeg"
+                hidden
+                disabled={busy}
+                onChange={(e) => { upload(e.target.files?.[0]); e.target.value = ""; }}
+              />
+            </label>
+            <button className="btn-ghost" type="button" disabled={busy || meta.watermarkSource !== "custom"} onClick={reset}>
+              Usar zg_marca.png
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ConfigPage() {
   const { user } = useAuth();
   const [data, setData] = useState(null);
@@ -199,6 +284,8 @@ export default function ConfigPage() {
       <p className="section-sub">{data?.note || "Solo Administrador y Gerente."}</p>
       {error ? <div className="err">{error}</div> : null}
       {saved ? <div className="ok-msg">{saved}</div> : null}
+
+      <WatermarkPanel onSaved={setSaved} onError={setError} />
 
       <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Textos del catálogo público</h3>

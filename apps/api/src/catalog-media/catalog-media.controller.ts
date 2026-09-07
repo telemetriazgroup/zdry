@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -27,6 +28,34 @@ export class CatalogMediaController {
   @Get("meta")
   meta() {
     return this.media.meta();
+  }
+
+  @Get("watermark")
+  @Roles("admin", "gerente")
+  async getWatermark() {
+    const obj = await this.media.openWatermark();
+    return new StreamableFile(obj.stream, {
+      type: obj.contentType || "image/png",
+      length: obj.contentLength,
+      disposition: "inline",
+    });
+  }
+
+  @Post("watermark")
+  @Roles("admin", "gerente")
+  @UseInterceptors(FileInterceptor("file", { storage: memoryStorage(), limits: { fileSize: 4 * 1024 * 1024 } }))
+  putWatermark(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.media.putWatermark(file, user, req.ip);
+  }
+
+  @Delete("watermark")
+  @Roles("admin", "gerente")
+  resetWatermark(@CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.media.resetWatermark(user, req.ip);
   }
 
   @Get()
@@ -62,11 +91,18 @@ export class CatalogMediaController {
   @Patch(":iso")
   patch(
     @Param("iso") iso: string,
-    @Body() body: { inspectionNotes?: string },
+    @Body()
+    body: {
+      inspectionNotes?: string;
+      conditionFloor?: string | null;
+      conditionRoof?: string | null;
+      conditionDoors?: string | null;
+      conditionPaint?: string | null;
+    },
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
-    return this.media.patchNotes(iso, body.inspectionNotes || "", user, req.ip);
+    return this.media.patchUnit(iso, body, user, req.ip);
   }
 
   @Post(":iso/photos")

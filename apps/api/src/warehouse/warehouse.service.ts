@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   UnprocessableEntityException,
@@ -15,6 +16,7 @@ import { YardLockService } from "../redis/yard-lock.service";
 import { parseIso6346 } from "../domain/iso6346";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { MANUFACTURERS } from "../domain/purchase-extras";
+import { CONDITION_GRADES, parseCondition } from "../domain/odoo-purchase";
 import {
   extForInspectionMime,
   MAX_INSPECTION_PHOTO_BYTES,
@@ -44,6 +46,10 @@ import {
   validateMove,
 } from "../domain/yard";
 import { PHOTO_STATUS_ACTIVE, PHOTO_STATUS_REJECTED } from "../domain/catalog-media";
+import { OdooClient } from "../odoo/odoo.client";
+import { limaDayRange, listOdooLotPhotos, openOdooLotPhoto } from "../odoo/odoo-lot-photos";
+
+const CAMPO_ODOO_LOCKED = ["tareKg", "mgwKg", "color", "year", "manufacturer"] as const;
 
 const LAYOUT_RULES_KEY = "layout_rules";
 const YARD_CONFIG_KEY = "yard_config";
@@ -61,6 +67,7 @@ export class WarehouseService {
     private readonly audit: AuditService,
     private readonly storage: StorageService,
     private readonly locks: YardLockService,
+    private readonly odoo: OdooClient,
   ) {}
 
   async getLayoutRules(): Promise<LayoutRules> {
@@ -105,6 +112,7 @@ export class WarehouseService {
       manufacturers: MANUFACTURERS,
       colors: CONTAINER_COLORS,
       photoLabels: PHOTO_LABELS,
+      conditionGrades: CONDITION_GRADES,
       yardConfig: DEFAULT_YARD_CONFIG,
       layoutRules: rules,
       years,
@@ -128,13 +136,13 @@ export class WarehouseService {
     };
   }
 
-  async pending() {
+  async pending(user?: AuthUser) {
     const [types, categories, rows] = await Promise.all([
       this.prisma.containerType.findMany(),
       this.prisma.category.findMany(),
       this.prisma.container.findMany({
         where: { status: { not: "Vendido" }, ...(await this.prisma.liveContainers()) },
-        include: { depot: true },
+        include: { depot: true, photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { id: true } } },
         orderBy: { createdAt: "desc" },
       }),
     ]);
@@ -142,8 +150,12 @@ export class WarehouseService {
     const catMap = Object.fromEntries(categories.map((c) => [c.code, c]));
     return rows
       .map((c) => {
-        const missing = inspectMissing(c);
+        const missing = inspectMissing({
+          ...c,
+          photoCount: c.intakeOrigin === "odoo" ? c.photos.length : undefined,
+        });
         if (!missing.length) return null;
+        if (user?.role === "almacen" && c.intakeOrigin === "odoo") return null;
         return {
           iso: c.iso,
           type: c.type,
@@ -155,6 +167,9 @@ export class WarehouseService {
           depotName: c.depot.name,
           intakeType: c.intakeType,
           intakeLabel: intakeTypeLabel(c.intakeType),
+          intakeOrigin: c.intakeOrigin,
+          isoException: c.isoException,
+          odooLocation: c.odooLocation,
           status: c.status,
           registeredByName: c.registeredByName || "—",
           createdAt: c.createdAt,
@@ -164,7 +179,7 @@ export class WarehouseService {
       .filter((x): x is NonNullable<typeof x> => !!x);
   }
 
-  async getUnit(iso: string) {
+  async getUnit(iso: string, opts: { hideOdoo?: boolean } = {}) {
     const c = await this.loadUnit(iso);
     const [types, categories, rules] = await Promise.all([
       this.prisma.containerType.findMany(),
@@ -175,7 +190,7 @@ export class WarehouseService {
       toYardUnit,
     );
     const suggested = bestSlotFor(occupants, c.depotId, c.type, c.cat, DEFAULT_YARD_CONFIG, rules);
-    return this.presentUnit(c, types, categories, suggested);
+    return this.presentUnit(c, types, categories, suggested, opts.hideOdoo);
   }
 
   async intake(
@@ -262,7 +277,7 @@ export class WarehouseService {
       after: { iso, intakeType: category, depotId: depot.id },
       ip,
     });
-    return this.getUnit(iso);
+    return this.getUnit(iso, { hideOdoo: user.role === "almacen" });
   }
 
   async patchUnit(
@@ -275,11 +290,21 @@ export class WarehouseService {
       year?: number | null;
       manufacturer?: string;
       inspectionNotes?: string;
+      conditionFloor?: string | null;
+      conditionRoof?: string | null;
+      conditionDoors?: string | null;
+      conditionPaint?: string | null;
     },
     user: AuthUser,
     ip?: string,
   ) {
     const c = await this.loadUnit(iso);
+    if (user.role === "almacen" && c.intakeOrigin === "odoo") {
+      const locked = CAMPO_ODOO_LOCKED.filter((k) => body[k] !== undefined);
+      if (locked.length) {
+        throw new ForbiddenException("El operario de patio no modifica datos de Odoo. Solo fotos y notas de campo.");
+      }
+    }
     const data: Prisma.ContainerUpdateInput = {};
     if (body.tareKg !== undefined || body.mgwKg !== undefined) {
       const tareKg = body.tareKg !== undefined ? Math.max(0, Math.round(Number(body.tareKg) || 0)) : c.tareKg;
@@ -297,6 +322,9 @@ export class WarehouseService {
     if (body.year !== undefined) data.year = body.year ? Number(body.year) : null;
     if (body.manufacturer !== undefined) data.manufacturer = body.manufacturer || "—";
     if (body.inspectionNotes !== undefined) data.inspectionNotes = String(body.inspectionNotes || "");
+    for (const key of ["conditionFloor", "conditionRoof", "conditionDoors", "conditionPaint"] as const) {
+      if (body[key] !== undefined) data[key] = parseCondition(body[key]) || null;
+    }
     await this.prisma.container.update({ where: { iso: c.iso }, data });
     await this.audit.log({
       user,
@@ -306,7 +334,33 @@ export class WarehouseService {
       after: data as object,
       ip,
     });
-    return this.getUnit(c.iso);
+    return this.getUnit(c.iso, { hideOdoo: user.role === "almacen" });
+  }
+
+  async acceptIsoReview(iso: string, note: string, user: AuthUser, ip?: string) {
+    const c = await this.loadUnit(iso);
+    if (!c.isoException) return this.getUnit(iso, { hideOdoo: user.role === "almacen" });
+    const reason = [c.isoExceptionReason, note.trim() || `Revisado por ${user.name}`].filter(Boolean).join(" · ");
+    await this.prisma.container.update({
+      where: { iso: c.iso },
+      data: { isoException: false, isoExceptionReason: reason },
+    });
+    await this.prisma.containerHistory.create({
+      data: {
+        iso: c.iso,
+        type: "ISO 6346",
+        detail: `Excepción ISO marcada como revisada por ${user.name}. ${note.trim() || "Serial Odoo aceptado para operación."}`,
+      },
+    });
+    await this.audit.log({
+      user,
+      action: "iso_review",
+      entity: "Container",
+      entityId: c.iso,
+      after: { isoException: false },
+      ip,
+    });
+    return this.getUnit(c.iso, { hideOdoo: user.role === "almacen" });
   }
 
   async uploadMedia(
@@ -347,55 +401,155 @@ export class WarehouseService {
         after: { storageKey, mime },
         ip,
       });
-      return this.getUnit(c.iso);
+      return this.getUnit(c.iso, { hideOdoo: user.role === "almacen" });
     }
     const slot = Number(slotRaw);
     if (!Number.isInteger(slot) || slot < 0 || slot > 8) {
       throw new BadRequestException("Slot de foto inválido (0–8).");
     }
-    if (file.size > MAX_INSPECTION_PHOTO_BYTES) {
-      throw new BadRequestException("La foto supera el máximo de 8 MB.");
+    await this.storeInspectionPhoto(c, slot, file.buffer, file.originalname, file.size, user, ip, "Reemplazada por una foto nueva");
+    return this.getUnit(c.iso, { hideOdoo: user.role === "almacen" });
+  }
+
+  async listOdooPhotos(iso: string) {
+    const c = await this.loadUnit(iso);
+    if (!c.odooLotId) return [];
+    return listOdooLotPhotos(this.odoo, c.odooLotId);
+  }
+
+  async openOdooPhoto(iso: string, attId: string) {
+    const c = await this.loadUnit(iso);
+    if (!c.odooLotId) throw new NotFoundException("Esta unidad no tiene lote Odoo.");
+    return openOdooLotPhoto(this.odoo, c.odooLotId, attId);
+  }
+
+  async assignOdooPhoto(iso: string, attId: string, slotRaw: string, user: AuthUser, ip?: string) {
+    const c = await this.loadUnit(iso);
+    if (c.intakeOrigin !== "odoo" || !c.odooLotId) {
+      throw new BadRequestException("Solo las unidades asimiladas de Odoo tienen fotos de chatter.");
     }
-    let mime: string;
-    try {
-      mime = sniffInspectionPhotoMime(file.buffer);
-    } catch (e) {
-      throw new BadRequestException((e as Error).message);
+    const slot = Number(slotRaw);
+    if (!Number.isInteger(slot) || slot < 0 || slot > 8) {
+      throw new BadRequestException("Slot de foto inválido (0–8).");
     }
-    const ext = extForInspectionMime(mime);
-    const photoId = randomUUID();
-    const storageKey = `warehouse/${c.iso}/photos/${photoId}.${ext}`;
-    await this.storage.put(storageKey, file.buffer, mime);
-    const originalName = String(file.originalname || `foto-${slot + 1}.${ext}`)
-      .replace(/[/\\]/g, "_")
-      .slice(0, 180);
-    const previous = await this.prisma.inspectionPhoto.findFirst({
-      where: { iso: c.iso, slot, status: PHOTO_STATUS_ACTIVE },
+    const obj = await openOdooLotPhoto(this.odoo, c.odooLotId, attId);
+    await this.storeInspectionPhoto(
+      c,
+      slot,
+      obj.buffer,
+      obj.name,
+      obj.buffer.length,
+      user,
+      ip,
+      "Reemplazada por foto de Odoo",
+    );
+    return this.getUnit(c.iso);
+  }
+
+  async campoQueue(q = "") {
+    const live = await this.prisma.liveContainers();
+    const needle = q.trim().toUpperCase();
+    const [types, categories, rows] = await Promise.all([
+      this.prisma.containerType.findMany(),
+      this.prisma.category.findMany(),
+      this.prisma.container.findMany({
+        where: {
+          ...live,
+          status: { not: "Vendido" },
+          physicallyReceived: true,
+          ...(needle ? { iso: { contains: needle, mode: "insensitive" } } : {}),
+        },
+        include: {
+          depot: { select: { name: true } },
+          photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { slot: true } },
+        },
+        orderBy: [{ fieldRegularizedAt: "asc" }, { updatedAt: "desc" }],
+      }),
+    ]);
+    const typeMap = Object.fromEntries(types.map((t) => [t.code, t]));
+    const catMap = Object.fromEntries(categories.map((c) => [c.code, c]));
+    return rows.map((c) => ({
+      iso: c.iso,
+      type: c.type,
+      typeLabel: typeMap[c.type]?.label || c.type,
+      cat: c.cat,
+      catLabel: catMap[c.cat]?.label || c.cat,
+      depotName: c.depot.name,
+      intakeOrigin: c.intakeOrigin,
+      isoException: c.isoException,
+      photoCount: c.photos.length,
+      hasVideo: !!c.video360Key,
+      mediaStatus: c.mediaStatus,
+      fieldRegularizedAt: c.fieldRegularizedAt,
+      fieldRegularizedByName: c.fieldRegularizedByName,
+      mediaApprovedAt: c.mediaApprovedAt,
+    }));
+  }
+
+  async regularize(iso: string, user: AuthUser, ip?: string) {
+    const c = await this.loadUnit(iso);
+    await this.prisma.container.update({
+      where: { iso: c.iso },
+      data: { fieldRegularizedAt: new Date(), fieldRegularizedByName: user.name },
     });
-    if (previous) {
-      await this.archivePhoto(previous, user, "Reemplazada por una foto nueva");
-    }
-    await this.prisma.inspectionPhoto.create({
+    await this.prisma.containerHistory.create({
       data: {
-        id: photoId,
         iso: c.iso,
-        slot,
-        storageKey,
-        mimeType: mime,
-        originalName,
-        sizeBytes: file.size,
-        status: PHOTO_STATUS_ACTIVE,
+        type: "Campo",
+        detail: `Regularización de campo enviada a evaluación por ${user.name}.`,
       },
     });
     await this.audit.log({
       user,
-      action: "upload",
-      entity: "InspectionPhoto",
+      action: "field_regularize",
+      entity: "Container",
       entityId: c.iso,
-      after: { slot, storageKey },
       ip,
     });
-    return this.getUnit(c.iso);
+    return this.getUnit(c.iso, { hideOdoo: user.role === "almacen" });
+  }
+
+  async dailyActivity(ymd?: string) {
+    const { date, start, end } = limaDayRange(ymd);
+    const live = await this.prisma.liveContainers();
+    const [regularized, published] = await Promise.all([
+      this.prisma.container.findMany({
+        where: { ...live, fieldRegularizedAt: { gte: start, lte: end } },
+        select: {
+          iso: true,
+          fieldRegularizedAt: true,
+          fieldRegularizedByName: true,
+          mediaStatus: true,
+          depot: { select: { name: true } },
+        },
+        orderBy: { fieldRegularizedAt: "desc" },
+      }),
+      this.prisma.container.findMany({
+        where: { ...live, mediaStatus: "aprobado", mediaApprovedAt: { gte: start, lte: end } },
+        select: {
+          iso: true,
+          mediaApprovedAt: true,
+          mediaApprovedBy: true,
+          depot: { select: { name: true } },
+        },
+        orderBy: { mediaApprovedAt: "desc" },
+      }),
+    ]);
+    return {
+      date,
+      regularized: regularized.map((c) => ({
+        iso: c.iso,
+        at: c.fieldRegularizedAt,
+        by: c.fieldRegularizedByName,
+        depotName: c.depot.name,
+        mediaStatus: c.mediaStatus,
+      })),
+      published: published.map((c) => ({
+        iso: c.iso,
+        at: c.mediaApprovedAt,
+        depotName: c.depot.name,
+      })),
+    };
   }
 
   async archivePhoto(
@@ -496,7 +650,7 @@ export class WarehouseService {
 
   async confirm(iso: string, user: AuthUser, ip?: string) {
     const c = await this.loadUnit(iso);
-    const missing = inspectDataMissing(c);
+    const missing = c.intakeOrigin === "odoo" ? [] : inspectDataMissing(c);
     if (missing.length) {
       throw new UnprocessableEntityException("Completa año y fabricante antes de continuar.");
     }
@@ -558,7 +712,7 @@ export class WarehouseService {
       after: { [field]: next },
       ip,
     });
-    return this.getUnit(c.iso);
+    return this.getUnit(c.iso, { hideOdoo: user.role === "almacen" });
   }
 
   async registerService(iso: string, key: string, user: AuthUser, ip?: string) {
@@ -583,7 +737,7 @@ export class WarehouseService {
       after: { service: key },
       ip,
     });
-    return this.getUnit(c.iso);
+    return this.getUnit(c.iso, { hideOdoo: user.role === "almacen" });
   }
 
   async yardLayout(depotId: string) {
@@ -805,6 +959,60 @@ export class WarehouseService {
     });
   }
 
+  private async storeInspectionPhoto(
+    c: ContainerRow,
+    slot: number,
+    buffer: Buffer,
+    originalNameRaw: string,
+    sizeBytes: number,
+    user: AuthUser,
+    ip: string | undefined,
+    replaceNote: string,
+  ) {
+    if (sizeBytes > MAX_INSPECTION_PHOTO_BYTES) {
+      throw new BadRequestException("La foto supera el máximo de 8 MB.");
+    }
+    let mime: string;
+    try {
+      mime = sniffInspectionPhotoMime(buffer);
+    } catch (e) {
+      throw new BadRequestException((e as Error).message);
+    }
+    const ext = extForInspectionMime(mime);
+    const photoId = randomUUID();
+    const storageKey = `warehouse/${c.iso}/photos/${photoId}.${ext}`;
+    await this.storage.put(storageKey, buffer, mime);
+    const originalName = String(originalNameRaw || `foto-${slot + 1}.${ext}`)
+      .replace(/[/\\]/g, "_")
+      .slice(0, 180);
+    const previous = await this.prisma.inspectionPhoto.findFirst({
+      where: { iso: c.iso, slot, status: PHOTO_STATUS_ACTIVE },
+    });
+    if (previous) {
+      await this.archivePhoto(previous, user, replaceNote);
+    }
+    await this.prisma.inspectionPhoto.create({
+      data: {
+        id: photoId,
+        iso: c.iso,
+        slot,
+        storageKey,
+        mimeType: mime,
+        originalName,
+        sizeBytes,
+        status: PHOTO_STATUS_ACTIVE,
+      },
+    });
+    await this.audit.log({
+      user,
+      action: "upload",
+      entity: "InspectionPhoto",
+      entityId: c.iso,
+      after: { slot, storageKey, fromOdoo: replaceNote.includes("Odoo") },
+      ip,
+    });
+  }
+
   private async loadUnit(iso: string): Promise<ContainerRow> {
     const c = await this.prisma.container.findUnique({
       where: { iso },
@@ -824,6 +1032,7 @@ export class WarehouseService {
     types: { code: string; label: string; color: string }[],
     categories: { code: string; label: string; color: string }[],
     suggested: ReturnType<typeof bestSlotFor>,
+    hideOdoo = false,
   ) {
     const typeRow = types.find((t) => t.code === c.type);
     const catRow = categories.find((x) => x.code === c.cat);
@@ -850,6 +1059,10 @@ export class WarehouseService {
       payloadKg: c.payloadKg,
       color: c.color,
       inspectionNotes: c.inspectionNotes,
+      conditionFloor: c.conditionFloor,
+      conditionRoof: c.conditionRoof,
+      conditionDoors: c.conditionDoors,
+      conditionPaint: c.conditionPaint,
       gateIn: c.gateIn,
       gateOut: c.gateOut,
       intakeType: c.intakeType,
@@ -864,7 +1077,21 @@ export class WarehouseService {
       hasVideo: !!c.video360Key,
       mediaStatus: c.mediaStatus,
       mediaReviewNote: c.mediaReviewNote,
-      missing: inspectMissing(c),
+      mediaApprovedAt: c.mediaApprovedAt,
+      intakeOrigin: c.intakeOrigin,
+      isoException: c.isoException,
+      isoExceptionReason: c.isoExceptionReason,
+      odooLotId: hideOdoo ? null : c.odooLotId,
+      odooLocation: hideOdoo ? null : c.odooLocation,
+      odooDua: hideOdoo ? null : c.odooDua,
+      originCountry: hideOdoo ? null : c.originCountry,
+      odooSource: hideOdoo ? null : c.odooSource,
+      fieldRegularizedAt: c.fieldRegularizedAt,
+      fieldRegularizedByName: c.fieldRegularizedByName,
+      missing: inspectMissing({
+        ...c,
+        photoCount: c.intakeOrigin === "odoo" ? c.photos.filter((p) => p.status !== PHOTO_STATUS_REJECTED).length : undefined,
+      }),
       dataMissing: inspectDataMissing(c),
       suggested,
     };

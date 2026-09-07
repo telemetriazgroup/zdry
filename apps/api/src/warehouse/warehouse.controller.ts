@@ -36,8 +36,18 @@ export class WarehouseController {
   }
 
   @Get("pending")
-  pending() {
-    return this.warehouse.pending();
+  pending(@CurrentUser() user: AuthUser) {
+    return this.warehouse.pending(user);
+  }
+
+  @Get("campo")
+  campo(@Query("q") q?: string) {
+    return this.warehouse.campoQueue(q || "");
+  }
+
+  @Get("daily")
+  daily(@Query("date") date?: string) {
+    return this.warehouse.dailyActivity(date);
   }
 
   @Post("intake")
@@ -59,8 +69,8 @@ export class WarehouseController {
   }
 
   @Get("units/:iso")
-  getUnit(@Param("iso") iso: string) {
-    return this.warehouse.getUnit(iso);
+  getUnit(@Param("iso") iso: string, @CurrentUser() user: AuthUser) {
+    return this.warehouse.getUnit(iso, { hideOdoo: user.role === "almacen" });
   }
 
   @Patch("units/:iso")
@@ -75,6 +85,10 @@ export class WarehouseController {
       year?: number | null;
       manufacturer?: string;
       inspectionNotes?: string;
+      conditionFloor?: string | null;
+      conditionRoof?: string | null;
+      conditionDoors?: string | null;
+      conditionPaint?: string | null;
     },
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
@@ -106,6 +120,49 @@ export class WarehouseController {
       type: obj.contentType || "application/octet-stream",
       length: obj.contentLength,
     });
+  }
+
+  @Get("units/:iso/odoo-photos")
+  @Roles("admin")
+  listOdooPhotos(@Param("iso") iso: string) {
+    return this.warehouse.listOdooPhotos(iso);
+  }
+
+  @Get("units/:iso/odoo-photos/:attId")
+  @Roles("admin")
+  async openOdooPhoto(@Param("iso") iso: string, @Param("attId") attId: string) {
+    const obj = await this.warehouse.openOdooPhoto(iso, attId);
+    return new StreamableFile(obj.buffer, {
+      type: obj.contentType,
+      disposition: `inline; filename="${obj.name.replace(/"/g, "")}"`,
+    });
+  }
+
+  @Post("units/:iso/odoo-photos/:attId/assign")
+  @Roles("admin")
+  assignOdooPhoto(
+    @Param("iso") iso: string,
+    @Param("attId") attId: string,
+    @Body() body: { slot?: string | number },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.assignOdooPhoto(iso, attId, String(body.slot ?? ""), user, req.ip);
+  }
+
+  @Post("units/:iso/regularize")
+  regularize(@Param("iso") iso: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.warehouse.regularize(iso, user, req.ip);
+  }
+
+  @Post("units/:iso/iso-review")
+  acceptIsoReview(
+    @Param("iso") iso: string,
+    @Body() body: { note?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.acceptIsoReview(iso, body.note || "", user, req.ip);
   }
 
   @Post("units/:iso/archive")

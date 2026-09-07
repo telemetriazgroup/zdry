@@ -51,8 +51,14 @@ function yearOptions() {
 
 export default function Compras() {
   const loc = useLocation();
-  const tab = loc.pathname.includes("/extras") ? "extras" : loc.pathname.includes("/dam") ? "dam" : "facturas";
-  const [badges, setBadges] = useState({ extras: 0, dam: 0 });
+  const tab = loc.pathname.includes("/extras")
+    ? "extras"
+    : loc.pathname.includes("/dam")
+      ? "dam"
+      : loc.pathname.includes("/odoo")
+        ? "odoo"
+        : "facturas";
+  const [badges, setBadges] = useState({ extras: 0, dam: 0, odoo: 0 });
 
   const refreshBadges = useCallback(() => {
     api("/purchases/badges").then(setBadges).catch(() => {});
@@ -66,6 +72,9 @@ export default function Compras() {
       <p className="section-sub">Facturas de importación, cola de extras reglada por la logística y DAM antes de despachar.</p>
       <div className="subtab-row">
         <NavLink to="/app/compras/facturas" className={`subtab ${tab === "facturas" ? "active" : ""}`}>Facturas de compra</NavLink>
+        <NavLink to="/app/compras/odoo" className={`subtab ${tab === "odoo" ? "active" : ""}`}>
+          Deuda Odoo <AmberBadge n={badges.odoo} />
+        </NavLink>
         <NavLink to="/app/compras/extras" className={`subtab ${tab === "extras" ? "active" : ""}`}>
           Costos adicionales <AmberBadge n={badges.extras} />
         </NavLink>
@@ -74,9 +83,157 @@ export default function Compras() {
         </NavLink>
       </div>
       {tab === "facturas" ? <PurchaseTab onChanged={refreshBadges} /> : null}
+      {tab === "odoo" ? <OdooDebtTab onChanged={refreshBadges} /> : null}
       {tab === "extras" ? <ExtrasTab /> : null}
       {tab === "dam" ? <DamTab onChanged={refreshBadges} /> : null}
     </>
+  );
+}
+
+function OdooDebtTab({ onChanged }) {
+  const [rows, setRows] = useState([]);
+  const [invoices, setInvoices] = useState([]);
+  const [picked, setPicked] = useState({});
+  const [invoiceId, setInvoiceId] = useState("");
+  const [q, setQ] = useState("");
+  const [error, setError] = useState("");
+  const [ok, setOk] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    const [debt, inv] = await Promise.all([api("/purchases/odoo-debt"), api("/purchases/invoices")]);
+    setRows(debt);
+    setInvoices(inv);
+  }
+
+  useEffect(() => { load().catch((e) => setError(e.message)); }, []);
+
+  const visible = useMemo(() => {
+    const term = q.trim().toUpperCase();
+    if (!term) return rows;
+    return rows.filter((r) =>
+      [r.iso, r.odooPoName, r.odooVendorName, r.odooBillName, r.odooDua, r.damNumber, r.purchaseInvoiceNumber]
+        .filter(Boolean)
+        .some((v) => String(v).toUpperCase().includes(term)),
+    );
+  }, [rows, q]);
+
+  const pending = visible.filter((r) => r.invoicePending && !r.purchaseInvoiceId);
+  const selected = Object.keys(picked).filter((iso) => picked[iso]);
+
+  function toggle(iso, on) {
+    setPicked((p) => ({ ...p, [iso]: on }));
+  }
+
+  function selectPending() {
+    const next = {};
+    for (const r of pending) next[r.iso] = true;
+    setPicked(next);
+  }
+
+  async function link(useExisting) {
+    const isos = selected.length ? selected : pending.map((r) => r.iso);
+    if (!isos.length) {
+      setError("Elige al menos una unidad pendiente.");
+      setOk("");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setOk("");
+    try {
+      const body = { isos };
+      if (useExisting) {
+        if (!invoiceId) throw new Error("Elige una factura ZDRY existente.");
+        body.invoiceId = invoiceId;
+      }
+      const res = await api("/purchases/odoo-link", { method: "POST", body });
+      setOk(`Enlazadas ${res.isos?.length || isos.length} unidades a ${res.number}. DUA crudo de Odoo no es DAM.`);
+      setPicked({});
+      await load();
+      onChanged?.();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="panel">
+      <h3>Deuda Odoo</h3>
+      <p className="section-sub">
+        Unidades asimiladas desde Odoo. La OC y la factura de Odoo son referencia. Enlazar crea o usa una factura ZDRY;
+        el DUA crudo no sustituye el DAM.
+      </p>
+      {error ? <div className="err">{error}</div> : null}
+      {ok ? <div className="ok-msg">{ok}</div> : null}
+      <div className="action-row" style={{ marginBottom: 12, flexWrap: "wrap" }}>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Buscar ISO, OC, proveedor, factura…"
+          style={{ minWidth: 220, flex: "1 1 220px" }}
+        />
+        <button className="btn-ghost" type="button" onClick={selectPending}>Seleccionar pendientes ({pending.length})</button>
+        <button className="btn-primary" type="button" disabled={busy} onClick={() => link(false)}>
+          Enlazar (crear stub)
+        </button>
+        <select value={invoiceId} onChange={(e) => setInvoiceId(e.target.value)}>
+          <option value="">Factura ZDRY existente…</option>
+          {invoices.map((inv) => (
+            <option key={inv.id} value={inv.id}>{inv.number} · {inv.providerName}</option>
+          ))}
+        </select>
+        <button className="btn-ghost" type="button" disabled={busy || !invoiceId} onClick={() => link(true)}>
+          Enlazar a factura
+        </button>
+      </div>
+      <div className="tablewrap">
+        <table className="data">
+          <thead>
+            <tr>
+              <th />
+              <th>ISO</th>
+              <th>OC</th>
+              <th>Proveedor</th>
+              <th>Factura Odoo</th>
+              <th>Precio</th>
+              <th>DUA crudo</th>
+              <th>DAM</th>
+              <th>ZDRY</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((r) => (
+              <tr key={r.iso}>
+                <td>
+                  <input
+                    type="checkbox"
+                    disabled={!r.invoicePending || !!r.purchaseInvoiceId}
+                    checked={!!picked[r.iso]}
+                    onChange={(e) => toggle(r.iso, e.target.checked)}
+                  />
+                </td>
+                <td className="card-iso">{r.iso}</td>
+                <td>{r.odooPoName || "—"}</td>
+                <td>{r.odooVendorName || "—"}</td>
+                <td>{r.odooBillName || "—"}</td>
+                <td>{r.odooUnitPrice != null ? money(r.odooUnitPrice) : "—"}</td>
+                <td>{r.odooDua || "—"}</td>
+                <td>{r.damNumber || "—"}</td>
+                <td style={{ color: r.purchaseInvoiceId ? "#2f9e44" : "#c9720b", fontWeight: 700 }}>
+                  {r.purchaseInvoiceNumber || (r.invoicePending ? "Pendiente" : "—")}
+                </td>
+              </tr>
+            ))}
+            {!visible.length ? (
+              <tr><td colSpan={9} className="muted">No hay unidades Odoo en almacén, o aún no se asimiló ninguno.</td></tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

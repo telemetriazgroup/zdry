@@ -348,7 +348,8 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       where: { iso, slot, status: PHOTO_STATUS_ACTIVE },
     });
     if (!photo) throw new NotFoundException("Foto no encontrada.");
-    const obj = await this.storage.get(photo.storageKey);
+    const key = photo.publicKey || photo.storageKey;
+    const obj = await this.storage.get(key);
     return new StreamableFile(obj.stream, { type: obj.contentType || photo.mimeType, disposition: "inline" });
   }
 
