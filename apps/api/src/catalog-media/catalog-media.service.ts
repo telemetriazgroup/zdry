@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { Readable } from "stream";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { WarehouseService } from "../warehouse/warehouse.service";
@@ -79,6 +80,8 @@ export class CatalogMediaService {
         conditionRoof: c.conditionRoof,
         conditionDoors: c.conditionDoors,
         conditionPaint: c.conditionPaint,
+        conditionWalls: c.conditionWalls,
+        roofHole: c.roofHole,
         demo: c.demo,
         registeredByName: c.registeredByName || "—",
         createdAt: c.createdAt,
@@ -132,6 +135,8 @@ export class CatalogMediaService {
       conditionRoof: c.conditionRoof,
       conditionDoors: c.conditionDoors,
       conditionPaint: c.conditionPaint,
+      conditionWalls: c.conditionWalls,
+      roofHole: c.roofHole,
     };
   }
 
@@ -143,6 +148,8 @@ export class CatalogMediaService {
       conditionRoof?: string | null;
       conditionDoors?: string | null;
       conditionPaint?: string | null;
+      conditionWalls?: string | null;
+      roofHole?: boolean | null;
     },
     user: AuthUser,
     ip?: string,
@@ -150,18 +157,19 @@ export class CatalogMediaService {
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c) throw new NotFoundException("Unidad no encontrada.");
     if (c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
-    const data: Record<string, string | null> = {};
+    const data: Prisma.ContainerUpdateInput = {};
     if (body.inspectionNotes !== undefined) data.inspectionNotes = body.inspectionNotes || "";
-    for (const key of ["conditionFloor", "conditionRoof", "conditionDoors", "conditionPaint"] as const) {
+    for (const key of ["conditionFloor", "conditionRoof", "conditionDoors", "conditionPaint", "conditionWalls"] as const) {
       if (body[key] !== undefined) data[key] = parseCondition(body[key]) || null;
     }
+    if (body.roofHole !== undefined) data.roofHole = body.roofHole == null ? null : !!body.roofHole;
     await this.prisma.container.update({ where: { iso }, data });
     await this.audit.log({
       user,
       action: "update",
       entity: "CatalogMedia",
       entityId: iso,
-      after: data,
+      after: data as object,
       ip,
     });
     return this.get(iso);

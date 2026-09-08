@@ -2,9 +2,34 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, apiUpload, apiUrl, formatWhen } from "../api.js";
 import { useAuth } from "../auth.jsx";
-import { parseIso6346 } from "../iso6346.js";
+import SearchCreate from "../search-create.jsx";
+import { useLightbox } from "../media-lightbox.jsx";
 
 const ARCHIVE_PRESETS = ["Contenedor mal ingresado", "Información incorrecta"];
+const EMPTY_VISIT = {
+  tractorPlate: "",
+  company: "",
+  ruc: "",
+  driverName: "",
+  visitAt: "",
+  license: "",
+  motive: "descargar",
+  trailerPlate: "",
+  phone: "",
+  equipmentCode: "",
+};
+
+function toLocalInput(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso).slice(0, 16);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function newDocRow() {
+  return { key: `${Date.now()}-${Math.random()}`, concept: "Recibo de intercambio de equipo (EIR)", file: null };
+}
 
 function ArchiveForm({ iso, onDone, onCancel }) {
   const [preset, setPreset] = useState(ARCHIVE_PRESETS[0]);
@@ -71,6 +96,9 @@ export default function Recepcion() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const canSeeOdoo = user.role === "admin";
+  const isCoord = user.role === "coordinador";
+  const canCoord = user.role === "admin" || user.role === "coordinador";
+  const lb = useLightbox();
   const [meta, setMeta] = useState(null);
   const [pending, setPending] = useState([]);
   const [mode, setMode] = useState("bandeja");
@@ -78,6 +106,9 @@ export default function Recepcion() {
   const [unit, setUnit] = useState(null);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  const [yearErr, setYearErr] = useState("");
+  const [activity, setActivity] = useState({ open: false, conceptKey: "", note: "" });
+  const [pickedCap, setPickedCap] = useState(null);
   const [form, setForm] = useState({
     category: "pendiente_factura",
     iso: "",
@@ -93,10 +124,23 @@ export default function Recepcion() {
   const [odooPhotos, setOdooPhotos] = useState([]);
   const [pickedAtt, setPickedAtt] = useState(null);
   const [assigning, setAssigning] = useState(false);
+  const [visits, setVisits] = useState([]);
+  const [visitForm, setVisitForm] = useState(EMPTY_VISIT);
+  const [visitMode, setVisitMode] = useState("pick");
+  const [editingVisitId, setEditingVisitId] = useState("");
+  const [pickVisitId, setPickVisitId] = useState("");
+  const [docRows, setDocRows] = useState([newDocRow()]);
+  const [capNote, setCapNote] = useState("");
 
   async function loadPending() {
     const rows = await api("/warehouse/pending");
     setPending(rows);
+  }
+
+  async function loadVisits() {
+    if (!canCoord) return;
+    const list = await api("/gate-visits?filter=all");
+    setVisits(list);
   }
 
   useEffect(() => {
@@ -113,6 +157,7 @@ export default function Recepcion() {
       })
       .catch((e) => setError(e.message));
     loadPending().catch((e) => setError(e.message));
+    loadVisits().catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -123,19 +168,45 @@ export default function Recepcion() {
       return;
     }
     api(`/warehouse/units/${inspectIso}`)
-      .then(setUnit)
+      .then((u) => {
+        setUnit(u);
+        setDocRows([newDocRow()]);
+        if (u.visit) {
+          setVisitMode("saved");
+          setEditingVisitId(u.visit.id);
+          setPickVisitId(u.visit.id);
+          setVisitForm({
+            tractorPlate: u.visit.tractorPlate || "",
+            company: u.visit.company || "",
+            ruc: u.visit.ruc || "",
+            driverName: u.visit.driverName || "",
+            visitAt: toLocalInput(u.visit.visitAt),
+            license: u.visit.license || "",
+            motive: u.visit.motive || "descargar",
+            trailerPlate: u.visit.trailerPlate || "",
+            phone: u.visit.phone || "",
+            equipmentCode: u.visit.equipmentCode || "",
+          });
+        } else {
+          setVisitMode("pick");
+          setEditingVisitId("");
+          setPickVisitId("");
+          setVisitForm(EMPTY_VISIT);
+        }
+      })
       .catch((e) => setError(e.message));
+    loadVisits().catch(() => undefined);
   }, [inspectIso]);
 
   useEffect(() => {
-    if (!canSeeOdoo || !unit?.odooLotId) {
+    if (!canCoord || !(unit?.odooLotId || unit?.hasOdooChatter)) {
       setOdooPhotos([]);
       return;
     }
     api(`/warehouse/units/${unit.iso}/odoo-photos`)
       .then(setOdooPhotos)
       .catch(() => setOdooPhotos([]));
-  }, [canSeeOdoo, unit?.iso, unit?.odooLotId]);
+  }, [canCoord, unit?.iso, unit?.odooLotId, unit?.hasOdooChatter]);
 
   useEffect(() => {
     const raw = form.iso.trim();
@@ -144,14 +215,9 @@ export default function Recepcion() {
       setIsoHint({ kind: "idle" });
       return;
     }
-    const check = parseIso6346(raw);
-    if (!check.valid) {
-      setIsoHint({ kind: "err", text: check.reason });
-      return;
-    }
     let cancelled = false;
     const t = setTimeout(() => {
-      api(`/warehouse/iso?code=${encodeURIComponent(check.code)}`)
+      api(`/warehouse/iso?code=${encodeURIComponent(raw)}`)
         .then((d) => {
           if (cancelled) return;
           if (d.duplicate) {
@@ -159,10 +225,10 @@ export default function Recepcion() {
               kind: "err",
               text: `Ya existe un contenedor con este código (estado: ${d.existingStatus}) — cada ISO identifica una única unidad del inventario, no puede repetirse.`,
             });
-          } else if (!d.checkOk) {
+          } else if (d.isoException || !d.checkOk) {
             setIsoHint({
               kind: "warn",
-              text: `"${d.code}" no pasa el dígito de control ISO 6346 (esperado ${d.expectedCheckDigit} → sugerido ${d.suggested}). Verifica el código en la placa del contenedor.`,
+              text: d.isoExceptionReason || d.reason || `"${d.code || raw}" no pasa ISO 6346. Se registrará con excepción; no bloquea el alta.`,
             });
           } else {
             setIsoHint({ kind: "ok", text: "Código válido y disponible — no está registrado en el inventario, se puede continuar." });
@@ -192,11 +258,14 @@ export default function Recepcion() {
           depotId: form.depotId,
           customerId: form.customerId,
           discount: form.discount,
+          enableCampo: isCoord && form.category !== "almacenaje_cliente",
         },
       });
       setInspectIso(created.iso);
       setMode("inspect");
-      setMsg(`✓ ${created.iso} registrado — completa la inspección física a continuación.`);
+      setMsg(created.campoEnabledAt
+        ? `✓ ${created.iso} registrado y enviado a campo.`
+        : `✓ ${created.iso} registrado — completa la ficha o envía a campo.`);
       await loadPending();
     } catch (e) {
       setError(e.message);
@@ -208,8 +277,235 @@ export default function Recepcion() {
     try {
       const next = await api(`/warehouse/units/${inspectIso}`, { method: "PATCH", body: { [field]: value } });
       setUnit(next);
+      if (field === "year") setYearErr("");
+    } catch (e) {
+      if (field === "year") setYearErr(e.message);
+      else setError(e.message);
+    }
+  }
+
+  async function addOption(kind, value) {
+    const m = await api("/warehouse/options", { method: "POST", body: { kind, value } });
+    setMeta(m);
+    return value;
+  }
+
+  async function enableCampo() {
+    if (!inspectIso) return;
+    try {
+      const next = await api(`/warehouse/units/${inspectIso}/enable-campo`, { method: "POST" });
+      setUnit(next);
+      setMsg(`✓ ${next.iso} enviado a campo.`);
+      await loadPending();
     } catch (e) {
       setError(e.message);
+    }
+  }
+
+  async function saveActivity() {
+    if (!inspectIso || !activity.conceptKey) return;
+    try {
+      const next = await api(`/warehouse/units/${inspectIso}/activity`, {
+        method: "POST",
+        body: { conceptKey: activity.conceptKey, note: activity.note },
+      });
+      setUnit(next);
+      setActivity({ open: false, conceptKey: "", note: "" });
+      setMsg("Actividad registrada.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function uploadDoc(file, concept, note) {
+    if (!file || !inspectIso) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("concept", concept);
+    fd.append("note", note || "");
+    try {
+      const next = await apiUpload(`/warehouse/units/${inspectIso}/documents`, fd);
+      setUnit(next);
+      setMsg("Documento adjunto.");
+      return next;
+    } catch (e) {
+      setError(e.message);
+      throw e;
+    }
+  }
+
+  async function saveDocRows() {
+    const pending = docRows.filter((r) => r.file);
+    if (!pending.length) {
+      setError("Selecciona al menos un archivo. Puedes agregar tantas filas como necesites.");
+      return;
+    }
+    setError("");
+    try {
+      for (const row of pending) {
+        await uploadDoc(row.file, row.concept, "");
+      }
+      setDocRows([newDocRow()]);
+      setMsg(`${pending.length} documento(s) guardados. Puedes agregar más o editar el concepto.`);
+    } catch {
+      /* uploadDoc already set error */
+    }
+  }
+
+  async function patchDocument(id, concept) {
+    if (!inspectIso) return;
+    try {
+      const next = await api(`/warehouse/units/${inspectIso}/documents/${id}`, { method: "PATCH", body: { concept } });
+      setUnit(next);
+      setMsg("Concepto del documento actualizado.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function removeDocument(id) {
+    if (!inspectIso || !window.confirm("¿Quitar este documento?")) return;
+    try {
+      const next = await api(`/warehouse/units/${inspectIso}/documents/${id}`, { method: "DELETE" });
+      setUnit(next);
+      setMsg("Documento eliminado.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function uploadCoordCapture(file) {
+    if (!file || !inspectIso) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("note", capNote);
+    try {
+      const next = await apiUpload(`/warehouse/units/${inspectIso}/captures`, fd);
+      setUnit(next);
+      setCapNote("");
+      setMsg("Imagen o video del coordinador guardado. También puedes cargarlo en las casillas 1–9.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function saveVisitFields() {
+    if (!inspectIso) return;
+    setError("");
+    try {
+      if (visitMode === "create" || !editingVisitId) {
+        const row = await api("/gate-visits", { method: "POST", body: { ...visitForm, iso: inspectIso } });
+        setEditingVisitId(row.id);
+        setVisitMode("saved");
+        setMsg("Visita registrada y vinculada a esta unidad. Puedes editarla.");
+      } else {
+        await api(`/gate-visits/${editingVisitId}`, { method: "PATCH", body: visitForm });
+        if (!unit?.visit) {
+          await api(`/gate-visits/${editingVisitId}/link`, { method: "POST", body: { iso: inspectIso } });
+        }
+        setVisitMode("saved");
+        setMsg("Datos de la visita actualizados.");
+      }
+      const next = await api(`/warehouse/units/${inspectIso}`);
+      setUnit(next);
+      await loadVisits();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function linkPickedVisit() {
+    if (!inspectIso || !pickVisitId) return;
+    setError("");
+    try {
+      await api(`/gate-visits/${pickVisitId}/link`, { method: "POST", body: { iso: inspectIso } });
+      const next = await api(`/warehouse/units/${inspectIso}`);
+      setUnit(next);
+      setEditingVisitId(pickVisitId);
+      setVisitMode("saved");
+      setMsg("Visita vinculada a esta unidad. Puedes editar o desvincular.");
+      await loadVisits();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function unlinkVisit() {
+    const id = unit?.visit?.id || editingVisitId;
+    if (!id) return;
+    try {
+      await api(`/gate-visits/${id}/unlink`, { method: "POST" });
+      const next = await api(`/warehouse/units/${inspectIso}`);
+      setUnit(next);
+      setVisitMode("pick");
+      setMsg("Visita desvinculada. Puedes enlazar otra o cargar los datos tú.");
+      await loadVisits();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function deleteVisit() {
+    const id = unit?.visit?.id || editingVisitId || pickVisitId;
+    if (!id || !window.confirm("¿Eliminar esta visita?")) return;
+    try {
+      await api(`/gate-visits/${id}`, { method: "DELETE" });
+      const next = inspectIso ? await api(`/warehouse/units/${inspectIso}`) : null;
+      if (next) setUnit(next);
+      setVisitForm(EMPTY_VISIT);
+      setVisitMode("pick");
+      setEditingVisitId("");
+      setPickVisitId("");
+      setMsg("Visita eliminada.");
+      await loadVisits();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function reviewVisitPhoto(approve) {
+    const id = unit?.visit?.id;
+    if (!id) return;
+    try {
+      await api(`/gate-visits/${id}/photo/${approve ? "approve" : "reject"}`, { method: "POST" });
+      const next = await api(`/warehouse/units/${inspectIso}`);
+      setUnit(next);
+      setBust(Date.now());
+      setMsg(approve ? "Foto de visita aprobada. Patio ya puede contrastarla." : "Foto de visita rechazada.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function uploadVisitPhoto(file) {
+    const id = unit?.visit?.id;
+    if (!file || !id) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      await apiUpload(`/gate-visits/${id}/photo`, fd);
+      const next = await api(`/warehouse/units/${inspectIso}`);
+      setUnit(next);
+      setBust(Date.now());
+      setMsg("Foto de unidad cargada. Apruébala para que patio la vea.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function assignCapture(id, slot) {
+    if (!inspectIso) return;
+    setAssigning(true);
+    try {
+      const next = await api(`/warehouse/units/${inspectIso}/captures/${id}/assign`, { method: "POST", body: { slot } });
+      setUnit(next);
+      setPickedCap(null);
+      setBust(Date.now());
+      setMsg(next.assignWarning || "Toma asignada a la casilla del catálogo.");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setAssigning(false);
     }
   }
 
@@ -281,7 +577,7 @@ export default function Recepcion() {
       <div className="panel recv-page">
         <button className="btn-ghost recv-back" type="button" onClick={() => { setMode("bandeja"); setError(""); setMsg(""); }}>← Volver</button>
         <h3 style={{ marginTop: 10 }}>Nuevo ingreso — {custody ? "almacenaje de cliente tercero" : "compra sin factura (reentrega)"}</h3>
-        <p className="section-sub">Escribe el ISO de la placa. Luego sigue la inspección con fotos.</p>
+        <p className="section-sub">{isCoord ? "ISO, tipo y depósito bastan. Año y fotos no son requisito para enviar a campo. El ISO 6346 no bloquea el alta." : "Escribe el ISO de la placa. El dígito de control no bloquea el alta."}</p>
         {error ? <div className="err">{error}</div> : null}
         <div className="form-grid">
           <div>
@@ -341,7 +637,9 @@ export default function Recepcion() {
             </div>
           </div>
         ) : null}
-        <button className="btn-primary recv-submit" type="button" style={{ marginTop: 12 }} onClick={submitNuevo}>Registrar e inspeccionar</button>
+        <button className="btn-primary recv-submit" type="button" style={{ marginTop: 12 }} onClick={submitNuevo} disabled={isoHint?.kind === "err"}>
+          {custody ? "Registrar e inspeccionar" : "Registrar y enviar a campo"}
+        </button>
       </div>
     );
   }
@@ -381,58 +679,271 @@ export default function Recepcion() {
               </div>
             ) : null}
             <p className="section-sub">
-              {unit.intakeOrigin === "odoo"
-                ? (canSeeOdoo
-                  ? "Asigna fotos de Odoo a las casillas (abajo) o toma otras. Quedan para el catálogo web."
-                  : "Unidad ya en almacén. Sube fotos de campo. No ves ni editas datos de Odoo.")
-                : "Toca cada casilla: en el celular abre la cámara trasera."}
+              {unit.campoEnabledAt
+                ? `En campo desde ${formatWhen(unit.campoEnabledAt)}${unit.campoEnabledByName ? ` · ${unit.campoEnabledByName}` : ""}.`
+                : "Aún no está en la lista de patio. Envíala a campo cuando el ISO y el depósito estén listos."}
             </p>
-            <div className="checklist recv-checklist">
-              {labels.map((lab, i) => {
-                const done = i < 9 ? unit.photos[i] : unit.hasVideo;
-                return (
-                  <label key={lab} className={`check-item ${done ? "done" : ""}`}>
-                    {done && i < 9 ? (
-                      <img className="check-thumb" src={`${apiUrl(`/warehouse/units/${unit.iso}/photos/${i}`)}?t=${bust}`} alt={lab} />
+            {canCoord ? (
+              <div className="visit-bind">
+                <b>Visita de puerta</b>
+                {unit.visit ? (
+                  <p className="ok-msg" style={{ marginTop: 6 }}>
+                    Vinculada a {unit.visit.tractorPlate} · {unit.visit.driverName || "sin conductor"}. Guardada: puedes editar o desvincular.
+                  </p>
+                ) : (
+                  <p className="section-sub">Vincula una visita pendiente o carga tú los datos del tracto.</p>
+                )}
+                {visitMode === "pick" && !unit.visit ? (
+                  <div className="form-grid" style={{ marginTop: 8 }}>
+                    <div>
+                      <label>Visita disponible</label>
+                      <select value={pickVisitId} onChange={(e) => setPickVisitId(e.target.value)}>
+                        <option value="">Elegir visita…</option>
+                        {visits.filter((v) => !v.locked || v.containerIso === unit.iso).map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.tractorPlate} · {v.driverName || "sin conductor"} · {v.motive}
+                            {v.containerIso ? ` · ${v.containerIso}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="action-row" style={{ alignItems: "end" }}>
+                      <button className="btn-primary" type="button" onClick={linkPickedVisit} disabled={!pickVisitId}>Vincular a esta unidad</button>
+                      <button className="btn-ghost" type="button" onClick={() => { setVisitMode("create"); setVisitForm(EMPTY_VISIT); setEditingVisitId(""); }}>Cargar datos yo</button>
+                    </div>
+                  </div>
+                ) : null}
+                {visitMode !== "pick" || unit.visit ? (
+                  <div className="form-grid" style={{ marginTop: 8 }}>
+                    <div><label>Placa tracto</label><input value={visitForm.tractorPlate} onChange={(e) => setVisitForm({ ...visitForm, tractorPlate: e.target.value.toUpperCase() })} /></div>
+                    <div><label>Empresa</label><input value={visitForm.company} onChange={(e) => setVisitForm({ ...visitForm, company: e.target.value })} /></div>
+                    <div><label>RUC</label><input value={visitForm.ruc} onChange={(e) => setVisitForm({ ...visitForm, ruc: e.target.value })} /></div>
+                    <div><label>Conductor</label><input value={visitForm.driverName} onChange={(e) => setVisitForm({ ...visitForm, driverName: e.target.value })} /></div>
+                    <div><label>Hora</label><input type="datetime-local" value={visitForm.visitAt} onChange={(e) => setVisitForm({ ...visitForm, visitAt: e.target.value })} /></div>
+                    <div><label>Brevete</label><input value={visitForm.license} onChange={(e) => setVisitForm({ ...visitForm, license: e.target.value })} /></div>
+                    <div>
+                      <label>Motivo</label>
+                      <select value={visitForm.motive} onChange={(e) => setVisitForm({ ...visitForm, motive: e.target.value })}>
+                        <option value="descargar">Descargar</option>
+                        <option value="cargar">Cargar</option>
+                      </select>
+                    </div>
+                    <div><label>Placa carreta</label><input value={visitForm.trailerPlate} onChange={(e) => setVisitForm({ ...visitForm, trailerPlate: e.target.value.toUpperCase() })} /></div>
+                    <div><label>Teléfono</label><input value={visitForm.phone} onChange={(e) => setVisitForm({ ...visitForm, phone: e.target.value })} /></div>
+                  </div>
+                ) : null}
+                <div className="action-row" style={{ marginTop: 8, flexWrap: "wrap" }}>
+                  {visitMode !== "pick" || unit.visit ? (
+                    <button className="btn-primary" type="button" onClick={saveVisitFields}>
+                      {unit.visit ? "Guardar cambios de visita" : "Registrar y vincular"}
+                    </button>
+                  ) : null}
+                  {unit.visit ? <button className="btn-ghost" type="button" onClick={unlinkVisit}>Desvincular</button> : null}
+                  {(unit.visit || editingVisitId || pickVisitId) ? <button className="btn-ghost" type="button" onClick={deleteVisit}>Eliminar visita</button> : null}
+                  {unit.visit || visitMode !== "pick" ? (
+                    <button className="btn-ghost" type="button" onClick={() => { setVisitMode("pick"); setVisitForm(EMPTY_VISIT); }}>Elegir otra visita</button>
+                  ) : null}
+                </div>
+                {unit.visit ? (
+                  <div style={{ marginTop: 12 }}>
+                    <label>Foto de la unidad (portería)</label>
+                    <p className="section-sub">
+                      {unit.visit.photoStatus === "approved"
+                        ? "Aprobada: el personal de patio ya puede contrastarla."
+                        : unit.visit.photoStatus === "pending"
+                          ? "Pendiente de tu aprobación."
+                          : unit.visit.photoStatus === "rejected"
+                            ? "Rechazada. Puedes cargar otra y aprobarla."
+                            : "Opcional. Si el chofer no la subió, puedes cargarla aquí."}
+                    </p>
+                    {unit.visit.hasPhoto ? (
+                      <button
+                        type="button"
+                        className="visit-photo-btn"
+                        onClick={() => lb.open([{
+                          src: `${apiUrl(`/gate-visits/${unit.visit.id}/photo`)}?t=${bust}`,
+                          type: "image",
+                          label: "Foto de portería",
+                        }])}
+                      >
+                        <img className="visit-photo-preview" src={`${apiUrl(`/gate-visits/${unit.visit.id}/photo`)}?t=${bust}`} alt="Unidad en visita" />
+                      </button>
                     ) : null}
-                    <input
-                      type="file"
-                      accept={i < 9 ? "image/*" : "video/*"}
-                      capture="environment"
-                      style={{ display: "none" }}
-                      onChange={(e) => { uploadSlot(i < 9 ? i : "video", e.target.files?.[0]); e.target.value = ""; }}
-                    />
-                    <span className="check-copy">
-                      <span className="n">{i < 9 ? i + 1 : "▶"}</span>
-                      {lab}{done ? " ✓" : ""}
-                    </span>
+                    <div className="action-row">
+                      <label className="btn-ghost">
+                        {unit.visit.hasPhoto ? "Reemplazar foto" : "Cargar foto"}
+                        <input type="file" accept="image/*" hidden onChange={(e) => { uploadVisitPhoto(e.target.files?.[0]); e.target.value = ""; }} />
+                      </label>
+                      {unit.visit.photoStatus === "pending" || unit.visit.photoStatus === "rejected" ? (
+                        <button className="btn-primary" type="button" onClick={() => reviewVisitPhoto(true)}>Aprobar para patio</button>
+                      ) : null}
+                      {unit.visit.photoStatus === "pending" || unit.visit.photoStatus === "approved" ? (
+                        <button className="btn-ghost" type="button" onClick={() => reviewVisitPhoto(false)}>Rechazar</button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {canCoord && (unit.captures || []).length ? (
+              <div className="campo-caps">
+                <b>Tomas de campo</b>
+                <p className="section-sub">Elige una toma y asígnala a una casilla del catálogo.</p>
+                <div className="odoo-assign-thumbs">
+                  {(unit.captures || []).map((c, idx) => (
+                    <div
+                      key={c.id}
+                      className={`odoo-assign-thumb ${pickedCap === c.id ? "on" : ""}`}
+                    >
+                      <button
+                        type="button"
+                        className="thumb-zoom"
+                        onClick={() => lb.open(
+                          (unit.captures || []).map((x) => ({
+                            src: apiUrl(`/warehouse/units/${unit.iso}/captures/${x.id}`),
+                            type: x.kind === "video" ? "video" : "image",
+                            label: x.note || x.originalName || (x.kind === "video" ? "Video de campo" : "Toma de campo"),
+                          })),
+                          idx,
+                        )}
+                      >
+                        {c.kind === "video" ? <span>Video</span> : <img src={apiUrl(`/warehouse/units/${unit.iso}/captures/${c.id}`)} alt={c.originalName} />}
+                      </button>
+                      <button
+                        type="button"
+                        className="thumb-pick"
+                        onClick={() => setPickedCap(pickedCap === c.id ? null : c.id)}
+                      >
+                        {c.assignedSlot == null ? "Sin casilla · Elegir" : c.assignedSlot === 9 ? "Video 360 · Elegir" : `Casilla ${c.assignedSlot + 1} · Elegir`}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                {pickedCap ? (
+                  <div className="odoo-assign-slots">
+                    {labels.map((lab, i) => (
+                      <button key={lab} type="button" className="btn-ghost" disabled={assigning} onClick={() => assignCapture(pickedCap, i < 9 ? i : "video")}>
+                        {i < 9 ? `${i + 1}. ${lab}` : lab}{i < 9 && unit.photos[i] ? " (reemplazar)" : ""}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <p className="section-sub">El personal de campo también sube tomas. Aquí puedes cargar las tuyas y asignarlas a las casillas 1–9.</p>
+            )}
+            {canCoord ? (
+              <>
+                <div style={{ margin: "10px 0" }}>
+                  <label>Nota de tu toma (opcional)</label>
+                  <input value={capNote} onChange={(e) => setCapNote(e.target.value)} placeholder="Ej. foto de placa o daño al llegar" />
+                  <label className="btn-ghost" style={{ display: "inline-block", marginTop: 8 }}>
+                    + Foto o video del coordinador
+                    <input type="file" accept="image/*,video/*" style={{ display: "none" }} onChange={(e) => { uploadCoordCapture(e.target.files?.[0]); e.target.value = ""; }} />
                   </label>
-                );
-              })}
-            </div>
-            <div className="gateflow">
-              <button className={`gate-btn ${unit.gateIn ? "on" : ""}`} type="button" onClick={() => api(`/warehouse/units/${unit.iso}/gate`, { method: "POST", body: { field: "gateIn" } }).then(setUnit).catch((e) => setError(e.message))}>
-                Gate-In (ingreso)
-                <small>{unit.gateIn ? `Registrado — $${meta.serviceRates.gate_in} aplicado` : `Registrar entrada al patio ($${meta.serviceRates.gate_in})`}</small>
-              </button>
-              <button className={`gate-btn ${unit.gateOut ? "on" : ""}`} type="button" onClick={() => api(`/warehouse/units/${unit.iso}/gate`, { method: "POST", body: { field: "gateOut" } }).then(setUnit).catch((e) => setError(e.message))}>
-                Gate-Out (despacho)
-                <small>{unit.gateOut ? `Registrado — $${meta.serviceRates.gate_out} aplicado` : `Registrar salida del patio ($${meta.serviceRates.gate_out})`}</small>
-              </button>
-            </div>
+                </div>
+                <div className="checklist recv-checklist">
+                  {labels.map((lab, i) => {
+                    const done = i < 9 ? unit.photos[i] : unit.hasVideo;
+                    const slotItems = labels.map((name, idx) => {
+                      if (idx < 9 && unit.photos[idx]) {
+                        return {
+                          src: `${apiUrl(`/warehouse/units/${unit.iso}/photos/${idx}`)}?t=${bust}`,
+                          type: "image",
+                          label: `${idx + 1}. ${name}`,
+                        };
+                      }
+                      if (idx >= 9 && unit.hasVideo) {
+                        return {
+                          src: `${apiUrl(`/warehouse/units/${unit.iso}/photos/video`)}?t=${bust}`,
+                          type: "video",
+                          label: name,
+                        };
+                      }
+                      return null;
+                    }).filter(Boolean);
+                    const openIdx = slotItems.findIndex((x) => x.label.startsWith(i < 9 ? `${i + 1}.` : lab) || (i >= 9 && x.type === "video"));
+                    const fileInput = (
+                      <input
+                        type="file"
+                        accept={i < 9 ? "image/*" : "video/*"}
+                        capture="environment"
+                        style={{ display: "none" }}
+                        onChange={(e) => { uploadSlot(i < 9 ? i : "video", e.target.files?.[0]); e.target.value = ""; }}
+                      />
+                    );
+                    const copy = (
+                      <>
+                        <span className="n">{i < 9 ? i + 1 : "▶"}</span>
+                        {lab}{done ? " ✓" : ""}
+                        {done ? <small> · Cambiar</small> : null}
+                      </>
+                    );
+                    if (done) {
+                      return (
+                        <div key={lab} className="check-item done">
+                          <button
+                            type="button"
+                            className="check-open"
+                            onClick={() => lb.open(slotItems, Math.max(0, openIdx))}
+                          >
+                            {i < 9 ? (
+                              <img className="check-thumb" src={`${apiUrl(`/warehouse/units/${unit.iso}/photos/${i}`)}?t=${bust}`} alt={lab} />
+                            ) : null}
+                          </button>
+                          <label className="check-copy">
+                            {fileInput}
+                            {copy}
+                          </label>
+                        </div>
+                      );
+                    }
+                    return (
+                      <label key={lab} className="check-item">
+                        {fileInput}
+                        <span className="check-copy">{copy}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </>
+            ) : null}
             <div className="recv-services">
-              <button className="btn-ghost" type="button" onClick={() => api(`/warehouse/units/${unit.iso}/service`, { method: "POST", body: { key: "reparacion" } }).then(setUnit).catch((e) => setError(e.message))}>+ Reparación (${meta.serviceRates.reparacion})</button>
-              <button className="btn-ghost" type="button" onClick={() => api(`/warehouse/units/${unit.iso}/service`, { method: "POST", body: { key: "lavado" } }).then(setUnit).catch((e) => setError(e.message))}>+ Lavado (${meta.serviceRates.lavado})</button>
+              <button className="btn-ghost" type="button" onClick={() => setActivity({ open: true, conceptKey: meta.costConcepts?.[0]?.key || "", note: "" })}>Registrar actividad</button>
             </div>
+            {activity.open ? (
+              <div className="archive-box" style={{ marginTop: 10 }}>
+                <b>Registrar actividad de patio</b>
+                <select value={activity.conceptKey} onChange={(e) => setActivity({ ...activity, conceptKey: e.target.value })}>
+                  {(meta.costConcepts || []).map((c) => (
+                    <option key={c.key} value={c.key}>{c.label}{c.amount != null ? ` — $${c.amount}` : ""}</option>
+                  ))}
+                </select>
+                <textarea rows={2} placeholder="Observación (ej. lavado por salitre)" value={activity.note} onChange={(e) => setActivity({ ...activity, note: e.target.value })} />
+                <div className="action-row">
+                  <button className="btn-primary" type="button" onClick={saveActivity}>Guardar</button>
+                  <button className="btn-ghost" type="button" onClick={() => setActivity({ open: false, conceptKey: "", note: "" })}>Cancelar</button>
+                </div>
+              </div>
+            ) : null}
+            {(unit.depotCosts || []).length ? (
+              <ul className="cost-hist">
+                {unit.depotCosts.map((c) => (
+                  <li key={c.id}>
+                    {c.conceptLabel}{c.auto ? " (auto)" : ""}{c.note ? ` — ${c.note}` : ""}
+                    {c.amount != null ? ` · $${c.amount}` : ""}
+                    <small> · {c.createdByName} · {formatWhen(c.createdAt)}</small>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </div>
           <div className="panel">
             <h3>Datos físicos de la unidad</h3>
             <p className="section-sub">
-              {unit.intakeOrigin === "odoo" && !canSeeOdoo
-                ? "Solo notas y condición de campo. Quien publica evalúa y decide qué sale a la web."
-                : unit.intakeOrigin === "odoo"
-                  ? "Datos traídos de Odoo o pendientes. Confírmalos o corrígelos aquí."
-                  : "Estos datos no vienen en la factura del proveedor — los registra Almacén al recibir la unidad."}
+              {unit.intakeOrigin === "odoo"
+                ? "Completa o corrige la ficha. Los ids de Odoo no se muestran aquí."
+                : "Ficha recíproca a Odoo: tara, peso, color, DUA, procedencia, material, año y fabricante."}
             </p>
             {canSeeOdoo && (unit.odooSource || unit.odooLocation || unit.odooDua || unit.originCountry) ? (
               <div className="odoo-source">
@@ -456,61 +967,60 @@ export default function Recepcion() {
               </div>
             ) : null}
             <div className="form-grid">
-              {canSeeOdoo || unit.intakeOrigin !== "odoo" ? (
-                <>
-                  <div><label>Tara (kg)</label><input type="number" defaultValue={unit.tareKg} key={`tare-${unit.tareKg}`} onBlur={(e) => patchField("tareKg", e.target.value)} /></div>
-                  <div><label>Peso bruto máx. (kg)</label><input type="number" defaultValue={unit.mgwKg} key={`mgw-${unit.mgwKg}`} onBlur={(e) => patchField("mgwKg", e.target.value)} /></div>
-                  <div>
-                    <label>Color exterior</label>
-                    <select value={!unit.color || unit.color === "—" ? "" : unit.color} onChange={(e) => patchField("color", e.target.value)}>
-                      <option value="">Selecciona…</option>
-                      {meta.colors.map((cl) => <option key={cl} value={cl}>{cl}</option>)}
-                      {unit.color && unit.color !== "—" && !meta.colors.includes(unit.color) ? (
-                        <option value={unit.color}>{unit.color} (Odoo)</option>
-                      ) : null}
-                    </select>
-                  </div>
-                </>
-              ) : null}
+              <div><label>Tara (kg)</label><input type="number" defaultValue={unit.tareKg} key={`tare-${unit.tareKg}`} onBlur={(e) => patchField("tareKg", e.target.value)} /></div>
+              <div><label>Peso bruto máx. (kg)</label><input type="number" defaultValue={unit.mgwKg} key={`mgw-${unit.mgwKg}`} onBlur={(e) => patchField("mgwKg", e.target.value)} /></div>
+              <div>
+                <label>Color exterior</label>
+                <SearchCreate
+                  options={meta.colors}
+                  value={!unit.color || unit.color === "—" ? "" : unit.color}
+                  onChange={(v) => patchField("color", v)}
+                  onCreate={(v) => addOption("color", v)}
+                  placeholder="Buscar o crear color"
+                />
+              </div>
               <div>
                 <label>Condición comercial</label>
                 <select value={unit.cat} onChange={(e) => patchField("cat", e.target.value)}>
                   {meta.categories.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
                 </select>
               </div>
-              {canSeeOdoo || unit.intakeOrigin !== "odoo" ? (
-                <>
-                  <div>
-                    <label>{unit.intakeOrigin === "odoo" ? "Año" : "Año *"}</label>
-                    <select value={unit.year || ""} onChange={(e) => patchField("year", e.target.value ? parseInt(e.target.value, 10) : null)}>
-                      <option value="">Selecciona…</option>
-                      {meta.years.map((y) => <option key={y} value={y}>{y}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label>{unit.intakeOrigin === "odoo" ? "Fabricante" : "Fabricante *"}</label>
-                    <select value={!unit.manufacturer || unit.manufacturer === "—" ? "" : unit.manufacturer} onChange={(e) => patchField("manufacturer", e.target.value || "—")}>
-                      <option value="">—</option>
-                      {meta.manufacturers.map((m) => <option key={m} value={m}>{m}</option>)}
-                      {unit.manufacturer && unit.manufacturer !== "—" && !meta.manufacturers.includes(unit.manufacturer) ? (
-                        <option value={unit.manufacturer}>{unit.manufacturer} (Odoo)</option>
-                      ) : null}
-                    </select>
-                  </div>
-                </>
-              ) : null}
+              <div>
+                <label>Año ({meta.yearMin || 1980}–{meta.yearMax || new Date().getFullYear()})</label>
+                <input
+                  type="number"
+                  min={meta.yearMin || 1980}
+                  max={meta.yearMax || new Date().getFullYear()}
+                  defaultValue={unit.year || ""}
+                  key={`year-${unit.year || "x"}`}
+                  onBlur={(e) => patchField("year", e.target.value === "" ? null : Number(e.target.value))}
+                />
+                {yearErr ? <div className="err" style={{ marginTop: 4 }}>{yearErr}</div> : null}
+              </div>
+              <div>
+                <label>Fabricante</label>
+                <SearchCreate
+                  options={meta.manufacturers}
+                  value={!unit.manufacturer || unit.manufacturer === "—" ? "" : unit.manufacturer}
+                  onChange={(v) => patchField("manufacturer", v)}
+                  onCreate={(v) => addOption("manufacturer", v)}
+                  placeholder="Buscar o crear fabricante"
+                />
+              </div>
+              <div><label>DUA</label><input defaultValue={unit.odooDua || ""} key={`dua-${unit.odooDua || ""}`} onBlur={(e) => patchField("odooDua", e.target.value)} /></div>
+              <div><label>Procedencia</label><input defaultValue={unit.originCountry || ""} key={`orig-${unit.originCountry || ""}`} onBlur={(e) => patchField("originCountry", e.target.value)} /></div>
+              <div><label>Material</label><input defaultValue={unit.material || ""} key={`mat-${unit.material || ""}`} onBlur={(e) => patchField("material", e.target.value)} /></div>
             </div>
             {missing.length ? (
               <p style={{ fontSize: 11, color: "#c9720b", marginTop: 6, fontWeight: 700 }}>
-                ⚠ {missing.join(" · ")}
-                {unit.intakeOrigin === "odoo" ? " — queda pendiente, no bloquea." : ""}
+                ⚠ {missing.join(" · ")} — no bloquea el envío a campo.
               </p>
             ) : (
-              <p style={{ fontSize: 11, color: "#2f9e44", marginTop: 6, fontWeight: 700 }}>✓ Datos completos — listo para confirmar</p>
+              <p style={{ fontSize: 11, color: "#2f9e44", marginTop: 6, fontWeight: 700 }}>✓ Ficha con año y fabricante</p>
             )}
             <div className="cost-line" style={{ marginTop: 12 }}><span>Depósito y posición actual</span><b>{unit.depotName} — {unit.posLabel}</b></div>
             <div style={{ marginTop: 10 }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-2)", textTransform: "uppercase" }}>Notas de inspección</label>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-2)", textTransform: "uppercase" }}>Notas</label>
               <textarea
                 rows={3}
                 style={{ width: "100%", marginTop: 6, padding: "9px 10px", border: "1px solid var(--line)", borderRadius: 7, fontFamily: "inherit" }}
@@ -519,9 +1029,81 @@ export default function Recepcion() {
                 onBlur={(e) => patchField("inspectionNotes", e.target.value)}
               />
             </div>
+            <div style={{ marginTop: 14 }}>
+              <b>Documentos de la unidad</b>
+              <p className="section-sub">Puedes adjuntar varios. El concepto es editable. No salen al catálogo público.</p>
+              {(unit.documents || []).map((d) => (
+                <div key={d.id} className="doc-saved">
+                  <div>
+                    <label>Concepto</label>
+                    <input
+                      defaultValue={d.conceptLabel}
+                      key={`${d.id}-${d.conceptLabel}`}
+                      onBlur={(e) => {
+                        if (e.target.value.trim() && e.target.value.trim() !== d.conceptLabel) {
+                          patchDocument(d.id, e.target.value);
+                        }
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label>Archivo</label>
+                    <div className="file-field">
+                      <a className="file-field-name" href={apiUrl(`/warehouse/units/${unit.iso}/documents/${d.id}`)} target="_blank" rel="noreferrer">{d.originalName}</a>
+                      <button className="btn-ghost" type="button" onClick={() => removeDocument(d.id)}>Quitar</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {docRows.map((row, idx) => (
+                <div key={row.key} className="doc-card">
+                  <div className="form-grid" style={{ marginBottom: 0 }}>
+                    <div>
+                      <label>Concepto</label>
+                      <SearchCreate
+                        options={meta.documentConceptLabels || (meta.documentConcepts || []).map((d) => d.label)}
+                        value={row.concept}
+                        onChange={(v) => setDocRows((rows) => rows.map((r) => (r.key === row.key ? { ...r, concept: v } : r)))}
+                        onCreate={async (v) => {
+                          const m = await addOption("document", v);
+                          setDocRows((rows) => rows.map((r) => (r.key === row.key ? { ...r, concept: v } : r)));
+                          return m;
+                        }}
+                        placeholder="Buscar o crear concepto"
+                      />
+                    </div>
+                    <div>
+                      <label>Archivo</label>
+                      <div className="file-field">
+                        <span className="file-field-name">{row.file?.name || "Ningún archivo seleccionado"}</span>
+                        <label className="btn-ghost">
+                          Elegir archivo
+                          <input
+                            type="file"
+                            accept="application/pdf,image/*"
+                            hidden
+                            onChange={(e) => {
+                              const file = e.target.files?.[0] || null;
+                              setDocRows((rows) => rows.map((r) => (r.key === row.key ? { ...r, file } : r)));
+                            }}
+                          />
+                        </label>
+                        {docRows.length > 1 ? (
+                          <button className="btn-ghost" type="button" onClick={() => setDocRows((rows) => rows.filter((_, i) => i !== idx))}>Quitar</button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <div className="action-row" style={{ marginTop: 10 }}>
+                <button className="btn-ghost" type="button" onClick={() => setDocRows((rows) => [...rows, newDocRow()])}>+ Otro documento</button>
+                <button className="btn-primary" type="button" onClick={saveDocRows}>Guardar documentos</button>
+              </div>
+            </div>
           </div>
         </div>
-        {canSeeOdoo && unit.intakeOrigin === "odoo" ? (
+        {canCoord && (unit.intakeOrigin === "odoo" || unit.hasOdooChatter) ? (
           <div className="panel odoo-web-photos">
             <h3>Fotos de Odoo (catálogo web)</h3>
             <p className="section-sub">
@@ -532,16 +1114,33 @@ export default function Recepcion() {
             ) : (
               <>
                 <div className="odoo-assign-thumbs">
-                  {odooPhotos.map((p) => (
-                    <button
+                  {odooPhotos.map((p, idx) => (
+                    <div
                       key={p.id}
-                      type="button"
                       className={`odoo-assign-thumb ${pickedAtt === p.id ? "on" : ""}`}
-                      onClick={() => setPickedAtt(pickedAtt === p.id ? null : p.id)}
                     >
-                      <img src={apiUrl(`/warehouse/units/${unit.iso}/odoo-photos/${p.id}`)} alt={p.name} />
-                      <span>{p.name}</span>
-                    </button>
+                      <button
+                        type="button"
+                        className="thumb-zoom"
+                        onClick={() => lb.open(
+                          odooPhotos.map((x) => ({
+                            src: apiUrl(`/warehouse/units/${unit.iso}/odoo-photos/${x.id}`),
+                            type: "image",
+                            label: x.name,
+                          })),
+                          idx,
+                        )}
+                      >
+                        <img src={apiUrl(`/warehouse/units/${unit.iso}/odoo-photos/${p.id}`)} alt={p.name} />
+                      </button>
+                      <button
+                        type="button"
+                        className="thumb-pick"
+                        onClick={() => setPickedAtt(pickedAtt === p.id ? null : p.id)}
+                      >
+                        {p.name} · Elegir
+                      </button>
+                    </div>
                   ))}
                 </div>
                 {pickedAtt ? (
@@ -560,19 +1159,22 @@ export default function Recepcion() {
                     ))}
                   </div>
                 ) : (
-                  <p className="section-sub">Toca una foto de Odoo y luego la casilla donde debe quedar.</p>
+                  <p className="section-sub">Toca la imagen para verla en detalle. Pulsa «Elegir» y luego la casilla donde debe quedar.</p>
                 )}
               </>
             )}
           </div>
         ) : null}
         <div className="recv-confirm-bar">
-          <button className="btn-primary" type="button" disabled={unit.intakeOrigin !== "odoo" && missing.length > 0} onClick={confirm}>✓ Confirmar recepción → Patio</button>
-          {unit.intakeOrigin === "odoo" ? (
-            <p className="recv-confirm-hint">Año, fabricante y fotos pueden quedar pendientes. Confirmar no los exige.</p>
-          ) : missing.length ? (
-            <p className="recv-confirm-hint">Completa año y fabricante para habilitar.</p>
+          {!unit.campoEnabledAt ? (
+            <button className="btn-primary" type="button" onClick={enableCampo}>Enviar a campo</button>
+          ) : (
+            <p className="recv-confirm-hint">Ya está en la lista de Patio — campo. La posición en layout es opcional.</p>
+          )}
+          {user.role === "admin" ? (
+            <button className="btn-ghost" type="button" style={{ marginTop: 8 }} onClick={confirm}>Confirmar recepción → Patio</button>
           ) : null}
+          <p className="recv-confirm-hint">Año, fabricante y fotos no son requisito para habilitar campo.</p>
           {archiving === unit.iso ? (
             <ArchiveForm
               iso={unit.iso}
@@ -583,6 +1185,7 @@ export default function Recepcion() {
             <button className="btn-ghost recv-archive-btn" type="button" onClick={() => setArchiving(unit.iso)}>Archivar esta unidad</button>
           )}
         </div>
+        {lb.node}
       </>
     );
   }
@@ -594,11 +1197,10 @@ export default function Recepcion() {
       <h3>Recepción e inspección</h3>
       <p className="section-sub">
         {canSeeOdoo
-          ? <>Elige un pendiente o registra un ingreso nuevo. En unidades Odoo asigna las fotos del chatter a las casillas del catálogo.{" "}
+          ? <>Elige un pendiente, registra una reentrega o envía a campo un asimilado Odoo.{" "}
             <Link to="/app/almacen/odoo" style={{ color: "var(--orange)", fontWeight: 700 }}>Bandeja Odoo</Link></>
-          : <>Registra un ingreso nuevo o completa pendientes. Las unidades de Odoo se regularizan en{" "}
-            <Link to="/app/almacen/campo" style={{ color: "var(--orange)", fontWeight: 700 }}>Patio — campo</Link>
-            , sin ver ni editar datos de Odoo.</>}
+          : <>Alta mínima, ficha, visitas de puerta, documentos e imágenes. También en{" "}
+            <Link to="/app/almacen/visitas" style={{ color: "var(--orange)", fontWeight: 700 }}>Visitas</Link>.</>}
       </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
@@ -607,6 +1209,8 @@ export default function Recepcion() {
           <span className="recv-full">+ Nuevo ingreso — compra sin factura (reentrega)</span>
           <span className="recv-short">+ Compra sin factura</span>
         </button>
+        {canSeeOdoo ? (
+          <>
         <button className="btn-ghost" type="button" onClick={() => { setForm({ ...form, category: "almacenaje_cliente", iso: "" }); setMode("nuevo"); setError(""); }}>
           <span className="recv-full">+ Nuevo ingreso — almacenaje de cliente tercero</span>
           <span className="recv-short">+ Almacenaje de cliente</span>
@@ -615,6 +1219,8 @@ export default function Recepcion() {
           <span className="recv-full">↩ Registrar devolución de alquiler</span>
           <span className="recv-short">↩ Devolución alquiler</span>
         </button>
+          </>
+        ) : null}
       </div>
       {pending.length ? (
         <>
@@ -687,6 +1293,7 @@ export default function Recepcion() {
       ) : (
         <p style={{ color: "#2f9e44", fontWeight: 700 }}>✓ No hay contenedores pendientes de inspección física ni con datos faltantes.</p>
       )}
+      {lb.node}
     </div>
   );
 }

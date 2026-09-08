@@ -227,6 +227,79 @@ function WatermarkPanel({ onSaved, onError }) {
   );
 }
 
+function DepotConceptsPanel({ onSaved, onError }) {
+  const [rows, setRows] = useState([]);
+  const [label, setLabel] = useState("");
+  const [amount, setAmount] = useState("0");
+
+  async function load() {
+    const list = await api("/config/depot-concepts");
+    setRows(list);
+  }
+
+  useEffect(() => {
+    load().catch((e) => onError(e.message));
+  }, []);
+
+  async function saveRow(row) {
+    onError("");
+    try {
+      await api(`/config/depot-concepts/${row.id}`, { method: "PUT", body: { amount: Number(row.amount), label: row.label, active: row.active } });
+      await load();
+      onSaved("Conceptos de patio actualizados.");
+    } catch (e) {
+      onError(e.message);
+    }
+  }
+
+  async function add() {
+    onError("");
+    try {
+      await api("/config/depot-concepts", { method: "POST", body: { label, amount: Number(amount) } });
+      setLabel("");
+      setAmount("0");
+      await load();
+      onSaved("Concepto agregado.");
+    } catch (e) {
+      onError(e.message);
+    }
+  }
+
+  return (
+    <div className="panel" style={{ marginBottom: 18 }}>
+      <h3>Conceptos de patio (precios)</h3>
+      <p className="section-sub">El coordinador registra actividades sin ver el monto. Gate-In se aplica solo una vez al enviar a campo.</p>
+      <div className="tablewrap">
+        <table className="data">
+          <thead><tr><th>Concepto</th><th>Monto USD</th><th></th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td>{r.label}{r.system ? " · sistema" : ""}</td>
+                <td>
+                  <input
+                    type="number"
+                    value={r.amount}
+                    onChange={(e) => setRows(rows.map((x) => x.id === r.id ? { ...x, amount: e.target.value } : x))}
+                    onBlur={(e) => saveRow({ ...r, amount: e.target.value })}
+                    style={{ width: 90 }}
+                  />
+                </td>
+                <td>{r.active ? "Activo" : "Oculto"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="form-grid" style={{ marginTop: 10 }}>
+        <div><label>Nuevo concepto</label><input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Ej. Lavado especial" /></div>
+        <div><label>Monto</label><input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
+      </div>
+      <button className="btn-primary" type="button" style={{ marginTop: 8 }} onClick={add}>Agregar concepto</button>
+    </div>
+  );
+}
+
 export default function ConfigPage() {
   const { user } = useAuth();
   const [data, setData] = useState(null);
@@ -294,6 +367,8 @@ export default function ConfigPage() {
       </div>
 
       {user?.role === "admin" ? <DemoPanel /> : null}
+
+      {user?.role === "admin" ? <DepotConceptsPanel onSaved={setSaved} onError={setError} /> : null}
 
       <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Visibilidad de precios en catálogo</h3>

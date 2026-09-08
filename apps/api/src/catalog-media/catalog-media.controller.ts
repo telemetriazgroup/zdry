@@ -98,6 +98,8 @@ export class CatalogMediaController {
       conditionRoof?: string | null;
       conditionDoors?: string | null;
       conditionPaint?: string | null;
+      conditionWalls?: string | null;
+      roofHole?: boolean | null;
     },
     @CurrentUser() user: AuthUser,
     @Req() req: Request,

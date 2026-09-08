@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Put, Req } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Param, Post, Put, Req } from "@nestjs/common";
 import { Request } from "express";
 import { Roles } from "../auth/roles.decorator";
 import { CurrentUser } from "../auth/current-user.decorator";
@@ -38,7 +38,7 @@ export class ConfigController {
     return {
       sections: CONFIG_SECTIONS.map((s) => ({
         ...s,
-        status: ["catalog-copy", "watermark", "yard-columns", "visibility", "commercial-services"].includes(s.id)
+        status: ["catalog-copy", "watermark", "yard-columns", "visibility", "commercial-services", "depot-services"].includes(s.id)
           ? ("live" as const)
           : s.id === "freight"
             ? ("partial" as const)
@@ -157,5 +157,54 @@ export class ConfigController {
   @Get("commercial-services")
   commercialServices() {
     return this.prisma.commercialService.findMany({ orderBy: { name: "asc" } });
+  }
+
+  @Get("depot-concepts")
+  @Roles("admin")
+  depotConcepts() {
+    return this.prisma.depotCostConcept.findMany({ orderBy: [{ system: "desc" }, { label: "asc" }] }).then((rows) =>
+      rows.map((r) => ({ ...r, amount: Number(r.amount) })),
+    );
+  }
+
+  @Post("depot-concepts")
+  @Roles("admin")
+  async createDepotConcept(
+    @Body() body: { key?: string; label?: string; amount?: number },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const label = String(body.label || "").trim();
+    if (label.length < 2) throw new BadRequestException("Indica el nombre del concepto.");
+    const key = String(body.key || label)
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_|_$/g, "")
+      .slice(0, 40) || `c_${Date.now()}`;
+    const amount = Math.max(0, Number(body.amount) || 0);
+    const row = await this.prisma.depotCostConcept.create({
+      data: { key, label, amount, system: false, active: true },
+    });
+    await this.audit.log({ user, action: "create", entity: "DepotCostConcept", entityId: row.id, after: { key, label, amount }, ip: req.ip });
+    return { ...row, amount: Number(row.amount) };
+  }
+
+  @Put("depot-concepts/:id")
+  @Roles("admin")
+  async updateDepotConcept(
+    @Param("id") id: string,
+    @Body() body: { label?: string; amount?: number; active?: boolean },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const data: { label?: string; amount?: number; active?: boolean } = {};
+    if (body.label !== undefined) data.label = String(body.label).trim();
+    if (body.amount !== undefined) data.amount = Math.max(0, Number(body.amount) || 0);
+    if (body.active !== undefined) data.active = !!body.active;
+    const row = await this.prisma.depotCostConcept.update({ where: { id }, data });
+    await this.audit.log({ user, action: "update", entity: "DepotCostConcept", entityId: id, after: data, ip: req.ip });
+    return { ...row, amount: Number(row.amount) };
   }
 }

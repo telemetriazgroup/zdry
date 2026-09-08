@@ -134,7 +134,7 @@ function OdooDebtTab({ onChanged }) {
   async function link(useExisting) {
     const isos = selected.length ? selected : pending.map((r) => r.iso);
     if (!isos.length) {
-      setError("Elige al menos una unidad pendiente.");
+      setError("Elige al menos una unidad. Si ya está enlazada, márcala de nuevo para cambiar la factura.");
       setOk("");
       return;
     }
@@ -163,8 +163,7 @@ function OdooDebtTab({ onChanged }) {
     <div className="panel">
       <h3>Deuda Odoo</h3>
       <p className="section-sub">
-        Unidades asimiladas desde Odoo. La OC y la factura de Odoo son referencia. Enlazar crea o usa una factura ZDRY;
-        el DUA crudo no sustituye el DAM.
+        Unidades asimiladas desde Odoo. Si ya hay factura ZDRY, se muestra como <b>guardada</b> y puedes marcarla de nuevo para cambiar el enlace.
       </p>
       {error ? <div className="err">{error}</div> : null}
       {ok ? <div className="ok-msg">{ok}</div> : null}
@@ -210,7 +209,6 @@ function OdooDebtTab({ onChanged }) {
                 <td>
                   <input
                     type="checkbox"
-                    disabled={!r.invoicePending || !!r.purchaseInvoiceId}
                     checked={!!picked[r.iso]}
                     onChange={(e) => toggle(r.iso, e.target.checked)}
                   />
@@ -222,8 +220,15 @@ function OdooDebtTab({ onChanged }) {
                 <td>{r.odooUnitPrice != null ? money(r.odooUnitPrice) : "—"}</td>
                 <td>{r.odooDua || "—"}</td>
                 <td>{r.damNumber || "—"}</td>
-                <td style={{ color: r.purchaseInvoiceId ? "#2f9e44" : "#c9720b", fontWeight: 700 }}>
-                  {r.purchaseInvoiceNumber || (r.invoicePending ? "Pendiente" : "—")}
+                <td>
+                  {r.purchaseInvoiceId ? (
+                    <div>
+                      <b style={{ color: "#2f9e44" }}>Guardada: {r.purchaseInvoiceNumber}</b>
+                      <div className="recv-who">Ya está enlazada. Márcala y vuelve a enlazar para cambiar la factura.</div>
+                    </div>
+                  ) : (
+                    <b style={{ color: "#c9720b" }}>{r.invoicePending ? "Pendiente de enlazar" : "—"}</b>
+                  )}
                 </td>
               </tr>
             ))}

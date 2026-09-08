@@ -19,6 +19,7 @@ import { CatalogMediaModule } from "./catalog-media/catalog-media.module";
 import { DemoModule } from "./demo/demo.module";
 import { SuperadminModule } from "./superadmin/superadmin.module";
 import { OdooImportModule } from "./odoo-import/odoo-import.module";
+import { GateVisitsModule } from "./gate-visits/gate-visits.module";
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { OdooImportModule } from "./odoo-import/odoo-import.module";
     DemoModule,
     SuperadminModule,
     OdooImportModule,
+    GateVisitsModule,
   ],
   controllers: [HealthController],
   providers: [SeedService],

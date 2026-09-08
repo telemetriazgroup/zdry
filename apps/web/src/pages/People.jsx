@@ -9,6 +9,7 @@ const ROLES = [
   { id: "gerente", label: "Gerente" },
   { id: "vendedor", label: "Vendedor" },
   { id: "compras", label: "Compras" },
+  { id: "coordinador", label: "Coordinador de despacho" },
   { id: "almacen", label: "Almacén" },
 ];
 

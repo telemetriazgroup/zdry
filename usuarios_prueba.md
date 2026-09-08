@@ -13,7 +13,8 @@ Clave de todos (salvo que se haya cambiado): **`Zdry123!`**
 | `gerente@zdry.pe` | Gabriel Gerente | Gerente de Ventas |
 | `vendedor@zdry.pe` | Valeria Vendedor | Vendedor / Comercial |
 | `compras@zdry.pe` | Carlos Compras | Compras / Costos |
-| `almacen@zdry.pe` | Lucía Almacén | Almacén / Operador |
+| `coordinador@zdry.pe` | Diego Coordinador | Coordinador de despacho |
+| `almacen@zdry.pe` | Lucía Almacén | Almacén / Operador de campo |
 
 ## Cliente de producción (seed)
 

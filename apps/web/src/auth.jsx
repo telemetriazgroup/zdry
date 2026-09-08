@@ -9,7 +9,8 @@ export const ROLE_LABELS = {
   gerente: "Gerente de Ventas",
   vendedor: "Vendedor / Comercial",
   compras: "Compras / Costos",
-  almacen: "Almacén / Operador",
+  coordinador: "Coordinador de despacho",
+  almacen: "Almacén / Operador de campo",
   cliente: "Cliente",
 };
 
@@ -19,7 +20,8 @@ export const ROLE_DESC = {
   gerente: "Define reglas de precio y visibilidad. No ve FOB ni C_T.",
   vendedor: "Cotiza, valida comprobantes y confirma asignación. Nunca ve el costo real.",
   compras: "Facturas de compra, deuda Odoo, extras y DAM. Ve costos de adquisición.",
-  almacen: "Recepción de ingresos nuevos, patio de campo (fotos y notas) y despachos. No ve ni edita datos de Odoo. Sin precios ni costos.",
+  coordinador: "Alta de reentrega, visitas de puerta, ficha, imágenes, costos sin monto y varios documentos por unidad. No publica el catálogo ni ve tarifas ni Odoo.",
+  almacen: "Patio de campo: lista de visitas y DRY, fotos, video, diagnóstico y registro de emergencia si el contenedor no está. No ve Odoo ni precios.",
   cliente: "Reserva, negocia descuento con tu comercial y sube el comprobante de pago.",
 };
 
@@ -71,13 +73,18 @@ export const ROLE_NAV = {
     { to: "/app/compras/dam", label: "Nacionalización (DAM)" },
     { to: "/app/catalogo-media", label: "Ficha catálogo" },
   ],
-  almacen: [
+  coordinador: [
     { to: "/app", label: "Inicio", end: true },
     { to: "/app/almacen/recepcion", label: "Recepción" },
+    { to: "/app/almacen/visitas", label: "Visitas" },
+    { to: "/app/almacen/campo", label: "Patio — campo" },
+    { to: "/app/almacen/patio", label: "Patio" },
+  ],
+  almacen: [
+    { to: "/app", label: "Inicio", end: true },
     { to: "/app/almacen/campo", label: "Patio — campo" },
     { to: "/app/almacen/patio", label: "Patio" },
     { to: "/app/almacen/despachos", label: "Despachos" },
-    { to: "/app/catalogo-media", label: "Ficha catálogo" },
   ],
   cliente: [],
 };

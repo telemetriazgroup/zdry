@@ -14,6 +14,7 @@ import Compras from "./Compras.jsx";
 import Recepcion from "./Recepcion.jsx";
 import Patio from "./Patio.jsx";
 import PatioCampo from "./PatioCampo.jsx";
+import Visitas from "./Visitas.jsx";
 import QuotesHub from "./QuotesHub.jsx";
 import CatalogMedia from "./CatalogMedia.jsx";
 import CatalogCopy from "./CatalogCopy.jsx";
@@ -27,7 +28,9 @@ const SIDEBAR_KEY = "zdry.sidebarCollapsed";
 function allowed(nav, pathname, role) {
   if ((role === "admin" || role === "compras") && pathname.startsWith("/app/compras")) return true;
   if ((role === "admin" || role === "superadmin") && pathname.startsWith("/app/almacen/odoo")) return true;
-  if ((role === "admin" || role === "almacen") && (pathname.startsWith("/app/almacen/recepcion") || pathname.startsWith("/app/almacen/patio") || pathname.startsWith("/app/almacen/campo"))) return true;
+  if ((role === "admin" || role === "coordinador") && pathname.startsWith("/app/almacen/recepcion")) return true;
+  if ((role === "admin" || role === "coordinador") && pathname.startsWith("/app/almacen/visitas")) return true;
+  if ((role === "admin" || role === "almacen" || role === "coordinador") && (pathname.startsWith("/app/almacen/patio") || pathname.startsWith("/app/almacen/campo"))) return true;
   return nav.some((item) => (item.end ? pathname === item.to : pathname === item.to || pathname.startsWith(item.to + "/")));
 }
 
@@ -164,6 +167,7 @@ export default function Shell() {
             <Route path="compras/dam" element={<Gate nav={nav} role={user.role} path="/app/compras/dam"><Compras /></Gate>} />
             <Route path="almacen/odoo" element={<Gate nav={nav} role={user.role} path="/app/almacen/odoo"><OdooBandeja /></Gate>} />
             <Route path="almacen/recepcion" element={<Gate nav={nav} role={user.role} path="/app/almacen/recepcion"><Recepcion /></Gate>} />
+            <Route path="almacen/visitas" element={<Gate nav={nav} role={user.role} path="/app/almacen/visitas"><Visitas /></Gate>} />
             <Route path="almacen/campo" element={<Gate nav={nav} role={user.role} path="/app/almacen/campo"><PatioCampo /></Gate>} />
             <Route path="almacen/patio" element={<Gate nav={nav} role={user.role} path="/app/almacen/patio"><Patio /></Gate>} />
             <Route path="almacen/despachos" element={<Gate nav={nav} role={user.role} path="/app/almacen/despachos"><Restricted title="Despachos" /></Gate>} />

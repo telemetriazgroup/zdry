@@ -13,10 +13,19 @@ import { AuditService } from "../audit/audit.service";
 import { AuthUser } from "../auth/auth.types";
 import { StorageService } from "../storage/storage.service";
 import { YardLockService } from "../redis/yard-lock.service";
-import { parseIso6346 } from "../domain/iso6346";
+import { inspectIntakeIso } from "../domain/intake-iso";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { MANUFACTURERS } from "../domain/purchase-extras";
 import { CONDITION_GRADES, parseCondition } from "../domain/odoo-purchase";
+import { parseBuildYear, YEAR_MIN } from "../domain/year";
+import {
+  DEFAULT_DOCUMENT_CONCEPTS,
+  mergeCatalogOptions,
+  normalizeDocumentConcept,
+  normalizeOptionLabel,
+} from "../domain/catalog-options";
+import { canApplyGateIn, GATE_IN_KEY, presentDepotCost } from "../domain/depot-costs";
+import { visitPhotoStatus } from "../domain/gate-visit";
 import {
   extForInspectionMime,
   MAX_INSPECTION_PHOTO_BYTES,
@@ -49,10 +58,40 @@ import { PHOTO_STATUS_ACTIVE, PHOTO_STATUS_REJECTED } from "../domain/catalog-me
 import { OdooClient } from "../odoo/odoo.client";
 import { limaDayRange, listOdooLotPhotos, openOdooLotPhoto } from "../odoo/odoo-lot-photos";
 
-const CAMPO_ODOO_LOCKED = ["tareKg", "mgwKg", "color", "year", "manufacturer"] as const;
+const CAMPO_ODOO_LOCKED = [
+  "tareKg",
+  "mgwKg",
+  "color",
+  "year",
+  "manufacturer",
+  "odooDua",
+  "originCountry",
+  "material",
+] as const;
 
 const LAYOUT_RULES_KEY = "layout_rules";
 const YARD_CONFIG_KEY = "yard_config";
+const COLORS_KEY = "container_colors";
+const MANUFACTURERS_KEY = "container_manufacturers";
+const DOCUMENTS_KEY = "document_concepts";
+
+export const DOCUMENT_CONCEPTS = [
+  { id: "eir", label: "Recibo de intercambio de equipo (EIR)" },
+  { id: "constancia_conductor", label: "Constancia de conductor" },
+  { id: "otro", label: "Otro" },
+] as const;
+
+export function hideOdooFor(role: string) {
+  return role === "almacen";
+}
+
+export function hideOdooIdsFor(role: string) {
+  return role === "almacen" || role === "coordinador";
+}
+
+export function hideRatesFor(role: string) {
+  return role === "almacen" || role === "coordinador";
+}
 
 type ContainerRow = Prisma.ContainerGetPayload<{
   include: { depot: true; photos: true; ownerCustomer: { select: { id: true; companyName: true; rucDni: true } } };
@@ -93,46 +132,69 @@ export class WarehouseService {
     return value;
   }
 
-  async meta() {
-    const [types, categories, depots, customers, rules] = await Promise.all([
+  async meta(user?: AuthUser) {
+    const [types, categories, depots, customers, rules, colorRow, mfrRow, docRow, concepts] = await Promise.all([
       this.prisma.containerType.findMany({ where: ACTIVE_MASTER, orderBy: { code: "asc" } }),
       this.prisma.category.findMany({ where: ACTIVE_MASTER, orderBy: { code: "asc" } }),
       this.prisma.depot.findMany({ where: ACTIVE_MASTER, orderBy: { name: "asc" } }),
       this.prisma.customer.findMany({ where: await this.prisma.hideDemo(), orderBy: { companyName: "asc" } }),
       this.getLayoutRules(),
+      this.prisma.appSetting.findUnique({ where: { key: COLORS_KEY } }),
+      this.prisma.appSetting.findUnique({ where: { key: MANUFACTURERS_KEY } }),
+      this.prisma.appSetting.findUnique({ where: { key: DOCUMENTS_KEY } }),
+      this.prisma.depotCostConcept.findMany({ where: { active: true }, orderBy: [{ system: "desc" }, { label: "asc" }] }),
     ]);
     const maxY = new Date().getFullYear();
     const years: number[] = [];
-    for (let y = maxY; y >= 1975; y--) years.push(y);
+    for (let y = maxY; y >= YEAR_MIN; y--) years.push(y);
+    const hideRates = user ? hideRatesFor(user.role) : false;
     return {
       types,
       categories,
       depots,
       customers,
-      manufacturers: MANUFACTURERS,
-      colors: CONTAINER_COLORS,
+      manufacturers: mergeCatalogOptions(MANUFACTURERS, mfrRow?.value),
+      colors: mergeCatalogOptions(CONTAINER_COLORS, colorRow?.value),
+      yearMin: YEAR_MIN,
+      yearMax: maxY,
       photoLabels: PHOTO_LABELS,
       conditionGrades: CONDITION_GRADES,
       yardConfig: DEFAULT_YARD_CONFIG,
       layoutRules: rules,
       years,
-      serviceRates: DEPOT_SERVICE_RATES,
+      serviceRates: hideRates ? null : DEPOT_SERVICE_RATES,
+      costConcepts: concepts.map((c) => ({
+        id: c.id,
+        key: c.key,
+        label: c.label,
+        amount: hideRates ? null : Number(c.amount),
+      })),
+      documentConcepts: mergeCatalogOptions(DEFAULT_DOCUMENT_CONCEPTS, docRow?.value).map((label) => ({
+        id: label,
+        label,
+      })),
+      documentConceptLabels: mergeCatalogOptions(DEFAULT_DOCUMENT_CONCEPTS, docRow?.value),
       maxPhotoBytes: MAX_INSPECTION_PHOTO_BYTES,
       maxVideoBytes: MAX_INSPECTION_VIDEO_BYTES,
     };
   }
 
   async validateIso(raw: string) {
-    const check = parseIso6346(raw);
-    if (!check.valid || !check.code) return { ...check, duplicate: false };
+    const inspected = inspectIntakeIso(raw);
+    if (!inspected.ok) {
+      return { valid: false, checkOk: false, duplicate: false, reason: inspected.message, isoException: true };
+    }
     const existing = await this.prisma.container.findUnique({
-      where: { iso: check.code },
+      where: { iso: inspected.isoNormalized },
       select: { iso: true, status: true },
     });
     return {
-      ...check,
+      ...inspected.check,
+      code: inspected.isoNormalized,
       duplicate: !!existing,
       existingStatus: existing?.status || null,
+      isoException: inspected.isoException,
+      isoExceptionReason: inspected.isoExceptionReason,
     };
   }
 
@@ -154,7 +216,8 @@ export class WarehouseService {
           ...c,
           photoCount: c.intakeOrigin === "odoo" ? c.photos.length : undefined,
         });
-        if (!missing.length) return null;
+        const waitingCampo = !c.campoEnabledAt;
+        if (!missing.length && !waitingCampo) return null;
         if (user?.role === "almacen" && c.intakeOrigin === "odoo") return null;
         return {
           iso: c.iso,
@@ -169,28 +232,39 @@ export class WarehouseService {
           intakeLabel: intakeTypeLabel(c.intakeType),
           intakeOrigin: c.intakeOrigin,
           isoException: c.isoException,
-          odooLocation: c.odooLocation,
+          odooLocation: user?.role === "admin" ? c.odooLocation : null,
           status: c.status,
           registeredByName: c.registeredByName || "—",
           createdAt: c.createdAt,
-          missing,
+          campoEnabledAt: c.campoEnabledAt,
+          waitingCampo,
+          missing: waitingCampo && !missing.length ? ["Pendiente de enviar a campo"] : missing,
         };
       })
       .filter((x): x is NonNullable<typeof x> => !!x);
   }
 
-  async getUnit(iso: string, opts: { hideOdoo?: boolean } = {}) {
+  async getUnit(iso: string, opts: { hideOdoo?: boolean; hideOdooIds?: boolean; hideRates?: boolean } = {}) {
     const c = await this.loadUnit(iso);
-    const [types, categories, rules] = await Promise.all([
+    const [types, categories, rules, extras] = await Promise.all([
       this.prisma.containerType.findMany(),
       this.prisma.category.findMany(),
       this.getLayoutRules(),
+      this.loadUnitExtras(c.iso, !!opts.hideRates),
     ]);
     const occupants = (await this.prisma.container.findMany({ where: { depotId: c.depotId, lado: { not: null } } })).map(
       toYardUnit,
     );
     const suggested = bestSlotFor(occupants, c.depotId, c.type, c.cat, DEFAULT_YARD_CONFIG, rules);
-    return this.presentUnit(c, types, categories, suggested, opts.hideOdoo);
+    return { ...this.presentUnit(c, types, categories, suggested, opts.hideOdoo, opts.hideOdooIds), ...extras };
+  }
+
+  private presentFor(iso: string, user: AuthUser) {
+    return this.getUnit(iso, {
+      hideOdoo: hideOdooFor(user.role),
+      hideOdooIds: hideOdooIdsFor(user.role),
+      hideRates: hideRatesFor(user.role),
+    });
   }
 
   async intake(
@@ -202,22 +276,20 @@ export class WarehouseService {
       depotId?: string;
       customerId?: string;
       discount?: number;
+      enableCampo?: boolean;
     },
     user: AuthUser,
     ip?: string,
   ) {
-    const category = input.category === "almacenaje_cliente" ? "almacenaje_cliente" : "pendiente_factura";
-    const isoRaw = (input.iso || "").trim().toUpperCase();
-    if (!isoRaw) throw new BadRequestException("Ingresa el código ISO.");
-    const check = parseIso6346(isoRaw);
-    if (!check.valid) throw new BadRequestException(`Código inválido: ${check.reason}`);
-    const existing = await this.prisma.container.findUnique({ where: { iso: check.code } });
-    if (existing) throw new ConflictException("Ya existe un contenedor con ese código.");
-    if (!check.checkOk) {
-      throw new UnprocessableEntityException(
-        `"${check.code}" no pasa el dígito de control ISO 6346 (esperado ${check.expectedCheckDigit}). Verifica el código antes de continuar.`,
-      );
+    if (user.role === "almacen") {
+      throw new ForbiddenException("El personal de campo no registra ingresos. El coordinador habilita las unidades.");
     }
+    const category = input.category === "almacenaje_cliente" ? "almacenaje_cliente" : "pendiente_factura";
+    const inspected = inspectIntakeIso(input.iso || "");
+    if (!inspected.ok) throw new BadRequestException(inspected.message);
+    const iso = inspected.isoNormalized;
+    const existing = await this.prisma.container.findUnique({ where: { iso } });
+    if (existing) throw new ConflictException("Ya existe un contenedor con ese código.");
     if (category === "almacenaje_cliente" && !input.customerId) {
       throw new BadRequestException("Selecciona el cliente dueño de la unidad.");
     }
@@ -232,7 +304,6 @@ export class WarehouseService {
       if (!customer) throw new BadRequestException("Cliente inválido.");
     }
     const discount = Math.max(0, Math.min(100, Number(input.discount) || 0));
-    const iso = check.code!;
     try {
       await this.prisma.$transaction(async (tx) => {
         await tx.container.create({
@@ -247,6 +318,8 @@ export class WarehouseService {
             intakeType: category,
             invoicePending: category === "pendiente_factura",
             physicallyReceived: false,
+            isoException: inspected.isoException,
+            isoExceptionReason: inspected.isoExceptionReason,
             fobCif: 0,
             ownerCustomerId: category === "almacenaje_cliente" ? input.customerId : null,
             storageDiscountPct: category === "almacenaje_cliente" ? discount : 0,
@@ -259,7 +332,7 @@ export class WarehouseService {
           data: {
             iso,
             type: "Ingreso",
-            detail: `Unidad registrada en Recepción por ${user.name} — intake: ${category === "almacenaje_cliente" ? "almacenaje de cliente" : "pendiente de factura"}. Continúa de inmediato con la inspección física.`,
+            detail: `Unidad registrada en Recepción por ${user.name} — intake: ${category === "almacenaje_cliente" ? "almacenaje de cliente" : "pendiente de factura"}${inspected.isoException ? " · ISO 6346 en excepción (no bloqueó el alta)." : ""}.`,
           },
         });
       });
@@ -274,10 +347,13 @@ export class WarehouseService {
       action: "create",
       entity: "Container",
       entityId: iso,
-      after: { iso, intakeType: category, depotId: depot.id },
+      after: { iso, intakeType: category, depotId: depot.id, isoException: inspected.isoException },
       ip,
     });
-    return this.getUnit(iso, { hideOdoo: user.role === "almacen" });
+    if (input.enableCampo) {
+      return this.enableCampo(iso, user, ip);
+    }
+    return this.presentFor(iso, user);
   }
 
   async patchUnit(
@@ -290,10 +366,15 @@ export class WarehouseService {
       year?: number | null;
       manufacturer?: string;
       inspectionNotes?: string;
+      odooDua?: string;
+      originCountry?: string;
+      material?: string;
       conditionFloor?: string | null;
       conditionRoof?: string | null;
       conditionDoors?: string | null;
       conditionPaint?: string | null;
+      conditionWalls?: string | null;
+      roofHole?: boolean | null;
     },
     user: AuthUser,
     ip?: string,
@@ -319,12 +400,20 @@ export class WarehouseService {
       if (!catRow) throw new BadRequestException("Condición inválida.");
       data.cat = body.cat;
     }
-    if (body.year !== undefined) data.year = body.year ? Number(body.year) : null;
+    if (body.year !== undefined) {
+      const parsed = parseBuildYear(body.year);
+      if (!parsed.ok) throw new BadRequestException(parsed.message);
+      data.year = parsed.year;
+    }
     if (body.manufacturer !== undefined) data.manufacturer = body.manufacturer || "—";
     if (body.inspectionNotes !== undefined) data.inspectionNotes = String(body.inspectionNotes || "");
-    for (const key of ["conditionFloor", "conditionRoof", "conditionDoors", "conditionPaint"] as const) {
+    if (body.odooDua !== undefined) data.odooDua = String(body.odooDua || "").trim() || null;
+    if (body.originCountry !== undefined) data.originCountry = String(body.originCountry || "").trim() || null;
+    if (body.material !== undefined) data.material = String(body.material || "").trim() || null;
+    for (const key of ["conditionFloor", "conditionRoof", "conditionDoors", "conditionPaint", "conditionWalls"] as const) {
       if (body[key] !== undefined) data[key] = parseCondition(body[key]) || null;
     }
+    if (body.roofHole !== undefined) data.roofHole = body.roofHole == null || body.roofHole === ("" as never) ? null : !!body.roofHole;
     await this.prisma.container.update({ where: { iso: c.iso }, data });
     await this.audit.log({
       user,
@@ -334,12 +423,12 @@ export class WarehouseService {
       after: data as object,
       ip,
     });
-    return this.getUnit(c.iso, { hideOdoo: user.role === "almacen" });
+    return this.presentFor(c.iso, user);
   }
 
   async acceptIsoReview(iso: string, note: string, user: AuthUser, ip?: string) {
     const c = await this.loadUnit(iso);
-    if (!c.isoException) return this.getUnit(iso, { hideOdoo: user.role === "almacen" });
+    if (!c.isoException) return this.presentFor(iso, user);
     const reason = [c.isoExceptionReason, note.trim() || `Revisado por ${user.name}`].filter(Boolean).join(" · ");
     await this.prisma.container.update({
       where: { iso: c.iso },
@@ -360,7 +449,7 @@ export class WarehouseService {
       after: { isoException: false },
       ip,
     });
-    return this.getUnit(c.iso, { hideOdoo: user.role === "almacen" });
+    return this.presentFor(c.iso, user);
   }
 
   async uploadMedia(
@@ -371,6 +460,9 @@ export class WarehouseService {
     ip?: string,
   ) {
     const c = await this.loadUnit(iso);
+    if (user.role === "almacen") {
+      throw new ForbiddenException("El personal de campo sube tomas a la bandeja, no a las casillas del catálogo.");
+    }
     if (!file?.buffer?.length) throw new BadRequestException("Selecciona un archivo.");
     const isVideo = slotRaw === "video" || slotRaw === "9";
     if (isVideo) {
@@ -401,14 +493,14 @@ export class WarehouseService {
         after: { storageKey, mime },
         ip,
       });
-      return this.getUnit(c.iso, { hideOdoo: user.role === "almacen" });
+      return this.presentFor(c.iso, user);
     }
     const slot = Number(slotRaw);
     if (!Number.isInteger(slot) || slot < 0 || slot > 8) {
       throw new BadRequestException("Slot de foto inválido (0–8).");
     }
     await this.storeInspectionPhoto(c, slot, file.buffer, file.originalname, file.size, user, ip, "Reemplazada por una foto nueva");
-    return this.getUnit(c.iso, { hideOdoo: user.role === "almacen" });
+    return this.presentFor(c.iso, user);
   }
 
   async listOdooPhotos(iso: string) {
@@ -456,34 +548,60 @@ export class WarehouseService {
         where: {
           ...live,
           status: { not: "Vendido" },
-          physicallyReceived: true,
+          campoEnabledAt: { not: null },
           ...(needle ? { iso: { contains: needle, mode: "insensitive" } } : {}),
         },
         include: {
           depot: { select: { name: true } },
           photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { slot: true } },
+          _count: { select: { fieldCaptures: true } },
         },
         orderBy: [{ fieldRegularizedAt: "asc" }, { updatedAt: "desc" }],
       }),
     ]);
+    const visits = rows.length
+      ? await this.prisma.gateVisit.findMany({
+          where: { containerIso: { in: rows.map((r) => r.iso) } },
+          orderBy: { linkedAt: "desc" },
+        })
+      : [];
+    const visitByIso = new Map<string, (typeof visits)[number]>();
+    for (const v of visits) {
+      if (v.containerIso && !visitByIso.has(v.containerIso)) visitByIso.set(v.containerIso, v);
+    }
     const typeMap = Object.fromEntries(types.map((t) => [t.code, t]));
     const catMap = Object.fromEntries(categories.map((c) => [c.code, c]));
-    return rows.map((c) => ({
-      iso: c.iso,
-      type: c.type,
-      typeLabel: typeMap[c.type]?.label || c.type,
-      cat: c.cat,
-      catLabel: catMap[c.cat]?.label || c.cat,
-      depotName: c.depot.name,
-      intakeOrigin: c.intakeOrigin,
-      isoException: c.isoException,
-      photoCount: c.photos.length,
-      hasVideo: !!c.video360Key,
-      mediaStatus: c.mediaStatus,
-      fieldRegularizedAt: c.fieldRegularizedAt,
-      fieldRegularizedByName: c.fieldRegularizedByName,
-      mediaApprovedAt: c.mediaApprovedAt,
-    }));
+    return rows.map((c) => {
+      const visit = visitByIso.get(c.iso);
+      return {
+        iso: c.iso,
+        type: c.type,
+        typeLabel: typeMap[c.type]?.label || c.type,
+        cat: c.cat,
+        catLabel: catMap[c.cat]?.label || c.cat,
+        depotName: c.depot.name,
+        intakeOrigin: c.intakeOrigin,
+        isoException: c.isoException,
+        campoEnabledAt: c.campoEnabledAt,
+        captureCount: c._count.fieldCaptures,
+        photoCount: c.photos.length,
+        hasVideo: !!c.video360Key,
+        mediaStatus: c.mediaStatus,
+        fieldRegularizedAt: c.fieldRegularizedAt,
+        fieldRegularizedByName: c.fieldRegularizedByName,
+        mediaApprovedAt: c.mediaApprovedAt,
+        visit: visit
+          ? {
+              id: visit.id,
+              tractorPlate: visit.tractorPlate,
+              driverName: visit.driverName,
+              motive: visit.motive,
+              company: visit.company,
+              photoStatus: visitPhotoStatus(visit),
+            }
+          : null,
+      };
+    });
   }
 
   async regularize(iso: string, user: AuthUser, ip?: string) {
@@ -506,7 +624,7 @@ export class WarehouseService {
       entityId: c.iso,
       ip,
     });
-    return this.getUnit(c.iso, { hideOdoo: user.role === "almacen" });
+    return this.presentFor(c.iso, user);
   }
 
   async dailyActivity(ymd?: string) {
@@ -712,32 +830,521 @@ export class WarehouseService {
       after: { [field]: next },
       ip,
     });
-    return this.getUnit(c.iso, { hideOdoo: user.role === "almacen" });
+    return this.presentFor(c.iso, user);
   }
 
   async registerService(iso: string, key: string, user: AuthUser, ip?: string) {
-    if (key !== "reparacion" && key !== "lavado") {
-      throw new BadRequestException("Servicio inválido.");
+    return this.registerActivity(iso, { conceptKey: key, note: "" }, user, ip);
+  }
+
+  async enableCampo(iso: string, user: AuthUser, ip?: string) {
+    if (user.role === "almacen") {
+      throw new ForbiddenException("Solo el coordinador o el administrador envían unidades a campo.");
     }
+    return this.applyCampoEnable(iso, user, ip);
+  }
+
+  private async applyCampoEnable(iso: string, user: AuthUser, ip?: string, emergency = false) {
     const c = await this.loadUnit(iso);
-    const label = key === "reparacion" ? "Reparación" : "Lavado";
-    const rate = DEPOT_SERVICE_RATES[key];
+    if (c.campoEnabledAt) return this.presentFor(c.iso, user);
+    const nextStatus = c.status === "Pendiente de ingreso" ? "Disponible" : c.status;
+    await this.prisma.container.update({
+      where: { iso: c.iso },
+      data: {
+        campoEnabledAt: new Date(),
+        campoEnabledByName: user.name,
+        physicallyReceived: true,
+        physicalStatus: "en_patio",
+        status: nextStatus,
+      },
+    });
     await this.prisma.containerHistory.create({
       data: {
         iso: c.iso,
-        type: label,
-        detail: `${label} registrado ($${rate}) — el cargo se aplica en Sprint 8.`,
+        type: emergency ? "Emergencia" : "Campo",
+        detail: emergency
+          ? `Registro de emergencia en campo por ${user.name}.`
+          : `Habilitada para personal de campo por ${user.name}. Año y fotos no son requisito.`,
       },
     });
     await this.audit.log({
       user,
-      action: "update",
+      action: emergency ? "emergency_campo" : "enable_campo",
       entity: "Container",
       entityId: c.iso,
-      after: { service: key },
+      after: { campoEnabledAt: true, emergency },
       ip,
     });
-    return this.getUnit(c.iso, { hideOdoo: user.role === "almacen" });
+    await this.applyGateInOnce(c.iso, user);
+    return this.presentFor(c.iso, user);
+  }
+
+  async addCatalogOption(kind: "color" | "manufacturer" | "document", raw: string, user: AuthUser, ip?: string) {
+    if (user.role === "almacen") throw new ForbiddenException("Sin acceso.");
+    const label = kind === "document" ? normalizeDocumentConcept(raw) : normalizeOptionLabel(raw);
+    if (label.length < 2) throw new BadRequestException("El valor es demasiado corto.");
+    const key = kind === "color" ? COLORS_KEY : kind === "manufacturer" ? MANUFACTURERS_KEY : DOCUMENTS_KEY;
+    const defaults = kind === "color" ? CONTAINER_COLORS : kind === "manufacturer" ? MANUFACTURERS : DEFAULT_DOCUMENT_CONCEPTS;
+    const row = await this.prisma.appSetting.findUnique({ where: { key } });
+    const merged = mergeCatalogOptions(defaults, row?.value);
+    const next = mergeCatalogOptions(merged, [label]);
+    await this.prisma.appSetting.upsert({
+      where: { key },
+      update: { value: next.filter((x) => !defaults.includes(x)) },
+      create: { key, value: next.filter((x) => !defaults.includes(x)) },
+    });
+    await this.audit.log({
+      user,
+      action: "create",
+      entity: kind === "color" ? "ContainerColor" : kind === "manufacturer" ? "Manufacturer" : "DocumentConcept",
+      entityId: label,
+      after: { label },
+      ip,
+    });
+    return this.meta(user);
+  }
+
+  async uploadCapture(
+    iso: string,
+    file: { buffer: Buffer; originalname: string; size: number } | undefined,
+    note: string,
+    user: AuthUser,
+    ip?: string,
+  ) {
+    const c = await this.loadUnit(iso);
+    if (!c.campoEnabledAt && user.role === "almacen") {
+      throw new BadRequestException("Esta unidad aún no está habilitada para campo.");
+    }
+    if (!file?.buffer?.length) throw new BadRequestException("Selecciona un archivo.");
+    let kind: "photo" | "video" = "photo";
+    let mime: string;
+    try {
+      mime = sniffInspectionPhotoMime(file.buffer);
+    } catch {
+      try {
+        mime = sniffInspectionVideoMime(file.buffer);
+        kind = "video";
+      } catch (e) {
+        throw new BadRequestException((e as Error).message);
+      }
+    }
+    if (kind === "photo" && file.size > MAX_INSPECTION_PHOTO_BYTES) {
+      throw new BadRequestException("La foto supera el máximo de 8 MB.");
+    }
+    if (kind === "video" && file.size > MAX_INSPECTION_VIDEO_BYTES) {
+      throw new BadRequestException("El video supera el máximo de 40 MB.");
+    }
+    const ext = extForInspectionMime(mime);
+    const id = randomUUID();
+    const storageKey = `warehouse/${c.iso}/captures/${id}.${ext}`;
+    await this.storage.put(storageKey, file.buffer, mime);
+    const row = await this.prisma.fieldCapture.create({
+      data: {
+        iso: c.iso,
+        kind,
+        storageKey,
+        mimeType: mime,
+        originalName: file.originalname || `${kind}.${ext}`,
+        sizeBytes: file.size,
+        note: String(note || "").trim(),
+        createdById: user.id,
+        createdByName: user.name,
+      },
+    });
+    await this.audit.log({
+      user,
+      action: "upload",
+      entity: "FieldCapture",
+      entityId: row.id,
+      after: { iso: c.iso, kind },
+      ip,
+    });
+    return this.presentFor(c.iso, user);
+  }
+
+  async openCapture(iso: string, id: string) {
+    const row = await this.prisma.fieldCapture.findFirst({ where: { id, iso } });
+    if (!row) throw new NotFoundException("Toma no encontrada.");
+    const obj = await this.storage.get(row.storageKey);
+    return { ...obj, contentType: row.mimeType || obj.contentType, name: row.originalName };
+  }
+
+  async assignCapture(iso: string, id: string, slotRaw: string, user: AuthUser, ip?: string) {
+    if (user.role === "almacen") {
+      throw new ForbiddenException("El personal de campo no asigna casillas de catálogo.");
+    }
+    const c = await this.loadUnit(iso);
+    const cap = await this.prisma.fieldCapture.findFirst({ where: { id, iso: c.iso } });
+    if (!cap) throw new NotFoundException("Toma no encontrada.");
+    const buf = await this.storage.getBuffer(cap.storageKey);
+    const isVideo = slotRaw === "video" || slotRaw === "9" || cap.kind === "video";
+    let portrait = false;
+    if (isVideo) {
+      await this.uploadMedia(c.iso, "video", { buffer: buf.buffer, originalname: cap.originalName, size: buf.buffer.length }, user, ip);
+      await this.prisma.fieldCapture.update({ where: { id: cap.id }, data: { assignedSlot: 9 } });
+    } else {
+      const slot = Number(slotRaw);
+      if (!Number.isInteger(slot) || slot < 0 || slot > 8) {
+        throw new BadRequestException("Slot de foto inválido (0–8).");
+      }
+      try {
+        const Jimp = (await import("jimp")).default;
+        const img = await Jimp.read(buf.buffer);
+        portrait = img.getHeight() > img.getWidth();
+      } catch {
+        portrait = false;
+      }
+      await this.storeInspectionPhoto(c, slot, buf.buffer, cap.originalName, buf.buffer.length, user, ip, "Asignada desde toma de campo");
+      await this.prisma.fieldCapture.update({ where: { id: cap.id }, data: { assignedSlot: slot } });
+    }
+    await this.audit.log({
+      user,
+      action: "assign_capture",
+      entity: "FieldCapture",
+      entityId: cap.id,
+      after: { iso: c.iso, slot: slotRaw },
+      ip,
+    });
+    const unit = await this.presentFor(c.iso, user);
+    return { ...unit, assignWarning: portrait ? "Esta toma es vertical: al publicar quedará con bandas a los lados." : null };
+  }
+
+  async registerActivity(
+    iso: string,
+    input: { conceptKey?: string; conceptId?: string; note?: string },
+    user: AuthUser,
+    ip?: string,
+  ) {
+    if (user.role === "almacen") throw new ForbiddenException("El personal de campo no registra costos.");
+    const c = await this.loadUnit(iso);
+    const concept = input.conceptId
+      ? await this.prisma.depotCostConcept.findUnique({ where: { id: input.conceptId } })
+      : await this.prisma.depotCostConcept.findUnique({ where: { key: input.conceptKey || "" } });
+    if (!concept || !concept.active) throw new BadRequestException("Concepto de patio inválido.");
+    if (concept.key === GATE_IN_KEY) {
+      const existing = await this.prisma.depotCostEntry.findMany({
+        where: { iso: c.iso, conceptKey: GATE_IN_KEY },
+        select: { conceptKey: true },
+      });
+      if (!canApplyGateIn(existing.map((e) => e.conceptKey))) {
+        throw new BadRequestException("Gate-In ya está aplicado en esta unidad.");
+      }
+    }
+    const hide = hideRatesFor(user.role);
+    const entry = await this.prisma.depotCostEntry.create({
+      data: {
+        iso: c.iso,
+        conceptId: concept.id,
+        conceptKey: concept.key,
+        conceptLabel: concept.label,
+        amount: concept.amount,
+        note: String(input.note || "").trim(),
+        auto: false,
+        createdById: user.id,
+        createdByName: user.name,
+      },
+    });
+    await this.prisma.containerHistory.create({
+      data: {
+        iso: c.iso,
+        type: concept.label,
+        detail: hide
+          ? `${concept.label} registrado por ${user.name}${entry.note ? ` — ${entry.note}` : ""}.`
+          : `${concept.label} registrado ($${Number(concept.amount)})${entry.note ? ` — ${entry.note}` : ""}.`,
+      },
+    });
+    await this.audit.log({
+      user,
+      action: "depot_cost",
+      entity: "DepotCostEntry",
+      entityId: entry.id,
+      after: { iso: c.iso, conceptKey: concept.key },
+      ip,
+    });
+    return this.presentFor(c.iso, user);
+  }
+
+  async uploadDocument(
+    iso: string,
+    file: { buffer: Buffer; originalname: string; size: number; mimetype?: string } | undefined,
+    concept: string,
+    note: string,
+    user: AuthUser,
+    ip?: string,
+  ) {
+    if (user.role === "almacen") throw new ForbiddenException("El personal de campo no adjunta documentos de unidad.");
+    const c = await this.loadUnit(iso);
+    if (!file?.buffer?.length) throw new BadRequestException("Selecciona un archivo.");
+    const conceptLabel = normalizeDocumentConcept(concept);
+    if (conceptLabel.length < 2) throw new BadRequestException("Indica el concepto del documento.");
+    await this.rememberDocumentConcept(conceptLabel);
+    const mime = file.mimetype || "application/octet-stream";
+    if (!/^image\//.test(mime) && mime !== "application/pdf") {
+      throw new BadRequestException("Solo se aceptan PDF o imágenes.");
+    }
+    const id = randomUUID();
+    const ext = mime === "application/pdf" ? "pdf" : extForInspectionMime(mime) || "bin";
+    const storageKey = `warehouse/${c.iso}/docs/${id}.${ext}`;
+    await this.storage.put(storageKey, file.buffer, mime);
+    const row = await this.prisma.containerDocument.create({
+      data: {
+        iso: c.iso,
+        concept: conceptLabel,
+        note: String(note || "").trim(),
+        originalName: file.originalname || `documento.${ext}`,
+        mimeType: mime,
+        sizeBytes: file.size,
+        storageKey,
+        createdById: user.id,
+        createdByName: user.name,
+      },
+    });
+    await this.audit.log({
+      user,
+      action: "upload",
+      entity: "ContainerDocument",
+      entityId: row.id,
+      after: { iso: c.iso, concept: conceptLabel },
+      ip,
+    });
+    return this.presentFor(c.iso, user);
+  }
+
+  async updateDocument(
+    iso: string,
+    id: string,
+    input: { concept?: string; note?: string },
+    user: AuthUser,
+    ip?: string,
+  ) {
+    if (user.role === "almacen") throw new ForbiddenException("El personal de campo no edita documentos de unidad.");
+    await this.loadUnit(iso);
+    const row = await this.prisma.containerDocument.findFirst({ where: { id, iso } });
+    if (!row) throw new NotFoundException("Documento no encontrado.");
+    const data: { concept?: string; note?: string } = {};
+    if (input.concept !== undefined) {
+      const conceptLabel = normalizeDocumentConcept(input.concept);
+      if (conceptLabel.length < 2) throw new BadRequestException("Indica el concepto del documento.");
+      await this.rememberDocumentConcept(conceptLabel);
+      data.concept = conceptLabel;
+    }
+    if (input.note !== undefined) data.note = String(input.note || "").trim();
+    await this.prisma.containerDocument.update({ where: { id }, data });
+    await this.audit.log({
+      user,
+      action: "update",
+      entity: "ContainerDocument",
+      entityId: id,
+      after: { iso, ...data },
+      ip,
+    });
+    return this.presentFor(iso, user);
+  }
+
+  async deleteDocument(iso: string, id: string, user: AuthUser, ip?: string) {
+    if (user.role === "almacen") throw new ForbiddenException("El personal de campo no elimina documentos de unidad.");
+    await this.loadUnit(iso);
+    const row = await this.prisma.containerDocument.findFirst({ where: { id, iso } });
+    if (!row) throw new NotFoundException("Documento no encontrado.");
+    await this.storage.delete(row.storageKey).catch(() => undefined);
+    await this.prisma.containerDocument.delete({ where: { id } });
+    await this.audit.log({
+      user,
+      action: "delete",
+      entity: "ContainerDocument",
+      entityId: id,
+      after: { iso, concept: row.concept },
+      ip,
+    });
+    return this.presentFor(iso, user);
+  }
+
+  async emergencyIntake(
+    input: { iso?: string; depotId?: string; type?: string; cat?: string; note?: string },
+    user: AuthUser,
+    ip?: string,
+  ) {
+    const inspected = inspectIntakeIso(input.iso || "");
+    if (!inspected.ok) throw new BadRequestException(inspected.message);
+    const iso = inspected.isoNormalized;
+    const existing = await this.prisma.container.findUnique({ where: { iso } });
+    if (existing?.archivedAt) throw new BadRequestException("Esta unidad está archivada.");
+    if (existing) {
+      return this.applyCampoEnable(existing.iso, user, ip, true);
+    }
+    const depot =
+      (input.depotId
+        ? await this.prisma.depot.findUnique({ where: { id: input.depotId } })
+        : await this.prisma.depot.findFirst({ where: ACTIVE_MASTER, orderBy: { name: "asc" } }));
+    if (!depot || depot.archivedAt) throw new BadRequestException("No hay depósito disponible para el registro de emergencia.");
+    const typeRow =
+      (input.type ? await this.prisma.containerType.findUnique({ where: { code: input.type } }) : null) ||
+      (await this.prisma.containerType.findFirst({ where: ACTIVE_MASTER, orderBy: { code: "asc" } }));
+    const catRow =
+      (input.cat ? await this.prisma.category.findUnique({ where: { code: input.cat } }) : null) ||
+      (await this.prisma.category.findFirst({ where: ACTIVE_MASTER, orderBy: { code: "asc" } }));
+    if (!typeRow || typeRow.archivedAt) throw new BadRequestException("Tipo inválido.");
+    if (!catRow || catRow.archivedAt) throw new BadRequestException("Condición inválida.");
+    await this.prisma.$transaction(async (tx) => {
+      await tx.container.create({
+        data: {
+          iso,
+          type: typeRow.code,
+          cat: catRow.code,
+          status: "Pendiente de ingreso",
+          year: null,
+          manufacturer: "—",
+          depotId: depot.id,
+          intakeType: "pendiente_factura",
+          intakeOrigin: "emergencia",
+          invoicePending: true,
+          physicallyReceived: false,
+          isoException: inspected.isoException,
+          isoExceptionReason: inspected.isoExceptionReason,
+          fobCif: 0,
+          cbm: defaultCbm(typeRow.code),
+          inspectionNotes: String(input.note || "").trim(),
+          registeredById: user.id,
+          registeredByName: user.name,
+        },
+      });
+      await tx.containerHistory.create({
+        data: {
+          iso,
+          type: "Emergencia",
+          detail: `Registro de emergencia en campo por ${user.name}${input.note ? ` — ${input.note}` : ""}.`,
+        },
+      });
+    });
+    await this.audit.log({
+      user,
+      action: "emergency_intake",
+      entity: "Container",
+      entityId: iso,
+      after: { iso, intakeOrigin: "emergencia" },
+      ip,
+    });
+    return this.applyCampoEnable(iso, user, ip, true);
+  }
+
+  async openDocument(iso: string, id: string) {
+    const row = await this.prisma.containerDocument.findFirst({ where: { id, iso } });
+    if (!row) throw new NotFoundException("Documento no encontrado.");
+    const obj = await this.storage.get(row.storageKey);
+    return { ...obj, contentType: row.mimeType || obj.contentType, name: row.originalName };
+  }
+
+  private async applyGateInOnce(iso: string, user: AuthUser) {
+    const existing = await this.prisma.depotCostEntry.findMany({
+      where: { iso, conceptKey: GATE_IN_KEY },
+      select: { conceptKey: true },
+    });
+    if (!canApplyGateIn(existing.map((e) => e.conceptKey))) return;
+    const concept = await this.prisma.depotCostConcept.findUnique({ where: { key: GATE_IN_KEY } });
+    if (!concept) return;
+    await this.prisma.depotCostEntry.create({
+      data: {
+        iso,
+        conceptId: concept.id,
+        conceptKey: concept.key,
+        conceptLabel: concept.label,
+        amount: concept.amount,
+        note: "Gate-In automático al habilitar para campo",
+        auto: true,
+        createdById: user.id,
+        createdByName: user.name,
+      },
+    });
+    await this.prisma.container.update({ where: { iso }, data: { gateIn: true } });
+    await this.prisma.containerHistory.create({
+      data: {
+        iso,
+        type: "Gate-In",
+        detail: `Gate-In aplicado automáticamente al enviar a campo.`,
+      },
+    });
+  }
+
+  private async rememberDocumentConcept(label: string) {
+    if (DEFAULT_DOCUMENT_CONCEPTS.some((d) => d.toLowerCase() === label.toLowerCase())) return;
+    const row = await this.prisma.appSetting.findUnique({ where: { key: DOCUMENTS_KEY } });
+    const next = mergeCatalogOptions(DEFAULT_DOCUMENT_CONCEPTS, [...(Array.isArray(row?.value) ? row.value : []), label]);
+    await this.prisma.appSetting.upsert({
+      where: { key: DOCUMENTS_KEY },
+      update: { value: next.filter((x) => !DEFAULT_DOCUMENT_CONCEPTS.includes(x)) },
+      create: { key: DOCUMENTS_KEY, value: next.filter((x) => !DEFAULT_DOCUMENT_CONCEPTS.includes(x)) },
+    });
+  }
+
+  private documentLabel(concept: string) {
+    return normalizeDocumentConcept(concept);
+  }
+
+  private async loadUnitExtras(iso: string, hideRates: boolean) {
+    const [captures, costs, documents, visit] = await Promise.all([
+      this.prisma.fieldCapture.findMany({ where: { iso }, orderBy: { createdAt: "desc" } }),
+      this.prisma.depotCostEntry.findMany({ where: { iso }, orderBy: { createdAt: "desc" } }),
+      this.prisma.containerDocument.findMany({ where: { iso }, orderBy: { createdAt: "desc" } }),
+      this.prisma.gateVisit.findFirst({ where: { containerIso: iso }, orderBy: { linkedAt: "desc" } }),
+    ]);
+    return {
+      captures: captures.map((r) => ({
+        id: r.id,
+        kind: r.kind,
+        note: r.note,
+        assignedSlot: r.assignedSlot,
+        originalName: r.originalName,
+        createdByName: r.createdByName,
+        createdAt: r.createdAt,
+      })),
+      depotCosts: costs.map((r) => presentDepotCost(r, hideRates)),
+      documents: documents.map((r) => ({
+        id: r.id,
+        concept: this.documentLabel(r.concept),
+        conceptLabel: this.documentLabel(r.concept),
+        note: r.note,
+        originalName: r.originalName,
+        mimeType: r.mimeType,
+        createdByName: r.createdByName,
+        createdAt: r.createdAt,
+      })),
+      visit: visit
+        ? {
+            id: visit.id,
+            tractorPlate: visit.tractorPlate,
+            company: visit.company,
+            ruc: visit.ruc,
+            driverName: visit.driverName,
+            visitAt: visit.visitAt,
+            license: visit.license,
+            motive: visit.motive,
+            trailerPlate: visit.trailerPlate,
+            phone: visit.phone,
+            equipmentCode: visit.equipmentCode,
+            containerIso: visit.containerIso,
+            linkedAt: visit.linkedAt,
+            linkedByName: visit.linkedByName,
+            locked: !!visit.linkedAt,
+            hasPhoto: visitPhotoStatus(visit) !== "none",
+            photoStatus: visitPhotoStatus(visit),
+            photoName: visit.unitPhotoName || null,
+          }
+        : null,
+    };
+  }
+
+  private async loadUnit(iso: string): Promise<ContainerRow> {
+    const c = await this.prisma.container.findUnique({
+      where: { iso },
+      include: {
+        depot: true,
+        photos: ACTIVE_PHOTOS,
+        ownerCustomer: { select: { id: true, companyName: true, rucDni: true } },
+      },
+    });
+    if (!c) throw new NotFoundException("Contenedor no encontrado.");
+    if (c.archivedAt) throw new BadRequestException("Esta unidad está archivada.");
+    return c;
   }
 
   async yardLayout(depotId: string) {
@@ -1013,26 +1620,13 @@ export class WarehouseService {
     });
   }
 
-  private async loadUnit(iso: string): Promise<ContainerRow> {
-    const c = await this.prisma.container.findUnique({
-      where: { iso },
-      include: {
-        depot: true,
-        photos: ACTIVE_PHOTOS,
-        ownerCustomer: { select: { id: true, companyName: true, rucDni: true } },
-      },
-    });
-    if (!c) throw new NotFoundException("Contenedor no encontrado.");
-    if (c.archivedAt) throw new BadRequestException("Esta unidad está archivada.");
-    return c;
-  }
-
   private presentUnit(
     c: ContainerRow,
     types: { code: string; label: string; color: string }[],
     categories: { code: string; label: string; color: string }[],
     suggested: ReturnType<typeof bestSlotFor>,
     hideOdoo = false,
+    hideOdooIds = hideOdoo,
   ) {
     const typeRow = types.find((t) => t.code === c.type);
     const catRow = categories.find((x) => x.code === c.cat);
@@ -1081,11 +1675,17 @@ export class WarehouseService {
       intakeOrigin: c.intakeOrigin,
       isoException: c.isoException,
       isoExceptionReason: c.isoExceptionReason,
-      odooLotId: hideOdoo ? null : c.odooLotId,
-      odooLocation: hideOdoo ? null : c.odooLocation,
+      campoEnabledAt: c.campoEnabledAt,
+      campoEnabledByName: c.campoEnabledByName,
+      material: hideOdoo ? null : c.material,
+      conditionWalls: c.conditionWalls,
+      roofHole: c.roofHole,
+      odooLotId: hideOdooIds ? null : c.odooLotId,
+      hasOdooChatter: !!c.odooLotId,
+      odooLocation: hideOdooIds ? null : c.odooLocation,
       odooDua: hideOdoo ? null : c.odooDua,
       originCountry: hideOdoo ? null : c.originCountry,
-      odooSource: hideOdoo ? null : c.odooSource,
+      odooSource: hideOdooIds ? null : c.odooSource,
       fieldRegularizedAt: c.fieldRegularizedAt,
       fieldRegularizedByName: c.fieldRegularizedByName,
       missing: inspectMissing({

@@ -6,7 +6,7 @@ import { AuthUser } from "../auth/auth.types";
 import { WarehouseService } from "./warehouse.service";
 
 @Controller("yard")
-@Roles("admin", "almacen")
+@Roles("admin", "almacen", "coordinador")
 export class YardController {
   constructor(private readonly warehouse: WarehouseService) {}
 

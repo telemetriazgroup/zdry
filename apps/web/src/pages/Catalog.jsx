@@ -11,6 +11,7 @@ import {
   whatsappUrl,
 } from "../catalog-copy.js";
 import SiteFooter from "./SiteFooter.jsx";
+import { useLightbox } from "../media-lightbox.jsx";
 
 const CART_KEY = "zdry_cart";
 const money = (n) => (n == null ? null : "$" + Math.round(Number(n)).toLocaleString("en-US"));
@@ -118,6 +119,7 @@ export default function Catalog() {
   const [zoneId, setZoneId] = useState("fz1");
   const [freight, setFreight] = useState(null);
   const [copy, setCopy] = useState(DEFAULT_CATALOG_COPY);
+  const lb = useLightbox();
 
   const query = useMemo(() => {
     const p = new URLSearchParams();
@@ -164,6 +166,26 @@ export default function Catalog() {
 
   const pdpSlots = publishedSlots(pdp);
   const pdpSlotKey = pdpSlots.join(",");
+  const markSrc = apiUrl("/catalog/watermark");
+  const pdpItems = pdp ? [
+    ...pdpSlots.map((slot) => ({
+      src: mediaSrc(pdp.iso, slot, pdp.mediaVersion),
+      type: "image",
+      label: `Foto ${slot + 1}`,
+    })),
+    ...(pdp.hasVideo ? [{
+      src: `${apiUrl(`/catalog/${pdp.iso}/video`)}${pdp.mediaVersion ? `?v=${encodeURIComponent(pdp.mediaVersion)}` : ""}`,
+      type: "video",
+      label: "Video 360°",
+      watermark: markSrc,
+    }] : []),
+  ] : [];
+  const pdpLbIndex = thumb === "video" ? pdpSlots.length : Math.max(0, pdpSlots.indexOf(thumb));
+  function openPdpMedia() {
+    if (!pdpItems.length) return;
+    setGalleryPaused(true);
+    lb.open(pdpItems, pdpLbIndex);
+  }
   useEffect(() => {
     if (!pdp || galleryPaused || pdpSlots.length < 2) return undefined;
     const id = setInterval(() => {
@@ -418,11 +440,19 @@ export default function Catalog() {
             </div>
             <div className="modal-body">
               <div>
-                <div className="gallery-main">
+                <div className={`gallery-main ${pdpItems.length ? "can-zoom" : ""}`}>
                   {thumb === "video" && pdp.hasVideo ? (
-                    <video src={`${apiUrl(`/catalog/${pdp.iso}/video`)}${pdp.mediaVersion ? `?v=${encodeURIComponent(pdp.mediaVersion)}` : ""}`} controls autoPlay muted playsInline />
+                    <>
+                      <video src={`${apiUrl(`/catalog/${pdp.iso}/video`)}${pdp.mediaVersion ? `?v=${encodeURIComponent(pdp.mediaVersion)}` : ""}`} controls autoPlay muted playsInline />
+                      <img className="video-corner-mark" src={markSrc} alt="" />
+                      <button className="gallery-expand" type="button" onClick={openPdpMedia}>Ampliar</button>
+                    </>
                   ) : pdpSlots.includes(thumb) ? (
-                    <img src={mediaSrc(pdp.iso, thumb, pdp.mediaVersion)} alt={`${pdp.iso} foto ${thumb + 1}`} />
+                    <img
+                      src={mediaSrc(pdp.iso, thumb, pdp.mediaVersion)}
+                      alt={`${pdp.iso} foto ${thumb + 1}`}
+                      onClick={openPdpMedia}
+                    />
                   ) : (
                     <span className="muted">Sin foto de inspección publicada</span>
                   )}
@@ -435,7 +465,10 @@ export default function Catalog() {
                           key={slot}
                           type="button"
                           className={`thumb ${thumb === slot ? "active" : ""}`}
-                          onClick={() => { setThumb(slot); setGalleryPaused(true); }}
+                          onClick={() => {
+                            if (thumb === slot) openPdpMedia();
+                            else { setThumb(slot); setGalleryPaused(true); }
+                          }}
                         >
                           <img src={mediaSrc(pdp.iso, slot, pdp.mediaVersion)} alt={`Miniatura ${slot + 1}`} />
                         </button>
@@ -444,7 +477,10 @@ export default function Catalog() {
                         <button
                           type="button"
                           className={`thumb video ${thumb === "video" ? "active" : ""}`}
-                          onClick={() => { setThumb("video"); setGalleryPaused(true); }}
+                          onClick={() => {
+                            if (thumb === "video") openPdpMedia();
+                            else { setThumb("video"); setGalleryPaused(true); }
+                          }}
                         >
                           360°
                         </button>
@@ -586,6 +622,7 @@ export default function Catalog() {
           </div>
         </div>
       ) : null}
+      {lb.node}
     </div>
   );
 }

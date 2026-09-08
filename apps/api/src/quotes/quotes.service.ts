@@ -22,6 +22,8 @@ import { AuthUser } from "../auth/auth.types";
 import { type DealStatus, holdClockPaused } from "../deal-close/deal-close.types";
 import { applyShowPrice, DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
 import { isMediaApproved, PHOTO_STATUS_ACTIVE } from "../domain/catalog-media";
+import { loadDefaultWatermark } from "../domain/watermark";
+import { Readable } from "stream";
 import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { isOwnSaleStock } from "../domain/iso6346";
@@ -351,6 +353,23 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     const key = photo.publicKey || photo.storageKey;
     const obj = await this.storage.get(key);
     return new StreamableFile(obj.stream, { type: obj.contentType || photo.mimeType, disposition: "inline" });
+  }
+
+  async catalogWatermark() {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: "catalog_watermark" } });
+    const value = row?.value && typeof row.value === "object" && !Array.isArray(row.value) ? row.value : {};
+    const storageKey = typeof value.storageKey === "string" ? value.storageKey : "";
+    if (storageKey) {
+      try {
+        const obj = await this.storage.get(storageKey);
+        return new StreamableFile(obj.stream, { type: obj.contentType || "image/png", disposition: "inline" });
+      } catch {
+        /* usa predeterminada */
+      }
+    }
+    const buf = await loadDefaultWatermark();
+    if (!buf?.length) throw new NotFoundException("No hay marca de agua.");
+    return new StreamableFile(Readable.from(buf), { type: "image/png", disposition: "inline" });
   }
 
   async catalogVideo(iso: string) {

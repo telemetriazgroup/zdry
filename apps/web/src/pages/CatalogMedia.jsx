@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, apiUpload, ApiError, apiUrl, formatWhen } from "../api.js";
 import { useAuth } from "../auth.jsx";
+import { useLightbox } from "../media-lightbox.jsx";
 
 const GRADES = [
   { value: "", label: "—" },
@@ -27,6 +28,7 @@ function firstPreview(unit) {
 export default function CatalogMedia() {
   const { user } = useAuth();
   const canApprove = user.role === "admin" || user.role === "gerente";
+  const lb = useLightbox();
   const [meta, setMeta] = useState({ photoLabels: [] });
   const [rows, setRows] = useState([]);
   const [iso, setIso] = useState("");
@@ -176,6 +178,34 @@ export default function CatalogMedia() {
   const videoSrc = unit ? `${apiUrl(`/catalog-media/${unit.iso}/photos/video`)}?t=${bust}` : "";
   const previewingPhoto = preview?.type === "photo" && unit?.photoSlots?.[preview.slot];
   const previewingVideo = preview?.type === "video" && unit?.hasVideo;
+  const photoItems = unit
+    ? labels
+      .map((label, i) => (unit.photoSlots[i] ? { src: photoSrc(i), type: "image", label: `${i + 1}. ${label}` } : null))
+      .filter(Boolean)
+    : [];
+  const videoItem = unit?.hasVideo ? { src: videoSrc, type: "video", label: "Video 360°" } : null;
+  const histItems = (unit?.history || []).map((h) => ({
+    src: histSrc(h.id),
+    type: "image",
+    label: `Historial · hueco ${h.slot + 1} · ${h.label}`,
+  }));
+  const unitItems = [...photoItems, ...(videoItem ? [videoItem] : [])];
+  const allItems = [...unitItems, ...histItems];
+  function openStage() {
+    if (histPreview) {
+      const idx = (unit.history || []).findIndex((h) => h.id === histPreview);
+      lb.open(allItems, unitItems.length + Math.max(0, idx));
+      return;
+    }
+    if (previewingVideo) {
+      lb.open(unitItems, photoItems.length);
+      return;
+    }
+    if (previewingPhoto) {
+      const idx = photoItems.findIndex((x) => x.src === photoSrc(preview.slot));
+      lb.open(unitItems, Math.max(0, idx));
+    }
+  }
 
   return (
     <>
@@ -226,17 +256,21 @@ export default function CatalogMedia() {
             <div style={{ color: st.color, fontWeight: 800, marginBottom: 10 }}>{st.label}</div>
             <p className="section-sub">{photoCount} foto{photoCount === 1 ? "" : "s"} activa{photoCount === 1 ? "" : "s"}{unit.hasVideo ? " · video 360°" : ""}{(unit.history || []).length ? ` · ${(unit.history || []).length} en historial` : ""}.</p>
 
-            <div className="media-stage">
+            <div className={`media-stage ${histPreview || previewingVideo || previewingPhoto ? "has-media" : ""}`}>
               {histPreview ? (
-                <img key={histSrc(histPreview)} src={histSrc(histPreview)} alt="Foto de historial" />
+                <img key={histSrc(histPreview)} src={histSrc(histPreview)} alt="Foto de historial" onClick={openStage} />
               ) : previewingVideo ? (
-                <video key={videoSrc} src={videoSrc} controls autoPlay muted playsInline />
+                <>
+                  <video key={videoSrc} src={videoSrc} controls autoPlay muted playsInline onClick={(e) => e.stopPropagation()} />
+                  <button className="gallery-expand" type="button" onClick={openStage}>Ampliar</button>
+                </>
               ) : previewingPhoto ? (
                 <img
                   key={photoSrc(preview.slot)}
                   src={photoSrc(preview.slot)}
                   alt={labels[preview.slot] || `Foto ${preview.slot + 1}`}
                   onLoad={(e) => markOrientation(preview.slot, e.currentTarget)}
+                  onClick={openStage}
                 />
               ) : (
                 <span className="muted">Carga una foto o elige una del historial para previsualizarla.</span>
@@ -253,7 +287,16 @@ export default function CatalogMedia() {
                   <div key={i} className={`media-slot ${filled ? "filled" : ""} ${active ? "active" : ""} ${vertical ? "portrait" : ""}`}>
                     {filled ? (
                       <>
-                        <button type="button" className="media-slot-preview" onClick={() => { setHistPreview(null); setPreview({ type: "photo", slot: i }); }}>
+                        <button
+                          type="button"
+                          className="media-slot-preview"
+                          onClick={() => {
+                            setHistPreview(null);
+                            setPreview({ type: "photo", slot: i });
+                            const idx = photoItems.findIndex((x) => x.src === photoSrc(i));
+                            lb.open(unitItems, Math.max(0, idx));
+                          }}
+                        >
                           <img src={photoSrc(i)} alt={label} onLoad={(e) => markOrientation(i, e.currentTarget)} />
                         </button>
                         <span className="slot-label">{i + 1}. {label}{vertical ? " · vertical" : ""}</span>
@@ -292,7 +335,15 @@ export default function CatalogMedia() {
                   <div className={`media-slot video-slot ${unit.hasVideo ? "filled" : ""} ${active ? "active" : ""}`}>
                     {unit.hasVideo ? (
                       <>
-                        <button type="button" className="media-slot-preview" onClick={() => { setHistPreview(null); setPreview({ type: "video" }); }}>
+                        <button
+                          type="button"
+                          className="media-slot-preview"
+                          onClick={() => {
+                            setHistPreview(null);
+                            setPreview({ type: "video" });
+                            lb.open(unitItems, photoItems.length);
+                          }}
+                        >
                           360°
                         </button>
                         <span className="slot-label">Video recorrido</span>
@@ -340,7 +391,15 @@ export default function CatalogMedia() {
                 <div className="media-slots">
                   {unit.history.map((h) => (
                     <div key={h.id} className={`media-slot filled ${histPreview === h.id ? "active" : ""}`}>
-                      <button type="button" className="media-slot-preview" onClick={() => setHistPreview(h.id)}>
+                      <button
+                        type="button"
+                        className="media-slot-preview"
+                        onClick={() => {
+                          setHistPreview(h.id);
+                          const idx = (unit.history || []).findIndex((x) => x.id === h.id);
+                          lb.open(allItems, unitItems.length + Math.max(0, idx));
+                        }}
+                      >
                         <img src={histSrc(h.id)} alt={h.label} />
                       </button>
                       <span className="slot-label">Hueco {h.slot + 1} · {h.label}</span>
@@ -407,6 +466,7 @@ export default function CatalogMedia() {
           </div>
         ) : null}
       </div>
+      {lb.node}
     </>
   );
 }

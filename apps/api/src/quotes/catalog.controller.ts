@@ -49,6 +49,12 @@ export class CatalogController {
     return this.quotes.commercialServices();
   }
 
+  @Public()
+  @Get("watermark")
+  watermark() {
+    return this.quotes.catalogWatermark();
+  }
+
   @Post("quotes")
   @Roles("cliente", "admin", "gerente", "vendedor")
   requestQuote(

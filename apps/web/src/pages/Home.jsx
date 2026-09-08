@@ -24,7 +24,8 @@ export default function Home() {
         {user.role === "vendedor" ? " Usa Bandeja → Negociación → Pagos → Seguimiento para el cierre por comprobante." : ""}
         {user.role === "superadmin" ? " Desde el menú configuras Odoo, buscas DRY a la mano, editas los textos del catálogo y gestionas los respaldos internos." : ""}
         {user.role === "admin" ? " Regulariza DRY de Odoo en Odoo — regularizar y asigna fotos del chatter a las casillas del catálogo en Recepción." : ""}
-        {user.role === "almacen" ? " Si ves un DRY en campo, abre Patio — campo: sube fotos o notas. No ves ni editas Odoo. Quien publica evalúa." : ""}
+        {user.role === "almacen" ? " Si ves un DRY habilitado, abre Patio — campo: sube fotos o notas. No ves ni editas Odoo. Quien publica evalúa." : ""}
+        {user.role === "coordinador" ? " En Recepción das de alta la reentrega y la envías a campo. Completas la ficha, asignas tomas y registras actividades sin ver tarifas." : ""}
       </p>
     </>
   );

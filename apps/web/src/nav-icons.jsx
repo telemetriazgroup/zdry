@@ -52,7 +52,7 @@ export function iconFor(path) {
   if (path.includes("bandeja")) return "inbox";
   if (path.includes("negociacion")) return "chat";
   if (path.includes("pagos")) return "card";
-  if (path.includes("seguimiento") || path.includes("despachos")) return "truck";
+  if (path.includes("visitas") || path.includes("visita")) return "truck";
   if (path.includes("alquileres")) return "calendar";
   if (path.includes("equipo")) return "users";
   return "home";

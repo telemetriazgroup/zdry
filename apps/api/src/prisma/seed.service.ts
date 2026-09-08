@@ -6,6 +6,7 @@ import { DEFAULT_LAYOUT_RULES, DEFAULT_YARD_CONFIG } from "../domain/yard";
 import { DEFAULT_PRICING_RULES, computeListPrices } from "../domain/pricing";
 import { DEFAULT_VISIBILITY_RULES } from "../domain/visibility";
 import { DEFAULT_PAYMENT_ACCOUNTS } from "../domain/payment-accounts";
+import { SYSTEM_DEPOT_CONCEPTS } from "../domain/depot-costs";
 
 const PASSWORD = process.env.SEED_PASSWORD || "Zdry123!";
 
@@ -36,6 +37,7 @@ const DEPOTS = [
 ];
 
 const SUPERADMIN = { email: "superadmin@zdry.pe", name: "Superadmin ZDRY", role: "superadmin" as const };
+const COORDINADOR = { email: "coordinador@zdry.pe", name: "Diego Coordinador", role: "coordinador" as const };
 const INIT_KEY = "system_initialized";
 
 const USERS: { email: string; name: string; role: Role }[] = [
@@ -43,6 +45,7 @@ const USERS: { email: string; name: string; role: Role }[] = [
   { email: "gerente@zdry.pe", name: "Gabriel Gerente", role: "gerente" },
   { email: "vendedor@zdry.pe", name: "Valeria Vendedor", role: "vendedor" },
   { email: "compras@zdry.pe", name: "Carlos Compras", role: "compras" },
+  { email: COORDINADOR.email, name: COORDINADOR.name, role: "coordinador" },
   { email: "almacen@zdry.pe", name: "Lucía Almacén", role: "almacen" },
 ];
 
@@ -59,6 +62,11 @@ export class SeedService implements OnModuleInit {
       where: { email: SUPERADMIN.email },
       update: { name: SUPERADMIN.name, role: "superadmin", active: true },
       create: { ...SUPERADMIN, passwordHash: hash },
+    });
+    await this.prisma.user.upsert({
+      where: { email: COORDINADOR.email },
+      update: { name: COORDINADOR.name, role: "coordinador", active: true },
+      create: { ...COORDINADOR, passwordHash: hash },
     });
 
     const initialized = await this.prisma.appSetting.findUnique({ where: { key: INIT_KEY } });
@@ -147,6 +155,14 @@ export class SeedService implements OnModuleInit {
         },
       },
     });
+
+    for (const c of SYSTEM_DEPOT_CONCEPTS) {
+      await this.prisma.depotCostConcept.upsert({
+        where: { key: c.key },
+        update: { label: c.label, system: true, active: true },
+        create: { key: c.key, label: c.label, amount: c.amount, system: true, active: true },
+      });
+    }
 
     if ((await this.prisma.pricingRule.count()) === 0) {
       await this.prisma.pricingRule.createMany({

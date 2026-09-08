@@ -14,6 +14,7 @@ enum Role {
   gerente
   vendedor
   compras
+  coordinador
   almacen
   cliente
 }
@@ -131,6 +132,11 @@ model Container {
   conditionRoof      String?
   conditionDoors     String?
   conditionPaint     String?
+  conditionWalls     String?
+  roofHole           Boolean?
+  material           String?
+  campoEnabledAt     DateTime?
+  campoEnabledByName String?
   odooSource              Json?
   fieldRegularizedAt      DateTime?
   fieldRegularizedByName  String?
@@ -139,6 +145,10 @@ model Container {
   history                 ContainerHistory[]
   photos                  InspectionPhoto[]
   positions               ContainerPosition[]
+  fieldCaptures           FieldCapture[]
+  depotCosts              DepotCostEntry[]
+  documents               ContainerDocument[]
+  gateVisits              GateVisit[]
 
   @@index([depotId])
   @@index([odooLotId])
@@ -152,6 +162,7 @@ model Container {
   @@index([archivedAt])
   @@index([fieldRegularizedAt])
   @@index([mediaApprovedAt])
+  @@index([campoEnabledAt])
 }
 
 model ContainerHistory {
@@ -551,6 +562,102 @@ model OdooFieldWriteback {
 
   @@index([candidateId, status])
   @@index([status])
+}
+
+model FieldCapture {
+  id             String    @id @default(uuid())
+  iso            String
+  container      Container @relation(fields: [iso], references: [iso], onDelete: Cascade)
+  kind           String
+  storageKey     String
+  mimeType       String
+  originalName   String
+  sizeBytes      Int
+  note           String    @default("")
+  assignedSlot   Int?
+  createdById    String?
+  createdByName  String
+  createdAt      DateTime  @default(now())
+
+  @@index([iso, createdAt])
+}
+
+model DepotCostConcept {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  label     String
+  amount    Decimal  @db.Decimal(12, 2)
+  system    Boolean  @default(false)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  entries   DepotCostEntry[]
+}
+
+model DepotCostEntry {
+  id           String           @id @default(uuid())
+  iso          String
+  container    Container        @relation(fields: [iso], references: [iso], onDelete: Cascade)
+  conceptId    String
+  concept      DepotCostConcept @relation(fields: [conceptId], references: [id])
+  conceptKey   String
+  conceptLabel String
+  amount       Decimal          @db.Decimal(12, 2)
+  note         String           @default("")
+  auto         Boolean          @default(false)
+  createdById  String?
+  createdByName String
+  createdAt    DateTime         @default(now())
+
+  @@index([iso, createdAt])
+  @@index([iso, conceptKey])
+}
+
+model ContainerDocument {
+  id            String    @id @default(uuid())
+  iso           String
+  container     Container @relation(fields: [iso], references: [iso], onDelete: Cascade)
+  concept       String
+  note          String    @default("")
+  originalName  String
+  mimeType      String
+  sizeBytes     Int
+  storageKey    String
+  createdById   String?
+  createdByName String
+  createdAt     DateTime  @default(now())
+
+  @@index([iso, createdAt])
+}
+
+model GateVisit {
+  id            String     @id @default(uuid())
+  tractorPlate  String
+  company       String     @default("")
+  ruc           String     @default("")
+  driverName    String     @default("")
+  visitAt       DateTime?
+  license       String     @default("")
+  motive        String     @default("descargar")
+  trailerPlate  String     @default("")
+  phone         String     @default("")
+  equipmentCode String?
+  containerIso  String?
+  container     Container? @relation(fields: [containerIso], references: [iso])
+  linkedAt      DateTime?
+  linkedByName  String?
+  unitPhotoKey          String?
+  unitPhotoMime         String?
+  unitPhotoName         String?
+  unitPhotoApprovedAt   DateTime?
+  unitPhotoApprovedBy   String?
+  unitPhotoRejectedAt   DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([tractorPlate])
+  @@index([containerIso])
+  @@index([linkedAt])
 }
 
 model DataBackup {
