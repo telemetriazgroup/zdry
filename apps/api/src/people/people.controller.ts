@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Put, Req } from "@nestjs/common";
+import { BadRequestException, Body, ConflictException, Controller, Get, Param, Post, Put, Req } from "@nestjs/common";
 import { Request } from "express";
 import { RiskGrade, Role } from "@prisma/client";
 import * as argon2 from "argon2";
@@ -7,6 +7,18 @@ import { AuditService } from "../audit/audit.service";
 import { Roles } from "../auth/roles.decorator";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
+
+const STAFF_ROLES: Role[] = ["admin", "gerente", "vendedor", "compras", "coordinador", "almacen"];
+
+function assertStaffRole(role: Role) {
+  if (role === "superadmin") throw new BadRequestException("El rol superadmin no se asigna desde Personas.");
+  if (!STAFF_ROLES.includes(role)) throw new BadRequestException("Rol no permitido para colaboradores.");
+}
+
+function publicUser<T extends { passwordHash?: string; refreshTokenHash?: string | null }>(row: T) {
+  const { passwordHash: _h, refreshTokenHash: _r, ...safe } = row;
+  return safe;
+}
 
 @Controller("people")
 @Roles("admin")
@@ -96,7 +108,7 @@ export class PeopleController {
       where: { ...(await this.prisma.hideDemo()), role: { not: "superadmin" } },
       orderBy: { name: "asc" },
     });
-    return rows.map(({ passwordHash, refreshTokenHash, ...u }) => u);
+    return rows.map((u) => publicUser(u));
   }
 
   @Post("collaborators")
@@ -106,12 +118,15 @@ export class PeopleController {
     @Req() req: Request,
   ) {
     if (!body.email || !body.name || !body.role) throw new BadRequestException("Email, nombre y rol son obligatorios");
-    if (body.role === "superadmin") throw new BadRequestException("El rol superadmin no se asigna desde Personas.");
+    assertStaffRole(body.role);
+    const email = body.email.trim().toLowerCase();
+    const clash = await this.prisma.user.findUnique({ where: { email } });
+    if (clash) throw new ConflictException("Ya existe una cuenta con ese correo.");
     const password = body.password || process.env.SEED_PASSWORD || "Zdry123!";
     const row = await this.prisma.user.create({
       data: {
-        email: body.email.trim().toLowerCase(),
-        name: body.name,
+        email,
+        name: body.name.trim(),
         role: body.role,
         passwordHash: await argon2.hash(password),
       },
@@ -124,8 +139,64 @@ export class PeopleController {
       after: { email: row.email, role: row.role, name: row.name },
       ip: req.ip,
     });
-    const { passwordHash: _, refreshTokenHash: __, ...safe } = row;
-    return safe;
+    return publicUser(row);
+  }
+
+  @Put("collaborators/:id")
+  async updateCollaborator(
+    @Param("id") id: string,
+    @Body() body: { email?: string; name?: string; role?: Role; active?: boolean },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const before = await this.prisma.user.findUnique({ where: { id } });
+    if (!before) throw new BadRequestException("Usuario no encontrado.");
+    if (before.role === "superadmin") throw new BadRequestException("No se puede editar el superadmin aquí.");
+
+    const name = (body.name ?? before.name).trim();
+    const email = (body.email ?? before.email).trim().toLowerCase();
+    const role = body.role ?? before.role;
+    const active = body.active ?? before.active;
+    if (!name) throw new BadRequestException("El nombre es obligatorio.");
+    if (!email) throw new BadRequestException("El email es obligatorio.");
+    assertStaffRole(role);
+
+    if (id === user.id) {
+      if (!active) throw new BadRequestException("No puedes desactivar tu propia cuenta.");
+      if (before.role === "admin" && role !== "admin") {
+        throw new BadRequestException("No puedes quitarte el rol de administrador.");
+      }
+    }
+
+    const losingAdmin = before.role === "admin" && before.active && (role !== "admin" || !active);
+    if (losingAdmin) {
+      const otherAdmins = await this.prisma.user.count({
+        where: { role: "admin", active: true, id: { not: id } },
+      });
+      if (otherAdmins === 0) {
+        throw new BadRequestException("Debe quedar al menos un administrador activo.");
+      }
+    }
+
+    if (email !== before.email) {
+      const clash = await this.prisma.user.findUnique({ where: { email } });
+      if (clash) throw new ConflictException("Ya existe una cuenta con ese correo.");
+    }
+
+    const row = await this.prisma.user.update({
+      where: { id },
+      data: { name, email, role, active },
+    });
+    await this.audit.log({
+      user,
+      action: "update",
+      entity: "User",
+      entityId: id,
+      before: { email: before.email, role: before.role, name: before.name, active: before.active },
+      after: { email: row.email, role: row.role, name: row.name, active: row.active },
+      ip: req.ip,
+    });
+    return publicUser(row);
   }
 
   @Post("collaborators/:id/password")

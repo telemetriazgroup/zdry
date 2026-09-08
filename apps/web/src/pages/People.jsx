@@ -14,7 +14,7 @@ const ROLES = [
 ];
 
 export default function People() {
-  const { user, impersonate } = useAuth();
+  const { user, impersonate, refreshUser } = useAuth();
   const nav = useNavigate();
   const [tab, setTab] = useState("customers");
   const [customers, setCustomers] = useState([]);
@@ -23,7 +23,9 @@ export default function People() {
   const [error, setError] = useState("");
   const [cForm, setCForm] = useState({ rucDni: "", companyName: "", email: "", phone: "", risk: "B" });
   const [pForm, setPForm] = useState({ name: "", type: "Transporte", rate: "0", unit: "viaje" });
-  const [uForm, setUForm] = useState({ email: "", name: "", role: "vendedor", password: "Zdry123!" });
+  const emptyUserForm = { email: "", name: "", role: "vendedor", password: "Zdry123!", active: true };
+  const [uForm, setUForm] = useState(emptyUserForm);
+  const [editId, setEditId] = useState(null);
   const [resetId, setResetId] = useState(null);
   const [resetPw, setResetPw] = useState("");
 
@@ -56,13 +58,42 @@ export default function People() {
     } catch (err) { setError(err.message); }
   }
 
-  async function addCollab(e) {
+  function startEdit(u) {
+    setError("");
+    setResetId(null);
+    setResetPw("");
+    setEditId(u.id);
+    setUForm({
+      email: u.email,
+      name: u.name,
+      role: u.role,
+      password: "",
+      active: !!u.active,
+    });
+  }
+
+  function cancelEdit() {
+    setEditId(null);
+    setUForm(emptyUserForm);
+  }
+
+  async function saveCollab(e) {
     e.preventDefault();
+    setError("");
     try {
-      await api("/people/collaborators", { method: "POST", body: uForm });
-      setUForm({ email: "", name: "", role: "vendedor", password: "Zdry123!" });
+      if (editId) {
+        const updated = await api(`/people/collaborators/${editId}`, {
+          method: "PUT",
+          body: { name: uForm.name, email: uForm.email, role: uForm.role, active: uForm.active },
+        });
+        if (updated.id === user.id) await refreshUser();
+        cancelEdit();
+      } else {
+        await api("/people/collaborators", { method: "POST", body: uForm });
+        setUForm(emptyUserForm);
+      }
       await load();
-    } catch (err) { setError(err.message); }
+    } catch (err) { setError(err instanceof ApiError ? err.message : err.message); }
   }
 
   async function viewAs(id) {
@@ -91,7 +122,7 @@ export default function People() {
   return (
     <>
       <h2 className="section-title">Personas</h2>
-      <p className="section-sub">Clientes (riesgo A–D), proveedores y colaboradores. Como administrador puedes ver la interfaz de otro usuario y restablecer su clave.</p>
+      <p className="section-sub">Clientes (riesgo A–D), proveedores y colaboradores. Como administrador puedes corregir datos, cambiar permisos, ver la interfaz de otro usuario y restablecer su clave.</p>
       {error ? <div className="err">{error}</div> : null}
       <div className="subtab-row">
         <button type="button" className={`subtab ${tab === "customers" ? "active" : ""}`} onClick={() => setTab("customers")}>Clientes</button>
@@ -143,17 +174,27 @@ export default function People() {
 
       {tab === "collabs" && (
         <div className="panel">
-          <form className="form-grid" onSubmit={addCollab}>
+          <form className="form-grid" onSubmit={saveCollab}>
             <div><label>Nombre</label><input value={uForm.name} onChange={(e) => setUForm({ ...uForm, name: e.target.value })} required /></div>
             <div><label>Email</label><input type="email" value={uForm.email} onChange={(e) => setUForm({ ...uForm, email: e.target.value })} required /></div>
             <div>
-              <label>Rol</label>
+              <label>Rol / permiso</label>
               <select value={uForm.role} onChange={(e) => setUForm({ ...uForm, role: e.target.value })}>
                 {ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
               </select>
             </div>
-            <div><label>Clave inicial</label><input value={uForm.password} onChange={(e) => setUForm({ ...uForm, password: e.target.value })} /></div>
-            <button className="btn-primary" type="submit">+ Colaborador</button>
+            {editId ? (
+              <label className="muted" style={{ display: "flex", alignItems: "center", gap: 8, alignSelf: "end", paddingBottom: 8 }}>
+                <input type="checkbox" checked={!!uForm.active} onChange={(e) => setUForm({ ...uForm, active: e.target.checked })} />
+                Cuenta activa
+              </label>
+            ) : (
+              <div><label>Clave inicial</label><input value={uForm.password} onChange={(e) => setUForm({ ...uForm, password: e.target.value })} /></div>
+            )}
+            <button className="btn-primary" type="submit">{editId ? "Guardar cambios" : "+ Colaborador"}</button>
+            {editId ? (
+              <button className="btn-ghost" type="button" onClick={cancelEdit}>Cancelar</button>
+            ) : null}
           </form>
           {resetId ? (
             <form className="form-grid" onSubmit={resetPassword} style={{ marginTop: 12 }}>
@@ -167,16 +208,17 @@ export default function People() {
             <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Activo</th><th></th></tr></thead>
             <tbody>
               {collabs.map((u) => (
-                <tr key={u.id}>
+                <tr key={u.id} style={editId === u.id ? { outline: "2px solid var(--orange)", outlineOffset: -2 } : undefined}>
                   <td>{u.name}{u.demo ? <span className="demo-chip">DEMO</span> : null}</td>
                   <td>{u.email}</td>
                   <td>{ROLE_LABELS[u.role] || u.role}</td>
                   <td>{u.active ? "sí" : "no"}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
+                    <button type="button" className="btn-ghost" onClick={() => startEdit(u)}>Editar</button>
                     {u.id !== user.id && u.active ? (
                       <button type="button" className="btn-ghost" onClick={() => viewAs(u.id)}>Ver como</button>
                     ) : null}
-                    <button type="button" className="btn-ghost" onClick={() => { setResetId(u.id); setResetPw(""); }}>Clave</button>
+                    <button type="button" className="btn-ghost" onClick={() => { setResetId(u.id); setResetPw(""); cancelEdit(); }}>Clave</button>
                   </td>
                 </tr>
               ))}
