@@ -1328,6 +1328,7 @@ export class WarehouseService {
             hasPhoto: visitPhotoStatus(visit) !== "none",
             photoStatus: visitPhotoStatus(visit),
             photoName: visit.unitPhotoName || null,
+            publicToken: visit.publicToken,
           }
         : null,
     };

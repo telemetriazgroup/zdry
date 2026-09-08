@@ -68,21 +68,19 @@ export async function downloadVisitPdf(visit) {
   ]);
 
   const doc = new jsPDF({ unit: "mm", format: "a4" });
-  doc.setFillColor(0, 0, 0);
-  doc.rect(0, 0, 210, 38, "F");
-  doc.addImage(logo, "PNG", 12, 7, 72, 24);
+  doc.addImage(logo, "PNG", 12, 10, 72, 24);
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(16);
   doc.setTextColor(18, 32, 58);
-  doc.text("Comprobante de visita", 16, 52);
+  doc.text("Comprobante de visita", 16, 44);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(11);
   doc.setTextColor(70, 78, 90);
   const who = visit.driverName?.trim() || "conductor";
-  doc.text(`Bienvenido, ${who}. Muestra este QR en portería.`, 16, 60);
+  doc.text(`Bienvenido, ${who}.`, 16, 52);
 
-  let y = 74;
+  let y = 66;
   doc.setFontSize(11);
   for (const [key, label] of VISIT_FIELDS) {
     doc.setFont("helvetica", "bold");
@@ -94,20 +92,23 @@ export async function downloadVisitPdf(visit) {
     y += 8;
   }
 
-  doc.addImage(qr, "PNG", 140, 50, 52, 52);
+  doc.addImage(qr, "PNG", 140, 42, 52, 52);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
-  doc.text("Validación", 140, 108);
+  doc.text("Validación", 140, 100);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(12);
-  doc.text(code, 140, 115);
+  doc.text(code, 140, 107);
   doc.setFontSize(8);
   doc.setTextColor(90, 98, 110);
-  doc.text(url, 140, 122, { maxWidth: 54 });
+  doc.text(url, 140, 114, { maxWidth: 54 });
 
-  doc.setTextColor(90, 98, 110);
-  doc.setFontSize(9);
-  doc.text("Si la visita aún no está asignada a un contenedor, el personal puede corregir los datos al escanear el QR.", 16, 170, { maxWidth: 178 });
+  if (visit.locked || visit.linkedAt || visit.containerIso) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(18, 32, 58);
+    doc.text("Esta placa ya está vinculada a un contenedor.", 16, y + 8);
+  }
 
   doc.save(`visita-${visit.tractorPlate || code}.pdf`);
 }

@@ -27,6 +27,20 @@ export function parseIso6346(raw) {
   const code = String(raw || "")
     .toUpperCase()
     .replace(/[\s-]/g, "");
+  const prefix = code.match(/^([A-Z]{3})U(\d{6})$/);
+  if (prefix) {
+    const code10 = prefix[1] + "U" + prefix[2];
+    const expected = iso6346CheckDigit(code10);
+    return {
+      valid: false,
+      incomplete: true,
+      code,
+      code10,
+      expectedCheckDigit: expected,
+      suggested: code10 + String(expected),
+      reason: `Falta el último dígito. Para que coincida ISO 6346 debe ser ${expected} → ${code10}${expected}.`,
+    };
+  }
   const m = code.match(/^([A-Z]{3})U(\d{6})(\d)$/);
   if (!m) {
     return {
@@ -46,6 +60,9 @@ export function parseIso6346(raw) {
     expectedCheckDigit: expected,
     checkOk: given === expected,
     suggested: code10 + String(expected),
+    reason: given === expected
+      ? undefined
+      : `El último dígito debería ser ${expected} (escribiste ${given}). Código que lo complementa: ${code10}${expected}.`,
   };
 }
 

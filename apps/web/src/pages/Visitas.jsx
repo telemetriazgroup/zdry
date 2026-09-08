@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, apiUrl, publicUrl } from "../api.js";
 import { useLightbox } from "../media-lightbox.jsx";
+import { downloadVisitPdf } from "../visit-ticket.js";
 
 const emptyForm = {
   tractorPlate: "",
@@ -62,8 +63,13 @@ export default function Visitas() {
     if (focusId) {
       const hit = list.find((v) => v.id === focusId);
       if (hit) {
-        openEdit(hit);
-        setMsg(hit.locked ? "Visita asignada: puedes consultar y desvincular." : "Visita aún no asignada: puedes corregir los datos o vincular un DRY.");
+        if (hit.locked) {
+          setEditing(null);
+          setCreating(false);
+          setMsg("Esta placa ya está vinculada a un contenedor.");
+        } else {
+          openEdit(hit);
+        }
       }
     }
     return list;
@@ -230,22 +236,25 @@ export default function Visitas() {
                   {v.containerIso ? (
                     <div>
                       <b>{v.containerIso}</b>
-                      <div className="recv-who">Vinculada. Puedes desvincular o editar.</div>
+                      <div className="recv-who">Esta placa ya está vinculada a un contenedor.</div>
                     </div>
                   ) : "—"}
                 </td>
                 <td>
                   <div className="action-row" style={{ flexWrap: "wrap" }}>
-                    <button className="btn-ghost" type="button" onClick={() => openEdit(v)}>Editar</button>
                     {v.locked ? (
-                      <button className="btn-ghost" type="button" onClick={() => unlink(v.id)}>Desvincular</button>
+                      <>
+                        <button className="btn-primary" type="button" onClick={() => downloadVisitPdf(v).catch((e) => setError(e.message))}>Descargar PDF</button>
+                        <button className="btn-ghost" type="button" onClick={() => unlink(v.id)}>Desvincular</button>
+                      </>
                     ) : (
                       <>
+                        <button className="btn-ghost" type="button" onClick={() => openEdit(v)}>Editar</button>
                         <input placeholder="ISO" value={iso} onChange={(e) => setIso(e.target.value.toUpperCase())} style={{ width: 130 }} />
                         <button className="btn-primary" type="button" onClick={() => link(v.id)}>Vincular</button>
+                        <button className="btn-ghost" type="button" onClick={() => remove(v.id)}>Eliminar</button>
                       </>
                     )}
-                    <button className="btn-ghost" type="button" onClick={() => remove(v.id)}>Eliminar</button>
                   </div>
                 </td>
               </tr>

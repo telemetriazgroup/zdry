@@ -106,11 +106,7 @@ export default function VisitaPublica() {
       setTicket(d.visit);
       setPhotoStatus(d.visit.photoStatus || "none");
       setPhotoBust(Date.now());
-      setMsg(
-        d.locked
-          ? "Esta placa ya está vinculada a un contenedor. No se puede editar."
-          : "Ficha ya guardada. Puedes corregir los datos y volver a enviar hasta que el coordinador vincule un contenedor.",
-      );
+      setMsg(d.locked ? "Esta placa ya está vinculada a un contenedor." : "");
     } catch {
       /* ignore lookup */
     }
@@ -131,7 +127,7 @@ export default function VisitaPublica() {
         setTicket(d.visit);
         setPhotoStatus(d.visit.photoStatus || "none");
         setPhotoBust(Date.now());
-        if (d.locked) setMsg("Esta visita ya está asignada a un contenedor. Solo se puede consultar.");
+        if (d.locked) setMsg("Esta placa ya está vinculada a un contenedor.");
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof ApiError ? e.message : e.message);
@@ -211,6 +207,23 @@ export default function VisitaPublica() {
     : `${apiUrl(`/gate-visits/by-plate/${encodeURIComponent(form.tractorPlate)}/photo`)}?t=${photoBust}`;
 
   const welcomeName = (ticket?.driverName || form.driverName || "").trim() || "a ZGROUP";
+  const linked = !!(locked || ticket?.locked);
+
+  if (linked && ticket) {
+    return (
+      <div className="panel visita-public visita-welcome">
+        <Brand />
+        <p className="ok-msg">Esta placa ya está vinculada a un contenedor.</p>
+        {error ? <div className="err">{error}</div> : null}
+        <PreviewList data={{ ...form, visitAt: form.visitAt || ticket.visitAt }} />
+        <div className="action-row" style={{ justifyContent: "center", marginTop: 16 }}>
+          <button className="btn-primary" type="button" onClick={() => downloadVisitPdf({ ...ticket, locked: true }).catch((e) => setError(e.message))}>
+            Descargar PDF
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (token && ready && staffVisitas && !showReceipt && !forceEdit && !error) {
     return (
@@ -235,9 +248,7 @@ export default function VisitaPublica() {
       <div className="panel visita-public visita-welcome">
         <Brand />
         <h2 className="section-title">Bienvenido, {welcomeName}</h2>
-        <p className="section-sub">
-          Tu visita quedó registrada. Descarga el comprobante y muestra el código QR al personal de portería.
-        </p>
+        <p className="section-sub">Bienvenido. Descarga el comprobante.</p>
         {error ? <div className="err">{error}</div> : null}
         {qrSrc ? <img className="visita-qr" src={qrSrc} alt="QR de validación" /> : null}
         <p className="visita-code">Código {shortVisitCode(ticket.publicToken)}</p>
@@ -258,18 +269,9 @@ export default function VisitaPublica() {
     <div className="panel visita-public">
       <Brand />
       <h2 className="section-title">Visita de puerta</h2>
-      <p className="section-sub">Identifícate con la placa del tracto. Si ya la usaste y aún no está vinculada a un contenedor, puedes corregir los datos.</p>
+      <p className="section-sub">Identifícate con la placa del tracto.</p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
-      {saved && !locked ? (
-        <div className="ok-msg">Datos guardados. El botón guarda los cambios de esta ficha.</div>
-      ) : null}
-      {!user && ticket?.id ? (
-        <p className="section-sub">
-          ¿Eres personal ZDRY?{" "}
-          <Link to={`/login?next=${encodeURIComponent(`/app/almacen/visitas?visita=${ticket.id}`)}`}>Abrir en Visitas</Link>
-        </p>
-      ) : null}
       <form className="form-grid" onSubmit={openPreview}>
         <div><label>Placa tracto *</label><input value={form.tractorPlate} onChange={(e) => set("tractorPlate", e.target.value.toUpperCase())} required disabled={locked} /></div>
         <div><label>Empresa</label><input value={form.company} onChange={(e) => set("company", e.target.value)} disabled={locked} /></div>

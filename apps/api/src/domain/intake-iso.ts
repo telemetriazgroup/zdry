@@ -13,8 +13,12 @@ export function inspectIntakeIso(raw: string) {
       message: "Ingresa el código de la placa (mínimo 4 caracteres).",
     };
   }
+  const check = inspected.check;
   const reason = inspected.isoException
-    ? inspected.check.reason || "ISO 6346 no válido (formato o dígito de control)."
+    ? check.reason
+      || (check.expectedCheckDigit != null
+        ? `El último dígito debería ser ${check.expectedCheckDigit}. Código que lo complementa: ${check.suggested}.`
+        : "ISO 6346 no válido (formato o dígito de control).")
     : null;
   return {
     ...inspected,

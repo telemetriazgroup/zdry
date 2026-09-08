@@ -1,4 +1,4 @@
-import { completeIso, damFormatOk, parseIso6346 } from "./iso6346";
+import { completeIso, damFormatOk, iso6346CheckDigit, parseIso6346 } from "./iso6346";
 
 describe("ISO 6346", () => {
   it("completa el dígito de control y lo valida", () => {
@@ -19,6 +19,13 @@ describe("ISO 6346", () => {
     const iso = completeIso("ZDRU000001");
     const parsed = parseIso6346(iso.toLowerCase().slice(0, 4) + " " + iso.slice(4));
     expect(parsed.checkOk).toBe(true);
+  });
+
+  it("con 10 caracteres indica el último dígito que completa el ISO", () => {
+    const parsed = parseIso6346("ZDRU123456");
+    expect(parsed.incomplete).toBe(true);
+    expect(parsed.expectedCheckDigit).toBe(iso6346CheckDigit("ZDRU123456"));
+    expect(parsed.suggested).toBe(completeIso("ZDRU123456"));
   });
 
   it("detecta dígito incorrecto y sugiere la corrección", () => {

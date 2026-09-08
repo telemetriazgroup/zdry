@@ -4,6 +4,7 @@ import { api, apiUpload, apiUrl, formatWhen } from "../api.js";
 import { useAuth } from "../auth.jsx";
 import SearchCreate from "../search-create.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
+import { parseIso6346 } from "../iso6346.js";
 
 const ARCHIVE_PRESETS = ["Contenedor mal ingresado", "Información incorrecta"];
 const PAGE_SIZE = 20;
@@ -19,6 +20,22 @@ const EMPTY_VISIT = {
   phone: "",
   equipmentCode: "",
 };
+
+function visitToForm(v) {
+  if (!v) return { ...EMPTY_VISIT };
+  return {
+    tractorPlate: v.tractorPlate || "",
+    company: v.company || "",
+    ruc: v.ruc || "",
+    driverName: v.driverName || "",
+    visitAt: toLocalInput(v.visitAt),
+    license: v.license || "",
+    motive: v.motive || "descargar",
+    trailerPlate: v.trailerPlate || "",
+    phone: v.phone || "",
+    equipmentCode: v.equipmentCode || "",
+  };
+}
 
 function toLocalInput(iso) {
   if (!iso) return "";
@@ -203,18 +220,7 @@ export default function Recepcion() {
           setVisitMode("saved");
           setEditingVisitId(u.visit.id);
           setPickVisitId(u.visit.id);
-          setVisitForm({
-            tractorPlate: u.visit.tractorPlate || "",
-            company: u.visit.company || "",
-            ruc: u.visit.ruc || "",
-            driverName: u.visit.driverName || "",
-            visitAt: toLocalInput(u.visit.visitAt),
-            license: u.visit.license || "",
-            motive: u.visit.motive || "descargar",
-            trailerPlate: u.visit.trailerPlate || "",
-            phone: u.visit.phone || "",
-            equipmentCode: u.visit.equipmentCode || "",
-          });
+          setVisitForm(visitToForm(u.visit));
         } else {
           setVisitMode("pick");
           setEditingVisitId("");
@@ -243,6 +249,22 @@ export default function Recepcion() {
       setIsoHint({ kind: "idle" });
       return;
     }
+    const local = parseIso6346(raw);
+    if (local.incomplete) {
+      setIsoHint({
+        kind: "warn",
+        text: `El último dígito para que coincida es ${local.expectedCheckDigit}. Código completo: ${local.suggested}.`,
+      });
+    } else if (local.valid && !local.checkOk) {
+      setIsoHint({
+        kind: "warn",
+        text: `No cumple ISO 6346: el último dígito debería ser ${local.expectedCheckDigit} (escribiste ${local.checkDigit}). Código que lo complementa: ${local.suggested}. No bloquea el alta; se resaltará como ISO a revisar.`,
+      });
+    } else if (local.valid && local.checkOk) {
+      setIsoHint({ kind: "ok", text: "Código ISO 6346 válido. Comprobando inventario…" });
+    } else {
+      setIsoHint({ kind: "warn", text: local.reason || "Formato incompleto. No bloquea el alta." });
+    }
     let cancelled = false;
     const t = setTimeout(() => {
       api(`/warehouse/iso?code=${encodeURIComponent(raw)}`)
@@ -253,17 +275,28 @@ export default function Recepcion() {
               kind: "err",
               text: `Ya existe un contenedor con este código (estado: ${d.existingStatus}) — cada ISO identifica una única unidad del inventario, no puede repetirse.`,
             });
-          } else if (d.isoException || !d.checkOk) {
+          } else if (local.incomplete) {
             setIsoHint({
               kind: "warn",
-              text: d.isoExceptionReason || d.reason || `"${d.code || raw}" no pasa ISO 6346. Se registrará con excepción; no bloquea el alta.`,
+              text: `El último dígito para que coincida es ${local.expectedCheckDigit}. Código completo: ${local.suggested}.`,
+            });
+          } else if (d.isoException || !d.checkOk) {
+            const digit = d.expectedCheckDigit ?? local.expectedCheckDigit;
+            const suggested = d.suggested || local.suggested;
+            setIsoHint({
+              kind: "warn",
+              text: digit != null
+                ? `No cumple ISO 6346: el último dígito debería ser ${digit}${local.checkDigit != null ? ` (escribiste ${local.checkDigit})` : ""}. Código que lo complementa: ${suggested}. No bloquea el alta; se resaltará como ISO a revisar.`
+                : (d.isoExceptionReason || d.reason || local.reason),
             });
           } else {
             setIsoHint({ kind: "ok", text: "Código válido y disponible — no está registrado en el inventario, se puede continuar." });
           }
         })
         .catch((e) => {
-          if (!cancelled) setIsoHint({ kind: "err", text: e.message });
+          if (!cancelled && !local.incomplete && !(local.valid && !local.checkOk)) {
+            setIsoHint({ kind: "err", text: e.message });
+          }
         });
     }, 200);
     return () => {
@@ -454,6 +487,7 @@ export default function Recepcion() {
       }
       const next = await api(`/warehouse/units/${inspectIso}`);
       setUnit(next);
+      if (next.visit) setVisitForm(visitToForm(next.visit));
       await loadVisits();
     } catch (e) {
       setError(e.message);
@@ -464,12 +498,15 @@ export default function Recepcion() {
     if (!inspectIso || !pickVisitId) return;
     setError("");
     try {
+      const picked = visits.find((v) => v.id === pickVisitId);
+      if (picked) setVisitForm(visitToForm(picked));
       await api(`/gate-visits/${pickVisitId}/link`, { method: "POST", body: { iso: inspectIso } });
       const next = await api(`/warehouse/units/${inspectIso}`);
       setUnit(next);
+      setVisitForm(visitToForm(next.visit || picked));
       setEditingVisitId(pickVisitId);
       setVisitMode("saved");
-      setMsg("Visita vinculada a esta unidad. Puedes editar o desvincular.");
+      setMsg("Visita vinculada a esta unidad.");
       await loadVisits();
     } catch (e) {
       setError(e.message);
@@ -629,7 +666,7 @@ export default function Recepcion() {
           <div>
             <label>Código ISO *</label>
             <input
-              className="recv-iso"
+              className={`recv-iso ${isoHint?.kind === "warn" ? "iso-review-input" : ""}`}
               value={form.iso}
               placeholder="Ej. ZDRU1234565"
               autoCapitalize="characters"
@@ -734,7 +771,7 @@ export default function Recepcion() {
                 <b>Visita de puerta</b>
                 {unit.visit ? (
                   <p className="ok-msg" style={{ marginTop: 6 }}>
-                    Vinculada a {unit.visit.tractorPlate} · {unit.visit.driverName || "sin conductor"}. Guardada: puedes editar o desvincular.
+                    Vinculada a {unit.visit.tractorPlate} · {unit.visit.driverName || "sin conductor"}.
                   </p>
                 ) : (
                   <p className="section-sub">Vincula una visita pendiente o carga tú los datos del tracto.</p>
@@ -761,12 +798,12 @@ export default function Recepcion() {
                 ) : null}
                 {visitMode !== "pick" || unit.visit ? (
                   <div className="form-grid" style={{ marginTop: 8 }}>
-                    <div><label>Placa tracto</label><input value={visitForm.tractorPlate} onChange={(e) => setVisitForm({ ...visitForm, tractorPlate: e.target.value.toUpperCase() })} /></div>
-                    <div><label>Empresa</label><input value={visitForm.company} onChange={(e) => setVisitForm({ ...visitForm, company: e.target.value })} /></div>
-                    <div><label>RUC</label><input value={visitForm.ruc} onChange={(e) => setVisitForm({ ...visitForm, ruc: e.target.value })} /></div>
-                    <div><label>Conductor</label><input value={visitForm.driverName} onChange={(e) => setVisitForm({ ...visitForm, driverName: e.target.value })} /></div>
-                    <div><label>Hora</label><input type="datetime-local" value={visitForm.visitAt} onChange={(e) => setVisitForm({ ...visitForm, visitAt: e.target.value })} /></div>
-                    <div><label>Brevete</label><input value={visitForm.license} onChange={(e) => setVisitForm({ ...visitForm, license: e.target.value })} /></div>
+                    <div><label>Placa tracto</label><input value={visitForm.tractorPlate || unit.visit?.tractorPlate || ""} onChange={(e) => setVisitForm({ ...visitForm, tractorPlate: e.target.value.toUpperCase() })} /></div>
+                    <div><label>Empresa</label><input value={visitForm.company || unit.visit?.company || ""} onChange={(e) => setVisitForm({ ...visitForm, company: e.target.value })} /></div>
+                    <div><label>RUC</label><input value={visitForm.ruc || unit.visit?.ruc || ""} onChange={(e) => setVisitForm({ ...visitForm, ruc: e.target.value })} /></div>
+                    <div><label>Conductor</label><input value={visitForm.driverName || unit.visit?.driverName || ""} onChange={(e) => setVisitForm({ ...visitForm, driverName: e.target.value })} /></div>
+                    <div><label>Hora</label><input type="datetime-local" value={visitForm.visitAt || toLocalInput(unit.visit?.visitAt) || ""} onChange={(e) => setVisitForm({ ...visitForm, visitAt: e.target.value })} /></div>
+                    <div><label>Brevete</label><input value={visitForm.license || unit.visit?.license || ""} onChange={(e) => setVisitForm({ ...visitForm, license: e.target.value })} /></div>
                     <div>
                       <label>Motivo</label>
                       <select value={visitForm.motive} onChange={(e) => setVisitForm({ ...visitForm, motive: e.target.value })}>
@@ -774,8 +811,8 @@ export default function Recepcion() {
                         <option value="cargar">Cargar</option>
                       </select>
                     </div>
-                    <div><label>Placa carreta</label><input value={visitForm.trailerPlate} onChange={(e) => setVisitForm({ ...visitForm, trailerPlate: e.target.value.toUpperCase() })} /></div>
-                    <div><label>Teléfono</label><input value={visitForm.phone} onChange={(e) => setVisitForm({ ...visitForm, phone: e.target.value })} /></div>
+                    <div><label>Placa carreta</label><input value={visitForm.trailerPlate || unit.visit?.trailerPlate || ""} onChange={(e) => setVisitForm({ ...visitForm, trailerPlate: e.target.value.toUpperCase() })} /></div>
+                    <div><label>Teléfono</label><input value={visitForm.phone || unit.visit?.phone || ""} onChange={(e) => setVisitForm({ ...visitForm, phone: e.target.value })} /></div>
                   </div>
                 ) : null}
                 <div className="action-row" style={{ marginTop: 8, flexWrap: "wrap" }}>

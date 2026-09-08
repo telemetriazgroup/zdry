@@ -2,6 +2,14 @@ import { inspectIntakeIso } from "./intake-iso";
 import { completeIso } from "./iso6346";
 
 describe("inspectIntakeIso", () => {
+  it("con 10 caracteres indica el dígito que completa y no bloquea", () => {
+    const r = inspectIntakeIso("ZDRU123456");
+    expect(r.ok).toBe(true);
+    expect(r.isoException).toBe(true);
+    expect(r.check.expectedCheckDigit).toBeDefined();
+    expect(r.check.suggested).toHaveLength(11);
+  });
+
   it("no bloquea un dígito de control incorrecto", () => {
     const good = completeIso("CAIU123456");
     const wrong = good.slice(0, 10) + String((Number(good[10]) + 1) % 10);
