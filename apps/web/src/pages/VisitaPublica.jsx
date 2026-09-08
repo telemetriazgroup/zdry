@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { api, apiUpload, apiUrl, ApiError } from "../api.js";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { api, apiUpload, apiUrl, ApiError, publicUrl } from "../api.js";
+import { useAuth } from "../auth.jsx";
+import {
+  VISIT_FIELDS,
+  downloadVisitPdf,
+  shortVisitCode,
+  visitFieldValue,
+  visitTicketHref,
+} from "../visit-ticket.js";
 
 const empty = {
   tractorPlate: "",
@@ -22,7 +31,34 @@ function toLocalInput(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+function Brand() {
+  return (
+    <div className="visita-brand">
+      <img src={publicUrl("/brand/zg_marca.png")} alt="ZGROUP" />
+    </div>
+  );
+}
+
+function PreviewList({ data }) {
+  return (
+    <dl className="visita-preview-dl">
+      {VISIT_FIELDS.map(([key, label]) => (
+        <div key={key}>
+          <dt>{label}</dt>
+          <dd>{visitFieldValue(key, data)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 export default function VisitaPublica() {
+  const { token } = useParams();
+  const [params] = useSearchParams();
+  const nav = useNavigate();
+  const { user, ready } = useAuth();
+  const showReceipt = params.get("recibo") === "1";
+  const forceEdit = params.get("editar") === "1";
   const [form, setForm] = useState(empty);
   const [locked, setLocked] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -32,6 +68,11 @@ export default function VisitaPublica() {
   const [photo, setPhoto] = useState(null);
   const [photoStatus, setPhotoStatus] = useState("none");
   const [photoBust, setPhotoBust] = useState(0);
+  const [preview, setPreview] = useState(false);
+  const [ticket, setTicket] = useState(null);
+  const [qrSrc, setQrSrc] = useState("");
+
+  const staffVisitas = user?.role === "admin" || user?.role === "coordinador";
 
   function applyVisit(v, lockedNow, found) {
     setLocked(!!lockedNow);
@@ -51,6 +92,7 @@ export default function VisitaPublica() {
   }
 
   async function lookup(plate) {
+    if (token) return;
     if ((plate || "").replace(/[^A-Za-z0-9]/g, "").length < 3) return;
     try {
       const d = await api(`/gate-visits/by-plate/${encodeURIComponent(plate)}`);
@@ -61,6 +103,7 @@ export default function VisitaPublica() {
         return;
       }
       applyVisit(d.visit, d.locked, true);
+      setTicket(d.visit);
       setPhotoStatus(d.visit.photoStatus || "none");
       setPhotoBust(Date.now());
       setMsg(
@@ -76,10 +119,55 @@ export default function VisitaPublica() {
   useEffect(() => {
     const t = setTimeout(() => lookup(form.tractorPlate), 400);
     return () => clearTimeout(t);
-  }, [form.tractorPlate]);
+  }, [form.tractorPlate, token]);
 
-  async function submit(e) {
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    api(`/gate-visits/ticket/${token}`)
+      .then((d) => {
+        if (cancelled || !d.visit) return;
+        applyVisit(d.visit, d.locked, true);
+        setTicket(d.visit);
+        setPhotoStatus(d.visit.photoStatus || "none");
+        setPhotoBust(Date.now());
+        if (d.locked) setMsg("Esta visita ya está asignada a un contenedor. Solo se puede consultar.");
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof ApiError ? e.message : e.message);
+      });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  useEffect(() => {
+    if (!ready || !token || !ticket || showReceipt || forceEdit) return;
+    if (staffVisitas) {
+      nav(`/app/almacen/visitas?visita=${encodeURIComponent(ticket.id)}`, { replace: true });
+    }
+  }, [ready, token, ticket, showReceipt, forceEdit, staffVisitas, nav]);
+
+  useEffect(() => {
+    if (!ticket?.publicToken) {
+      setQrSrc("");
+      return;
+    }
+    let cancelled = false;
+    import("qrcode").then((QRCode) => {
+      const lib = QRCode.default || QRCode;
+      return lib.toDataURL(visitTicketHref(ticket.publicToken), { width: 280, margin: 1 });
+    }).then((src) => {
+      if (!cancelled) setQrSrc(src);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [ticket?.publicToken]);
+
+  function openPreview(e) {
     e.preventDefault();
+    setError("");
+    setPreview(true);
+  }
+
+  async function proceed() {
     setBusy(true);
     setError("");
     setMsg("");
@@ -94,20 +182,20 @@ export default function VisitaPublica() {
         setPhotoStatus(withPhoto.photoStatus || "pending");
         setPhoto(null);
         setPhotoBust(Date.now());
+        setTicket({ ...v, ...withPhoto, publicToken: withPhoto.publicToken || v.publicToken });
       } else {
         setPhotoStatus(v?.photoStatus || "none");
+        setTicket(v);
       }
       setLocked(!!v?.locked);
       setSaved(!!out.saved && !v?.locked);
-      if (v?.locked) {
-        setMsg("Registrado y vinculado. Espera en portería.");
-      } else if (photoStatus === "pending" || photo) {
-        setMsg("Ficha guardada. La foto queda pendiente de aprobación del coordinador. Puedes editar hasta que vinculen un contenedor.");
-      } else {
-        setMsg("Ficha guardada. Puedes editarla y volver a enviar hasta que el coordinador vincule un contenedor. Espera en portería.");
+      setPreview(false);
+      if (v?.publicToken) {
+        nav(`/visita/${v.publicToken}?recibo=1`, { replace: true });
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : err.message);
+      setPreview(false);
     } finally {
       setBusy(false);
     }
@@ -118,8 +206,57 @@ export default function VisitaPublica() {
     setForm((f) => ({ ...f, [k]: v }));
   }
 
+  const photoSrc = token
+    ? `${apiUrl(`/gate-visits/ticket/${token}/photo`)}?t=${photoBust}`
+    : `${apiUrl(`/gate-visits/by-plate/${encodeURIComponent(form.tractorPlate)}/photo`)}?t=${photoBust}`;
+
+  const welcomeName = (ticket?.driverName || form.driverName || "").trim() || "a ZGROUP";
+
+  if (token && ready && staffVisitas && !showReceipt && !forceEdit && !error) {
+    return (
+      <div className="panel visita-public">
+        <Brand />
+        <p className="section-sub">Abriendo la visita en el panel…</p>
+      </div>
+    );
+  }
+
+  if (showReceipt && !ticket && !error) {
+    return (
+      <div className="panel visita-public">
+        <Brand />
+        <p className="section-sub">Preparando tu comprobante…</p>
+      </div>
+    );
+  }
+
+  if (showReceipt && ticket) {
+    return (
+      <div className="panel visita-public visita-welcome">
+        <Brand />
+        <h2 className="section-title">Bienvenido, {welcomeName}</h2>
+        <p className="section-sub">
+          Tu visita quedó registrada. Descarga el comprobante y muestra el código QR al personal de portería.
+        </p>
+        {error ? <div className="err">{error}</div> : null}
+        {qrSrc ? <img className="visita-qr" src={qrSrc} alt="QR de validación" /> : null}
+        <p className="visita-code">Código {shortVisitCode(ticket.publicToken)}</p>
+        <PreviewList data={{ ...form, visitAt: form.visitAt || ticket.visitAt }} />
+        <div className="action-row" style={{ justifyContent: "center", marginTop: 16 }}>
+          <button className="btn-primary" type="button" onClick={() => downloadVisitPdf(ticket).catch((e) => setError(e.message))}>
+            Descargar PDF
+          </button>
+          {!ticket.locked ? (
+            <Link className="btn-ghost" to={`/visita/${ticket.publicToken}?editar=1`}>Corregir datos</Link>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="panel visita-public">
+      <Brand />
       <h2 className="section-title">Visita de puerta</h2>
       <p className="section-sub">Identifícate con la placa del tracto. Si ya la usaste y aún no está vinculada a un contenedor, puedes corregir los datos.</p>
       {error ? <div className="err">{error}</div> : null}
@@ -127,7 +264,13 @@ export default function VisitaPublica() {
       {saved && !locked ? (
         <div className="ok-msg">Datos guardados. El botón guarda los cambios de esta ficha.</div>
       ) : null}
-      <form className="form-grid" onSubmit={submit}>
+      {!user && ticket?.id ? (
+        <p className="section-sub">
+          ¿Eres personal ZDRY?{" "}
+          <Link to={`/login?next=${encodeURIComponent(`/app/almacen/visitas?visita=${ticket.id}`)}`}>Abrir en Visitas</Link>
+        </p>
+      ) : null}
+      <form className="form-grid" onSubmit={openPreview}>
         <div><label>Placa tracto *</label><input value={form.tractorPlate} onChange={(e) => set("tractorPlate", e.target.value.toUpperCase())} required disabled={locked} /></div>
         <div><label>Empresa</label><input value={form.company} onChange={(e) => set("company", e.target.value)} disabled={locked} /></div>
         <div><label>RUC</label><input value={form.ruc} onChange={(e) => set("ruc", e.target.value)} disabled={locked} /></div>
@@ -150,7 +293,7 @@ export default function VisitaPublica() {
             Una toma del contenedor o del tracto para que patio lo contraste. El coordinador debe aprobarla antes de que la vea el personal de campo.
           </p>
           {photoStatus !== "none" && !photo ? (
-            <img className="visit-photo-preview" src={`${apiUrl(`/gate-visits/by-plate/${encodeURIComponent(form.tractorPlate)}/photo`)}?t=${photoBust}`} alt="Tu unidad" />
+            <img className="visit-photo-preview" src={photoSrc} alt="Tu unidad" />
           ) : null}
           <div className="file-field" style={{ marginTop: 6 }}>
             <span className="file-field-name">
@@ -175,10 +318,30 @@ export default function VisitaPublica() {
         </div>
         <div className="action-row" style={{ gridColumn: "1 / -1" }}>
           <button className="btn-primary" type="submit" disabled={busy || locked}>
-            {locked ? "Vinculada" : saved ? "Guardar cambios" : "Enviar"}
+            {locked ? "Vinculada" : saved ? "Revisar cambios" : "Enviar"}
           </button>
         </div>
       </form>
+
+      <div className={`overlay ${preview ? "open" : ""}`} onClick={() => !busy && setPreview(false)}>
+        <div className="modal quote-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-head">
+            <b>Revisa tus datos</b>
+            <button type="button" className="modal-close" onClick={() => setPreview(false)} disabled={busy}>×</button>
+          </div>
+          <div className="modal-body single">
+            <p className="section-sub">Si algo está mal, pulsa Corregir. Si está bien, Proceder registra la visita.</p>
+            <PreviewList data={form} />
+            {photo ? <p className="section-sub">Se adjuntará la foto {photo.name}.</p> : null}
+            <div className="action-row" style={{ marginTop: 16 }}>
+              <button className="btn-ghost" type="button" disabled={busy} onClick={() => setPreview(false)}>Corregir</button>
+              <button className="btn-primary" type="button" disabled={busy} onClick={proceed}>
+                {busy ? "Guardando…" : "Proceder"}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

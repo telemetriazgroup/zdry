@@ -63,6 +63,23 @@ export class GateVisitsController {
   }
 
   @Public()
+  @Get("ticket/:token/photo")
+  async tokenPhoto(@Param("token") token: string) {
+    const obj = await this.visits.openTokenPhoto(token || "");
+    return new StreamableFile(obj.stream, {
+      type: obj.contentType || "image/jpeg",
+      length: obj.contentLength,
+      disposition: `inline; filename="${(obj.name || "unidad.jpg").replace(/"/g, "")}"`,
+    });
+  }
+
+  @Public()
+  @Get("ticket/:token")
+  byToken(@Param("token") token: string) {
+    return this.visits.byToken(token || "");
+  }
+
+  @Public()
   @Post("public")
   upsertPublic(@Body() body: VisitBody) {
     return this.visits.upsertPublic(body);

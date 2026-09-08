@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, apiUpload, apiUrl, formatWhen } from "../api.js";
 import { useAuth } from "../auth.jsx";
@@ -6,6 +6,7 @@ import SearchCreate from "../search-create.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 
 const ARCHIVE_PRESETS = ["Contenedor mal ingresado", "Información incorrecta"];
+const PAGE_SIZE = 20;
 const EMPTY_VISIT = {
   tractorPlate: "",
   company: "",
@@ -79,6 +80,31 @@ function ArchiveForm({ iso, onDone, onCancel }) {
   );
 }
 
+function pendingSearchText(u) {
+  return [u.iso, u.typeLabel, u.catLabel, u.depotName, u.intakeLabel, u.registeredByName, u.odooLocation, ...(u.missing || [])]
+    .filter(Boolean)
+    .join(" ")
+    .toUpperCase();
+}
+
+function ArchiveIconBtn({ onClick }) {
+  return (
+    <button
+      type="button"
+      className="icon-btn danger"
+      title="Archivar"
+      aria-label="Archivar"
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="4" rx="1" />
+        <path d="M5 7v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7" />
+        <path d="M10 12h4" />
+      </svg>
+    </button>
+  );
+}
+
 function whoLine(u) {
   return `Registró ${u.registeredByName || "—"} · ${formatWhen(u.createdAt)}`;
 }
@@ -121,6 +147,8 @@ export default function Recepcion() {
   const [isoHint, setIsoHint] = useState(null);
   const [bust, setBust] = useState(0);
   const [archiving, setArchiving] = useState(null);
+  const [pendingQ, setPendingQ] = useState("");
+  const [pendingPage, setPendingPage] = useState(1);
   const [odooPhotos, setOdooPhotos] = useState([]);
   const [pickedAtt, setPickedAtt] = useState(null);
   const [assigning, setAssigning] = useState(false);
@@ -243,6 +271,24 @@ export default function Recepcion() {
       clearTimeout(t);
     };
   }, [form.iso, mode]);
+
+  const filteredPending = useMemo(() => {
+    const raw = pendingQ.trim().toUpperCase();
+    const compact = raw.replace(/[\s-]/g, "");
+    if (!raw) return pending;
+    return pending.filter((u) => {
+      const hay = pendingSearchText(u);
+      return hay.includes(raw) || hay.replace(/[\s-]/g, "").includes(compact);
+    });
+  }, [pending, pendingQ]);
+
+  const pendingPages = Math.max(1, Math.ceil(filteredPending.length / PAGE_SIZE));
+  const safePendingPage = Math.min(pendingPage, pendingPages);
+  const pagePending = filteredPending.slice((safePendingPage - 1) * PAGE_SIZE, safePendingPage * PAGE_SIZE);
+
+  useEffect(() => {
+    setPendingPage(1);
+  }, [pendingQ]);
 
   async function submitNuevo() {
     setError("");
@@ -1224,52 +1270,79 @@ export default function Recepcion() {
       </div>
       {pending.length ? (
         <>
-          <h3 style={{ marginTop: 0 }}>Pendientes ({pending.length})</h3>
-          <p className="section-sub">Toca una unidad para continuar la inspección.</p>
+          <h3 style={{ marginTop: 0 }}>
+            Pendientes ({filteredPending.length}{pendingQ.trim() ? ` de ${pending.length}` : ""})
+          </h3>
+          <p className="section-sub">Toca una unidad para continuar la inspección. Se listan de {PAGE_SIZE} en {PAGE_SIZE}.</p>
+          <div className="odoo-toolbar">
+            <input
+              className="odoo-search"
+              type="search"
+              value={pendingQ}
+              onChange={(e) => setPendingQ(e.target.value)}
+              placeholder="Buscar ISO, tipo, depósito, origen o quien registró…"
+              aria-label="Buscar pendientes"
+            />
+          </div>
+          {pagePending.length ? (
+            <>
           <div className="tablewrap recv-table">
             <table className="data">
               <thead>
-                <tr><th>ISO</th><th>Tipo</th><th>Condición</th><th>Depósito</th><th>Origen</th><th>Registró</th><th>Motivo pendiente</th><th></th></tr>
+                <tr><th>ISO</th><th>Tipo</th><th>Condición</th><th>Depósito</th><th>Origen</th><th>Registró</th><th>Motivo pendiente</th></tr>
               </thead>
               <tbody>
-                {pending.map((u) => (
+                {pagePending.map((u) => (
                   <tr key={u.iso} className={`expandable ${u.isoException ? "iso-review-row" : ""}`} onClick={() => { if (archiving !== u.iso) { setInspectIso(u.iso); setMode("inspect"); setError(""); } }}>
-                    <td><b>{u.iso}</b> <OriginBadges u={u} /></td>
+                    <td onClick={(e) => { if (archiving === u.iso) e.stopPropagation(); }}>
+                      <div className="recv-iso-cell">
+                        <div className="recv-iso-row">
+                          <b>{u.iso}</b>
+                          <ArchiveIconBtn onClick={() => setArchiving((cur) => (cur === u.iso ? null : u.iso))} />
+                          <OriginBadges u={u} />
+                        </div>
+                        {archiving === u.iso ? (
+                          <ArchiveForm
+                            iso={u.iso}
+                            onDone={(iso) => { setArchiving(null); setMsg(`${iso} archivado.`); loadPending(); }}
+                            onCancel={() => setArchiving(null)}
+                          />
+                        ) : null}
+                      </div>
+                    </td>
                     <td>{u.typeLabel}</td>
                     <td style={{ color: u.catColor }}>{u.catLabel}</td>
                     <td>{u.depotName}</td>
                     <td><span className="badge-scope" style={{ background: intakeColor(u.intakeType) }}>{u.intakeLabel}</span></td>
                     <td className="recv-who">{u.registeredByName || "—"}<br />{formatWhen(u.createdAt)}</td>
                     <td>{u.missing.map((r) => <span key={r} className="badge-scope" style={{ background: "#c9720b", marginRight: 4 }}>{r}</span>)}</td>
-                    <td onClick={(e) => e.stopPropagation()}>
-                      {archiving === u.iso ? (
-                        <ArchiveForm
-                          iso={u.iso}
-                          onDone={(iso) => { setArchiving(null); setMsg(`${iso} archivado.`); loadPending(); }}
-                          onCancel={() => setArchiving(null)}
-                        />
-                      ) : (
-                        <button className="btn-ghost recv-archive-btn" type="button" onClick={() => setArchiving(u.iso)}>Archivar</button>
-                      )}
-                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
           <div className="recv-cards">
-            {pending.map((u) => (
+            {pagePending.map((u) => (
               <div key={u.iso} className={`recv-card ${u.isoException ? "iso-review-row" : ""}`}>
+                <div className="recv-card-top">
+                  <span className="recv-iso-row">
+                    <button
+                      type="button"
+                      className="recv-card-open"
+                      onClick={() => { setInspectIso(u.iso); setMode("inspect"); setError(""); }}
+                    >
+                      <b className="card-iso">{u.iso}</b>
+                    </button>
+                    <ArchiveIconBtn onClick={() => setArchiving((cur) => (cur === u.iso ? null : u.iso))} />
+                  </span>
+                  <span className="badge-scope" style={{ background: intakeColor(u.intakeType) }}>{u.intakeLabel}</span>
+                  <OriginBadges u={u} />
+                </div>
                 <button
                   type="button"
                   className="recv-card-open"
                   onClick={() => { setInspectIso(u.iso); setMode("inspect"); setError(""); }}
                 >
-                  <div className="recv-card-top">
-                    <b className="card-iso">{u.iso}</b>
-                    <span className="badge-scope" style={{ background: intakeColor(u.intakeType) }}>{u.intakeLabel}</span>
-                    <OriginBadges u={u} />
-                  </div>
                   <div className="recv-card-meta">{u.typeLabel} · <span style={{ color: u.catColor }}>{u.catLabel}</span></div>
                   <div className="recv-card-meta">{u.depotName}</div>
                   <div className="recv-who">{whoLine(u)}</div>
@@ -1283,12 +1356,21 @@ export default function Recepcion() {
                     onDone={(iso) => { setArchiving(null); setMsg(`${iso} archivado.`); loadPending(); }}
                     onCancel={() => setArchiving(null)}
                   />
-                ) : (
-                  <button className="btn-ghost recv-archive-btn" type="button" onClick={() => setArchiving(u.iso)}>Archivar</button>
-                )}
+                ) : null}
               </div>
             ))}
           </div>
+          {pendingPages > 1 ? (
+            <div className="odoo-pager">
+              <button className="btn-ghost" type="button" disabled={safePendingPage <= 1} onClick={() => setPendingPage(safePendingPage - 1)}>Anterior</button>
+              <span>Página {safePendingPage} / {pendingPages}</span>
+              <button className="btn-ghost" type="button" disabled={safePendingPage >= pendingPages} onClick={() => setPendingPage(safePendingPage + 1)}>Siguiente</button>
+            </div>
+          ) : null}
+            </>
+          ) : (
+            <p className="section-sub">Ningún pendiente coincide con la búsqueda.</p>
+          )}
         </>
       ) : (
         <p style={{ color: "#2f9e44", fontWeight: 700 }}>✓ No hay contenedores pendientes de inspección física ni con datos faltantes.</p>

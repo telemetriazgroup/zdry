@@ -672,6 +672,7 @@ model GateVisit {
   unitPhotoApprovedAt   DateTime?
   unitPhotoApprovedBy   String?
   unitPhotoRejectedAt   DateTime?
+  publicToken   String     @unique @default(uuid())
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 

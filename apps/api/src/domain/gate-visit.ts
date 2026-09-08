@@ -20,6 +20,10 @@ export function canPublicEditVisit(linkedAt: Date | string | null | undefined) {
   return !visitIsLocked(linkedAt);
 }
 
+export function shortVisitCode(token: string) {
+  return String(token || "").replace(/-/g, "").slice(0, 8).toUpperCase();
+}
+
 export type VisitPhotoStatus = "none" | "pending" | "approved" | "rejected";
 
 export function visitPhotoStatus(row: {

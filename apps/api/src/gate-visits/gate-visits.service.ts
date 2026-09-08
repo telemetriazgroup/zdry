@@ -37,6 +37,7 @@ export class GateVisitsService {
     const photoStatus = visitPhotoStatus(row);
     return {
       id: row.id,
+      publicToken: row.publicToken,
       tractorPlate: row.tractorPlate,
       company: row.company,
       ruc: row.ruc,
@@ -98,6 +99,19 @@ export class GateVisitsService {
     });
     if (!row) return { found: false, tractorPlate, locked: false, visit: null };
     return { found: true, tractorPlate, locked: visitIsLocked(row.linkedAt), visit: this.present(row) };
+  }
+
+  async byToken(token: string) {
+    const publicToken = String(token || "").trim();
+    if (publicToken.length < 8) throw new BadRequestException("Código de visita inválido.");
+    const row = await this.prisma.gateVisit.findUnique({ where: { publicToken } });
+    if (!row) throw new NotFoundException("Visita no encontrada.");
+    return {
+      found: true,
+      locked: visitIsLocked(row.linkedAt),
+      editable: canPublicEditVisit(row.linkedAt),
+      visit: this.present(row),
+    };
   }
 
   async upsertPublic(body: {
@@ -447,6 +461,13 @@ export class GateVisitsService {
       where: { tractorPlate },
       orderBy: { updatedAt: "desc" },
     });
+    if (!visit) throw new NotFoundException("Foto no encontrada.");
+    return this.openPhoto(visit.id, undefined, true);
+  }
+
+  async openTokenPhoto(token: string) {
+    const publicToken = String(token || "").trim();
+    const visit = await this.prisma.gateVisit.findUnique({ where: { publicToken } });
     if (!visit) throw new NotFoundException("Foto no encontrada.");
     return this.openPhoto(visit.id, undefined, true);
   }

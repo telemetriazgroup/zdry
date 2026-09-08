@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api, apiUrl, publicUrl } from "../api.js";
 import { useLightbox } from "../media-lightbox.jsx";
 
@@ -25,8 +26,10 @@ function toLocalInput(iso) {
 
 export default function Visitas() {
   const lb = useLightbox();
+  const [params] = useSearchParams();
+  const focusId = params.get("visita") || "";
   const [rows, setRows] = useState([]);
-  const [filter, setFilter] = useState("pending");
+  const [filter, setFilter] = useState(focusId ? "all" : "pending");
   const [iso, setIso] = useState("");
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
@@ -34,15 +37,6 @@ export default function Visitas() {
   const [form, setForm] = useState(emptyForm);
   const [creating, setCreating] = useState(false);
   const qr = typeof window !== "undefined" ? `${window.location.origin}${publicUrl("/visita")}` : "/zdry/visita";
-
-  async function load(f = filter) {
-    const list = await api(`/gate-visits?filter=${f}`);
-    setRows(list);
-  }
-
-  useEffect(() => {
-    load("pending").catch((e) => setError(e.message));
-  }, []);
 
   function openEdit(v) {
     setCreating(false);
@@ -61,6 +55,23 @@ export default function Visitas() {
     });
     setIso(v.containerIso || "");
   }
+
+  async function load(f = filter) {
+    const list = await api(`/gate-visits?filter=${f}`);
+    setRows(list);
+    if (focusId) {
+      const hit = list.find((v) => v.id === focusId);
+      if (hit) {
+        openEdit(hit);
+        setMsg(hit.locked ? "Visita asignada: puedes consultar y desvincular." : "Visita aún no asignada: puedes corregir los datos o vincular un DRY.");
+      }
+    }
+    return list;
+  }
+
+  useEffect(() => {
+    load(focusId ? "all" : "pending").catch((e) => setError(e.message));
+  }, [focusId]);
 
   async function saveEdit() {
     setError("");
@@ -130,6 +141,9 @@ export default function Visitas() {
 
   return (
     <div className="panel">
+      <div className="visita-brand visitas-brand">
+        <img src={publicUrl("/brand/zg_marca.png")} alt="ZGROUP" />
+      </div>
       <h3>Visitas de puerta</h3>
       <p className="section-sub">
         QR de portería (URL fija): <a href={qr} target="_blank" rel="noreferrer">{qr}</a>
@@ -181,7 +195,7 @@ export default function Visitas() {
           </thead>
           <tbody>
             {rows.map((v) => (
-              <tr key={v.id}>
+                <tr key={v.id} className={focusId === v.id ? "visit-focus" : undefined}>
                 <td><b>{v.tractorPlate}</b><div className="recv-who">{v.company} · {v.phone}</div></td>
                 <td>{v.driverName || "—"}</td>
                 <td>{v.motive}</td>
