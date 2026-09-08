@@ -12,6 +12,7 @@ import {
 } from "../catalog-copy.js";
 import SiteFooter from "./SiteFooter.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
+import VideoMarks, { videoSilenceProps } from "../video-marks.jsx";
 
 const CART_KEY = "zdry_cart";
 const money = (n) => (n == null ? null : "$" + Math.round(Number(n)).toLocaleString("en-US"));
@@ -492,8 +493,8 @@ export default function Catalog() {
                 <div className={`gallery-main ${pdpItems.length ? "can-zoom" : ""}`}>
                   {thumb === "video" && pdp.hasVideo ? (
                     <>
-                      <video src={`${apiUrl(`/catalog/${pdp.iso}/video`)}${pdp.mediaVersion ? `?v=${encodeURIComponent(pdp.mediaVersion)}` : ""}`} controls autoPlay muted playsInline />
-                      <img className="video-corner-mark" src={markSrc} alt="" />
+                      <video src={`${apiUrl(`/catalog/${pdp.iso}/video`)}${pdp.mediaVersion ? `?v=${encodeURIComponent(pdp.mediaVersion)}` : ""}`} controls autoPlay {...videoSilenceProps()} />
+                      <VideoMarks src={markSrc} />
                       <button className="gallery-expand" type="button" onClick={openPdpMedia}>Ampliar</button>
                     </>
                   ) : pdpSlots.includes(thumb) ? (

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, apiUpload, apiUrl, ApiError, publicUrl } from "../api.js";
 import { useAuth } from "../auth.jsx";
+import { useLightbox } from "../media-lightbox.jsx";
 import {
   VISIT_FIELDS,
   downloadVisitPdf,
@@ -57,6 +58,7 @@ export default function VisitaPublica() {
   const [params] = useSearchParams();
   const nav = useNavigate();
   const { user, ready } = useAuth();
+  const lb = useLightbox();
   const showReceipt = params.get("recibo") === "1";
   const forceEdit = params.get("editar") === "1";
   const [form, setForm] = useState(empty);
@@ -66,6 +68,7 @@ export default function VisitaPublica() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [photo, setPhoto] = useState(null);
+  const [photoLocal, setPhotoLocal] = useState("");
   const [photoStatus, setPhotoStatus] = useState("none");
   const [photoBust, setPhotoBust] = useState(0);
   const [preview, setPreview] = useState(false);
@@ -111,6 +114,16 @@ export default function VisitaPublica() {
       /* ignore lookup */
     }
   }
+
+  useEffect(() => {
+    if (!photo) {
+      setPhotoLocal("");
+      return undefined;
+    }
+    const url = URL.createObjectURL(photo);
+    setPhotoLocal(url);
+    return () => URL.revokeObjectURL(url);
+  }, [photo]);
 
   useEffect(() => {
     const t = setTimeout(() => lookup(form.tractorPlate), 400);
@@ -205,6 +218,13 @@ export default function VisitaPublica() {
   const photoSrc = token
     ? `${apiUrl(`/gate-visits/ticket/${token}/photo`)}?t=${photoBust}`
     : `${apiUrl(`/gate-visits/by-plate/${encodeURIComponent(form.tractorPlate)}/photo`)}?t=${photoBust}`;
+  const shownPhoto = photoLocal || (photoStatus !== "none" ? photoSrc : "");
+  const pdfPhoto = photoLocal || ((ticket?.hasPhoto || photoStatus !== "none") ? photoSrc : "");
+
+  function openPhoto() {
+    if (!shownPhoto) return;
+    lb.open([{ src: shownPhoto, type: "image", label: "Foto de la unidad" }]);
+  }
 
   const welcomeName = (ticket?.driverName || form.driverName || "").trim() || "a ZGROUP";
   const linked = !!(locked || ticket?.locked);
@@ -216,11 +236,17 @@ export default function VisitaPublica() {
         <p className="ok-msg">Esta placa ya está vinculada a un contenedor.</p>
         {error ? <div className="err">{error}</div> : null}
         <PreviewList data={{ ...form, visitAt: form.visitAt || ticket.visitAt }} />
+        {shownPhoto ? (
+          <button type="button" className="visit-photo-btn" onClick={openPhoto} style={{ margin: "12px auto 0" }}>
+            <img className="visit-photo-preview" src={shownPhoto} alt="Foto de la unidad" />
+          </button>
+        ) : null}
         <div className="action-row" style={{ justifyContent: "center", marginTop: 16 }}>
-          <button className="btn-primary" type="button" onClick={() => downloadVisitPdf({ ...ticket, locked: true }).catch((e) => setError(e.message))}>
+          <button className="btn-primary" type="button" onClick={() => downloadVisitPdf({ ...ticket, locked: true }, pdfPhoto).catch((e) => setError(e.message))}>
             Descargar PDF
           </button>
         </div>
+        {lb.node}
       </div>
     );
   }
@@ -253,14 +279,20 @@ export default function VisitaPublica() {
         {qrSrc ? <img className="visita-qr" src={qrSrc} alt="QR de validación" /> : null}
         <p className="visita-code">Código {shortVisitCode(ticket.publicToken)}</p>
         <PreviewList data={{ ...form, visitAt: form.visitAt || ticket.visitAt }} />
+        {shownPhoto ? (
+          <button type="button" className="visit-photo-btn" onClick={openPhoto} style={{ margin: "12px auto 0" }}>
+            <img className="visit-photo-preview" src={shownPhoto} alt="Foto de la unidad" />
+          </button>
+        ) : null}
         <div className="action-row" style={{ justifyContent: "center", marginTop: 16 }}>
-          <button className="btn-primary" type="button" onClick={() => downloadVisitPdf(ticket).catch((e) => setError(e.message))}>
+          <button className="btn-primary" type="button" onClick={() => downloadVisitPdf(ticket, pdfPhoto).catch((e) => setError(e.message))}>
             Descargar PDF
           </button>
           {!ticket.locked ? (
             <Link className="btn-ghost" to={`/visita/${ticket.publicToken}?editar=1`}>Corregir datos</Link>
           ) : null}
         </div>
+        {lb.node}
       </div>
     );
   }
@@ -294,28 +326,35 @@ export default function VisitaPublica() {
           <p className="section-sub" style={{ marginBottom: 6 }}>
             Una toma del contenedor o del tracto para que patio lo contraste. El coordinador debe aprobarla antes de que la vea el personal de campo.
           </p>
-          {photoStatus !== "none" && !photo ? (
-            <img className="visit-photo-preview" src={photoSrc} alt="Tu unidad" />
-          ) : null}
-          <div className="file-field" style={{ marginTop: 6 }}>
-            <span className="file-field-name">
-              {photo?.name
-                || (photoStatus === "approved" ? "Foto enviada y aprobada"
-                  : photoStatus === "pending" ? "Foto enviada · pendiente de aprobación"
-                    : photoStatus === "rejected" ? "Foto rechazada · puedes cargar otra"
-                      : "Ningún archivo seleccionado")}
-            </span>
-            <label className="btn-ghost">
-              {photoStatus === "none" ? "Elegir foto" : "Cambiar foto"}
-              <input
-                type="file"
-                accept="image/*"
-                capture="environment"
-                hidden
-                disabled={locked}
-                onChange={(e) => setPhoto(e.target.files?.[0] || null)}
-              />
-            </label>
+          <div className="visit-photo-box">
+            {shownPhoto ? (
+              <button type="button" className="visit-photo-btn" onClick={openPhoto}>
+                <img className="visit-photo-preview" src={shownPhoto} alt="Vista previa de la unidad" />
+              </button>
+            ) : null}
+            <div className="visit-photo-actions">
+              <span className="file-field-name">
+                {photo?.name
+                  || (photoStatus === "approved" ? "Foto enviada y aprobada"
+                    : photoStatus === "pending" ? "Foto enviada · pendiente de aprobación"
+                      : photoStatus === "rejected" ? "Foto rechazada · puedes cargar otra"
+                        : "Ningún archivo seleccionado")}
+              </span>
+              {shownPhoto ? (
+                <button className="btn-ghost" type="button" onClick={openPhoto}>Ver foto</button>
+              ) : null}
+              <label className="btn-ghost">
+                {shownPhoto ? "Cambiar foto" : "Elegir foto"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  hidden
+                  disabled={locked}
+                  onChange={(e) => setPhoto(e.target.files?.[0] || null)}
+                />
+              </label>
+            </div>
           </div>
         </div>
         <div className="action-row" style={{ gridColumn: "1 / -1" }}>
@@ -334,7 +373,11 @@ export default function VisitaPublica() {
           <div className="modal-body single">
             <p className="section-sub">Si algo está mal, pulsa Corregir. Si está bien, Proceder registra la visita.</p>
             <PreviewList data={form} />
-            {photo ? <p className="section-sub">Se adjuntará la foto {photo.name}.</p> : null}
+            {shownPhoto ? (
+              <button type="button" className="visit-photo-btn" onClick={openPhoto} style={{ marginTop: 10 }}>
+                <img className="visit-photo-preview" src={shownPhoto} alt="Vista previa" />
+              </button>
+            ) : null}
             <div className="action-row" style={{ marginTop: 16 }}>
               <button className="btn-ghost" type="button" disabled={busy} onClick={() => setPreview(false)}>Corregir</button>
               <button className="btn-primary" type="button" disabled={busy} onClick={proceed}>
@@ -344,6 +387,7 @@ export default function VisitaPublica() {
           </div>
         </div>
       </div>
+      {lb.node}
     </div>
   );
 }

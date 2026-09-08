@@ -48,7 +48,8 @@ export function visitTicketHref(token) {
 }
 
 async function asDataUrl(url) {
-  const res = await fetch(url);
+  const res = await fetch(url, { credentials: "include" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const blob = await res.blob();
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -58,13 +59,20 @@ async function asDataUrl(url) {
   });
 }
 
-export async function downloadVisitPdf(visit) {
+function imageFormat(dataUrl) {
+  if (String(dataUrl).startsWith("data:image/png")) return "PNG";
+  if (String(dataUrl).startsWith("data:image/webp")) return "WEBP";
+  return "JPEG";
+}
+
+export async function downloadVisitPdf(visit, photoUrl) {
   const token = visit.publicToken;
   const url = visitTicketHref(token);
   const code = shortVisitCode(token);
-  const [logo, qr] = await Promise.all([
+  const [logo, qr, photo] = await Promise.all([
     asDataUrl(publicUrl("/brand/zg_marca.png")),
     QRCode.toDataURL(url, { width: 360, margin: 1, errorCorrectionLevel: "M" }),
+    photoUrl ? asDataUrl(photoUrl).catch(() => null) : Promise.resolve(null),
   ]);
 
   const doc = new jsPDF({ unit: "mm", format: "a4" });
@@ -103,11 +111,38 @@ export async function downloadVisitPdf(visit) {
   doc.setTextColor(90, 98, 110);
   doc.text(url, 140, 114, { maxWidth: 54 });
 
+  y += 10;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.setTextColor(18, 32, 58);
+  doc.text("Foto de la unidad", 16, y);
+  y += 4;
+  const boxW = 92;
+  const boxH = 58;
+  doc.setDrawColor(190, 196, 204);
+  doc.setFillColor(248, 249, 251);
+  doc.roundedRect(16, y, boxW, boxH, 2, 2, "FD");
+  if (photo) {
+    try {
+      doc.addImage(photo, imageFormat(photo), 17.5, y + 1.5, boxW - 3, boxH - 3);
+    } catch {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(90, 98, 110);
+      doc.text("No se pudo incrustar la foto.", 20, y + 30);
+    }
+  } else {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(90, 98, 110);
+    doc.text("Sin foto adjunta.", 20, y + 30);
+  }
+
   if (visit.locked || visit.linkedAt || visit.containerIso) {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
     doc.setTextColor(18, 32, 58);
-    doc.text("Esta placa ya está vinculada a un contenedor.", 16, y + 8);
+    doc.text("Esta placa ya está vinculada a un contenedor.", 16, y + boxH + 10);
   }
 
   doc.save(`visita-${visit.tractorPlate || code}.pdf`);

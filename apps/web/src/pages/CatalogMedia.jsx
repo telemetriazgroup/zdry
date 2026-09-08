@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, apiUpload, ApiError, apiUrl, formatWhen } from "../api.js";
 import { useAuth } from "../auth.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
+import VideoMarks, { videoSilenceProps } from "../video-marks.jsx";
+
+const PAGE_SIZE = 20;
 
 const GRADES = [
   { value: "", label: "—" },
@@ -49,6 +52,8 @@ export default function CatalogMedia() {
   const [showMode, setShowMode] = useState("inherit");
   const [priceNote, setPriceNote] = useState("");
   const [priceBusy, setPriceBusy] = useState(false);
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
 
   async function loadOffer(nextIso) {
     if (!canPrice || !nextIso) {
@@ -73,6 +78,10 @@ export default function CatalogMedia() {
     api("/catalog-media/meta").then(setMeta).catch(() => {});
     loadList();
   }, [loadList]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [q]);
 
   async function open(nextIso) {
     setError("");
@@ -228,7 +237,23 @@ export default function CatalogMedia() {
       .map((label, i) => (unit.photoSlots[i] ? { src: photoSrc(i), type: "image", label: `${i + 1}. ${label}` } : null))
       .filter(Boolean)
     : [];
-  const videoItem = unit?.hasVideo ? { src: videoSrc, type: "video", label: "Video 360°" } : null;
+  const markSrc = apiUrl("/catalog-media/watermark");
+  const filteredRows = useMemo(() => {
+    const raw = q.trim().toUpperCase();
+    const compact = raw.replace(/[\s-]/g, "");
+    if (!raw) return rows;
+    return rows.filter((r) => {
+      const hay = [r.iso, r.type, r.cat, r.depotName, r.manufacturer, r.registeredByName, STATUS[r.mediaStatus]?.label]
+        .filter(Boolean)
+        .join(" ")
+        .toUpperCase();
+      return hay.includes(raw) || hay.replace(/[\s-]/g, "").includes(compact);
+    });
+  }, [rows, q]);
+  const pages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+  const safePage = Math.min(page, pages);
+  const pageRows = filteredRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const videoItem = unit?.hasVideo ? { src: videoSrc, type: "video", label: "Video 360°", watermark: markSrc } : null;
   const histItems = (unit?.history || []).map((h) => ({
     src: histSrc(h.id),
     type: "image",
@@ -269,13 +294,27 @@ export default function CatalogMedia() {
               {meta.watermarkName ? ` (ahora: ${meta.watermarkName}).` : "."}
             </p>
           ) : null}
+          <div className="odoo-toolbar">
+            <input
+              className="odoo-search"
+              type="search"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Buscar ISO, tipo, depósito o quien ingresó…"
+              aria-label="Buscar unidades del catálogo"
+            />
+          </div>
+          <p className="section-sub">
+            {filteredRows.length} unidad{filteredRows.length === 1 ? "" : "es"}
+            {q.trim() ? ` de ${rows.length}` : ""}. Se listan de {PAGE_SIZE} en {PAGE_SIZE}.
+          </p>
           <div className="tablewrap">
             <table className="data">
               <thead>
                 <tr><th>ISO</th><th>Tipo</th><th>Ingreso</th><th>Fotos</th><th>Historial</th><th>Video</th><th>Catálogo</th></tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {pageRows.map((r) => (
                   <tr key={r.iso} className="expandable" onClick={() => open(r.iso)}>
                     <td className="card-iso">{r.iso}{r.demo ? <span className="demo-chip">DEMO</span> : null}</td>
                     <td>{r.type}</td>
@@ -291,6 +330,14 @@ export default function CatalogMedia() {
               </tbody>
             </table>
           </div>
+          {!pageRows.length ? <p className="section-sub">Ninguna unidad coincide con la búsqueda.</p> : null}
+          {pages > 1 ? (
+            <div className="odoo-pager">
+              <button className="btn-ghost" type="button" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>Anterior</button>
+              <span>Página {safePage} / {pages}</span>
+              <button className="btn-ghost" type="button" disabled={safePage >= pages} onClick={() => setPage(safePage + 1)}>Siguiente</button>
+            </div>
+          ) : null}
         </div>
 
         {unit ? (
@@ -306,7 +353,8 @@ export default function CatalogMedia() {
                 <img key={histSrc(histPreview)} src={histSrc(histPreview)} alt="Foto de historial" onClick={openStage} />
               ) : previewingVideo ? (
                 <>
-                  <video key={videoSrc} src={videoSrc} controls autoPlay muted playsInline onClick={(e) => e.stopPropagation()} />
+                  <video key={videoSrc} src={videoSrc} controls autoPlay {...videoSilenceProps()} onClick={(e) => e.stopPropagation()} />
+                  <VideoMarks src={markSrc} />
                   <button className="gallery-expand" type="button" onClick={openStage}>Ampliar</button>
                 </>
               ) : previewingPhoto ? (

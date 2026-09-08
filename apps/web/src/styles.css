@@ -614,12 +614,17 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   background: rgba(8, 14, 28, .72); color: #fff;
   font-size: 12px; font-weight: 700; padding: 6px 10px;
 }
-.gallery-main .video-corner-mark {
-  position: absolute; right: 10px; bottom: 10px;
-  width: min(28%, 120px); height: auto; max-height: 22%;
-  object-fit: contain; opacity: .78; pointer-events: none;
+.video-marks { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.video-marks img {
+  position: absolute; width: min(22%, 120px); height: auto; max-height: 20%;
+  object-fit: contain; opacity: .78;
   filter: drop-shadow(0 1px 4px rgba(0,0,0,.35));
 }
+.video-marks img:nth-child(1) { top: 10px; left: 10px; }
+.video-marks img:nth-child(2) { top: 10px; right: 10px; }
+.video-marks img:nth-child(3) { bottom: 10px; left: 10px; }
+.video-marks img:nth-child(4) { bottom: 10px; right: 10px; }
+.gallery-main .video-corner-mark { display: none; }
 .media-lb {
   position: fixed; inset: 0; z-index: 120;
   background: rgba(8, 14, 28, .92);
@@ -643,12 +648,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .media-lb-stage img.zoomed { cursor: zoom-out; }
 .media-lb-video { position: relative; max-width: min(1100px, 100%); width: 100%; }
 .media-lb-video video { width: 100%; max-height: calc(100vh - 110px); background: #000; display: block; }
-.media-lb-video .video-corner-mark {
-  position: absolute; right: 14px; bottom: 56px;
-  width: min(22%, 132px); height: auto;
-  object-fit: contain; opacity: .8; pointer-events: none;
-  filter: drop-shadow(0 1px 6px rgba(0,0,0,.45));
-}
+.media-lb-video .video-marks img { width: min(20%, 110px); }
+.media-lb-video .video-marks img:nth-child(3),
+.media-lb-video .video-marks img:nth-child(4) { bottom: 56px; }
 .media-lb-nav {
   position: absolute; top: 50%; transform: translateY(-50%);
   width: 44px; height: 44px; border: 0; border-radius: 50%;
@@ -1202,6 +1204,8 @@ tr.visit-focus { outline: 2px solid var(--orange); outline-offset: -2px; }
   font-size: 13px;
 }
 .visit-photo-preview { width: 160px; height: 110px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); background: #eef1f6; display: block; margin-top: 6px; cursor: zoom-in; }
+.visit-photo-box { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; margin-top: 8px; }
+.visit-photo-actions { display: flex; flex-direction: column; gap: 8px; }
 
 @media (max-width: 420px) {
   .tile-row { grid-template-columns: 1fr; }

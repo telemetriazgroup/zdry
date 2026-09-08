@@ -941,6 +941,7 @@ export default function Recepcion() {
                           src: `${apiUrl(`/warehouse/units/${unit.iso}/photos/video`)}?t=${bust}`,
                           type: "video",
                           label: name,
+                          watermark: apiUrl("/catalog-media/watermark"),
                         };
                       }
                       return null;

@@ -33,6 +33,7 @@ import {
   sniffInspectionPhotoMime,
   sniffInspectionVideoMime,
 } from "../domain/inspection-media";
+import { stripVideoAudio } from "../domain/video-process";
 import {
   CONTAINER_COLORS,
   DEFAULT_YARD_CONFIG,
@@ -476,13 +477,14 @@ export class WarehouseService {
         throw new BadRequestException((e as Error).message);
       }
       const ext = extForInspectionMime(mime);
-      const storageKey = `warehouse/${c.iso}/video360.${ext}`;
-      await this.storage.put(storageKey, file.buffer, mime);
+      const processed = await stripVideoAudio(file.buffer, ext);
+      const storageKey = `warehouse/${c.iso}/video360.mp4`;
+      await this.storage.put(storageKey, processed.buffer, processed.mime);
       await this.prisma.container.update({
         where: { iso: c.iso },
         data: {
           video360Key: storageKey,
-          video360Mime: mime,
+          video360Mime: processed.mime,
         },
       });
       await this.audit.log({
@@ -936,16 +938,27 @@ export class WarehouseService {
     }
     const ext = extForInspectionMime(mime);
     const id = randomUUID();
-    const storageKey = `warehouse/${c.iso}/captures/${id}.${ext}`;
-    await this.storage.put(storageKey, file.buffer, mime);
+    let payload = file.buffer;
+    let storedMime = mime;
+    let storedExt = ext;
+    let storedSize = file.size;
+    if (kind === "video") {
+      const processed = await stripVideoAudio(file.buffer, ext);
+      payload = processed.buffer;
+      storedMime = processed.mime;
+      storedExt = "mp4";
+      storedSize = processed.buffer.length;
+    }
+    const storageKey = `warehouse/${c.iso}/captures/${id}.${storedExt}`;
+    await this.storage.put(storageKey, payload, storedMime);
     const row = await this.prisma.fieldCapture.create({
       data: {
         iso: c.iso,
         kind,
         storageKey,
-        mimeType: mime,
-        originalName: file.originalname || `${kind}.${ext}`,
-        sizeBytes: file.size,
+        mimeType: storedMime,
+        originalName: file.originalname || `${kind}.${storedExt}`,
+        sizeBytes: storedSize,
         note: String(note || "").trim(),
         createdById: user.id,
         createdByName: user.name,

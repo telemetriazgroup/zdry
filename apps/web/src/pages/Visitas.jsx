@@ -244,7 +244,7 @@ export default function Visitas() {
                   <div className="action-row" style={{ flexWrap: "wrap" }}>
                     {v.locked ? (
                       <>
-                        <button className="btn-primary" type="button" onClick={() => downloadVisitPdf(v).catch((e) => setError(e.message))}>Descargar PDF</button>
+                        <button className="btn-primary" type="button" onClick={() => downloadVisitPdf(v, v.hasPhoto ? apiUrl(`/gate-visits/${v.id}/photo`) : "").catch((e) => setError(e.message))}>Descargar PDF</button>
                         <button className="btn-ghost" type="button" onClick={() => unlink(v.id)}>Desvincular</button>
                       </>
                     ) : (

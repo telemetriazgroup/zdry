@@ -376,6 +376,7 @@ export default function PatioCampo() {
                       src: `${apiUrl(`/warehouse/units/${unit.iso}/captures/${x.id}`)}?t=${bust}`,
                       type: x.kind === "video" ? "video" : "image",
                       label: x.note || x.originalName || (x.kind === "video" ? "Video de campo" : "Toma de campo"),
+                      watermark: x.kind === "video" ? apiUrl("/catalog-media/watermark") : undefined,
                     })),
                     idx,
                   )}

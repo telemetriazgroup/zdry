@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { apiUrl } from "./api.js";
+import VideoMarks, { videoSilenceProps } from "./video-marks.jsx";
 
 export function useLightbox() {
   const [lb, setLb] = useState(null);
@@ -99,8 +101,8 @@ export default function MediaLightbox({ items, index = 0, onClose }) {
       <div className="media-lb-stage" ref={wrap} onWheel={onWheel} onClick={(e) => e.stopPropagation()}>
         {item.type === "video" ? (
           <div className="media-lb-video">
-            <video src={item.src} controls autoPlay playsInline />
-            {item.watermark ? <img className="video-corner-mark" src={item.watermark} alt="" /> : null}
+            <video src={item.src} controls autoPlay {...videoSilenceProps()} />
+            <VideoMarks src={item.watermark || apiUrl("/catalog-media/watermark")} />
           </div>
         ) : (
           <img
