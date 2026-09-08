@@ -3,15 +3,19 @@ import { Request } from "express";
 import { Roles } from "../auth/roles.decorator";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { LayoutRules, normalizeLayoutRules } from "../domain/yard";
 import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
+import { ACQUISITION_REFS_KEY, DEFAULT_ACQUISITION_REFS, effectiveAcquisitionRefs, normalizeAcquisitionRefs } from "../domain/pricing";
+import { ACTIVE_MASTER } from "../domain/masters";
 
 export const CONFIG_SECTIONS = [
   { id: "catalog-copy", title: "Textos del catálogo", blurb: "Editor de la página pública: hero, pasos, pie y legales. Así lo ve el cliente." },
   { id: "watermark", title: "Marca de agua del catálogo", blurb: "Logo que se repite sobre las fotos públicas. Si no subes uno, se usa zg_marca.png." },
   { id: "visibility", title: "Visibilidad de precios", blurb: "Reglas jerárquicas global → tipo → fabricante → unidad." },
+  { id: "acquisition-refs", title: "Costos de referencia", blurb: "Base USD por tipo y condición para calcular la lista (neto + margen)." },
   { id: "freight", title: "Tarifario de fletes", blurb: "Zonas, terrenos, márgenes min/rec/premium, vehículos." },
   { id: "rentals", title: "Reglas de alquiler", blurb: "Depreciación, márgenes, descuento por plazo y riesgo A–D." },
   { id: "providers", title: "Proveedores", blurb: "Lectura; el alta vive en Personas." },
@@ -38,7 +42,7 @@ export class ConfigController {
     return {
       sections: CONFIG_SECTIONS.map((s) => ({
         ...s,
-        status: ["catalog-copy", "watermark", "yard-columns", "visibility", "commercial-services", "depot-services"].includes(s.id)
+        status: ["catalog-copy", "watermark", "yard-columns", "visibility", "acquisition-refs", "commercial-services", "depot-services"].includes(s.id)
           ? ("live" as const)
           : s.id === "freight"
             ? ("partial" as const)
@@ -123,6 +127,41 @@ export class ConfigController {
     ]);
     await this.audit.log({ user, action: "update", entity: "VisibilityRule", after: { count: rules.length }, ip: req.ip });
     return this.getVisibility();
+  }
+
+  @Get("acquisition-refs")
+  async getAcquisitionRefs() {
+    const [row, types, categories] = await Promise.all([
+      this.prisma.appSetting.findUnique({ where: { key: ACQUISITION_REFS_KEY } }),
+      this.prisma.containerType.findMany({ where: ACTIVE_MASTER, orderBy: { code: "asc" } }),
+      this.prisma.category.findMany({ where: ACTIVE_MASTER, orderBy: { code: "asc" } }),
+    ]);
+    const stored = normalizeAcquisitionRefs(row?.value);
+    return {
+      refs: effectiveAcquisitionRefs(stored),
+      stored: stored.length > 0,
+      types: types.map((t) => ({ code: t.code, label: t.label })),
+      categories: categories.map((c) => ({ code: c.code, label: c.label })),
+      defaults: DEFAULT_ACQUISITION_REFS,
+    };
+  }
+
+  @Put("acquisition-refs")
+  async putAcquisitionRefs(
+    @Body() body: { refs?: { type?: string; cat?: string | null; amount?: number }[] },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const refs = normalizeAcquisitionRefs(body.refs);
+    if (!refs.length) throw new BadRequestException("Indica al menos una referencia de costo por tipo.");
+    const value = refs as unknown as Prisma.InputJsonValue;
+    await this.prisma.appSetting.upsert({
+      where: { key: ACQUISITION_REFS_KEY },
+      update: { value },
+      create: { key: ACQUISITION_REFS_KEY, value },
+    });
+    await this.audit.log({ user, action: "update", entity: "AppSetting", entityId: ACQUISITION_REFS_KEY, after: { count: refs.length }, ip: req.ip });
+    return this.getAcquisitionRefs();
   }
 
   @Get("pricing")

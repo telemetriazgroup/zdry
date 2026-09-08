@@ -113,6 +113,9 @@ export default function QuotesHub() {
           <div className="panel">
             <h3>{q.number}{q.demo ? <span className="demo-chip">DEMO</span> : null}</h3>
             <p className="section-sub">{q.customer.companyName} · {STATUS_LABEL[q.dealStatus]} {q.holdPaused ? "· hold en pausa" : ""}</p>
+            {q.dispatchNotes ? (
+              <p className="ok-msg">Destino referencial del cliente: {q.dispatchNotes}. Confirma el flete al cotizar.</p>
+            ) : null}
             <ul>{q.lines.map((l) => (
               <li key={l.id}>{l.iso} lista {money(l.listPrice)} / piso {money(l.minPrice)} / neto {money(l.priceNet)}</li>
             ))}</ul>

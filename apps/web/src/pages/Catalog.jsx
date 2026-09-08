@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError, apiUrl, goAppRoot, goCatalogHome, publicUrl } from "../api.js";
 import { useAuth } from "../auth.jsx";
@@ -17,6 +17,30 @@ const CART_KEY = "zdry_cart";
 const money = (n) => (n == null ? null : "$" + Math.round(Number(n)).toLocaleString("en-US"));
 const GALLERY_MS = 3500;
 const LEAD_MS = 5000;
+const LIST_SPLASH_MSGS = [
+  "Bienvenido a ZDRY...",
+  "Consultando todos los Dry...",
+  "Éxitos con tu compra...",
+];
+
+function CatalogSplash({ mode }) {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    if (mode !== "list") return undefined;
+    const t = setInterval(() => setI((x) => (x + 1) % LIST_SPLASH_MSGS.length), 1000);
+    return () => clearInterval(t);
+  }, [mode]);
+  const text = mode === "detail" ? "Procesando detalles..." : LIST_SPLASH_MSGS[i];
+  return (
+    <div className="catalog-splash" role="status" aria-live="polite">
+      <div className="catalog-splash-inner">
+        <img className="catalog-splash-mark" src={publicUrl("/brand/z-transparent.webp")} alt="" />
+        <p>{text}</p>
+        <div className="catalog-splash-bar" aria-hidden="true"><i /></div>
+      </div>
+    </div>
+  );
+}
 
 function HeroLeadCarousel({ leads }) {
   const items = leads?.length ? leads : [" "];
@@ -116,9 +140,10 @@ export default function Catalog() {
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
-  const [zoneId, setZoneId] = useState("fz1");
-  const [freight, setFreight] = useState(null);
+  const [dispatchPlace, setDispatchPlace] = useState("");
   const [copy, setCopy] = useState(DEFAULT_CATALOG_COPY);
+  const [splash, setSplash] = useState(() => (routeIso ? "detail" : "list"));
+  const listSplashDone = useRef(false);
   const lb = useLightbox();
 
   const query = useMemo(() => {
@@ -129,8 +154,27 @@ export default function Catalog() {
   }, [filters, page]);
 
   const load = useCallback(() => {
-    api(`/catalog?${query}`).then(setData).catch((e) => setError(e.message));
-  }, [query]);
+    const showList = !routeIso && !listSplashDone.current;
+    const started = Date.now();
+    if (showList) setSplash("list");
+    api(`/catalog?${query}`)
+      .then((d) => {
+        setData(d);
+        if (!showList) return;
+        const wait = Math.max(0, 3000 - (Date.now() - started));
+        window.setTimeout(() => {
+          listSplashDone.current = true;
+          setSplash((cur) => (cur === "list" ? null : cur));
+        }, wait);
+      })
+      .catch((e) => {
+        setError(e.message);
+        if (showList) {
+          listSplashDone.current = true;
+          setSplash((cur) => (cur === "list" ? null : cur));
+        }
+      });
+  }, [query, routeIso]);
 
   useEffect(() => {
     api("/catalog/meta").then(setMeta).catch(() => {});
@@ -138,10 +182,10 @@ export default function Catalog() {
   }, []);
 
   useEffect(() => {
-    const lock = Boolean(pdp || quoteOpen);
+    const lock = Boolean(pdp || quoteOpen || splash);
     document.body.classList.toggle("modal-locked", lock);
     return () => document.body.classList.remove("modal-locked");
-  }, [pdp, quoteOpen]);
+  }, [pdp, quoteOpen, splash]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -150,18 +194,33 @@ export default function Catalog() {
   }, [cart]);
 
   useEffect(() => {
-    if (routeIso) {
-      api(`/catalog/${routeIso}`)
-        .then((u) => {
-          const slots = publishedSlots(u);
-          setPdp(u);
-          setThumb(slots[0] ?? (u.hasVideo ? "video" : 0));
-          setGalleryPaused(false);
-        })
-        .catch(() => setPdp(null));
-    } else {
+    if (!routeIso) {
       setPdp(null);
+      return undefined;
     }
+    setSplash("detail");
+    const started = Date.now();
+    let cancelled = false;
+    api(`/catalog/${routeIso}`)
+      .then((u) => {
+        if (cancelled) return;
+        const slots = publishedSlots(u);
+        setPdp(u);
+        setThumb(slots[0] ?? (u.hasVideo ? "video" : 0));
+        setGalleryPaused(false);
+      })
+      .catch(() => {
+        if (!cancelled) setPdp(null);
+      })
+      .finally(() => {
+        const wait = Math.max(0, 1000 - (Date.now() - started));
+        window.setTimeout(() => {
+          if (!cancelled) setSplash((cur) => (cur === "detail" ? null : cur));
+        }, wait);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [routeIso]);
 
   const pdpSlots = publishedSlots(pdp);
@@ -210,17 +269,6 @@ export default function Catalog() {
     setCart((c) => c.filter((x) => x !== iso));
   }
 
-  async function estimateFreight(isoType) {
-    if (!zoneId) return;
-    const types = isoType || (pdp ? pdp.type : "");
-    try {
-      const r = await api(`/catalog/freight?zoneId=${zoneId}&types=${encodeURIComponent(types)}`);
-      setFreight(r);
-    } catch {
-      setFreight(null);
-    }
-  }
-
   async function submitQuote(e) {
     e.preventDefault();
     setError("");
@@ -234,7 +282,7 @@ export default function Catalog() {
       return;
     }
     try {
-      const q = await api("/catalog/quotes", { method: "POST", body: { isos: cart, kind } });
+      const q = await api("/catalog/quotes", { method: "POST", body: { isos: cart, kind, dispatchPlace } });
       setCart([]);
       setQuoteOpen(false);
       nav("/mi-cuenta");
@@ -257,7 +305,7 @@ export default function Catalog() {
         phone: reg.phone,
         password: reg.password,
       });
-      const q = await api("/catalog/quotes", { method: "POST", body: { isos: cart, kind } });
+      const q = await api("/catalog/quotes", { method: "POST", body: { isos: cart, kind, dispatchPlace } });
       setCart([]);
       setQuoteOpen(false);
       nav("/mi-cuenta");
@@ -284,6 +332,7 @@ export default function Catalog() {
 
   return (
     <div className="site-page">
+      {splash ? <CatalogSplash mode={splash} /> : null}
       <header className="topbar">
         <div className="topbar-inner topbar-public">
           <Link to="/" className="brand"><img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" /></Link>
@@ -402,13 +451,13 @@ export default function Catalog() {
                 </div>
                 <div className="card-footer">
                   {u.showPrice ? (
-                    <div className="card-price">{money(u.gross)} <small>+ IGV incluido aprox. · neto {money(u.priceList)}</small></div>
+                    <div className="card-price">{money(u.gross)} <small>oferta · IGV incl. · neto {money(u.priceList)}</small></div>
                   ) : (
-                    <WhatsAppLink className="price-cta price-cta-wa" href={whatsappUrl(copy, unitWhatsAppMessage(copy, u))}>
+                    <WhatsAppLink className="price-cta price-cta-wa" href={whatsappUrl(copy, unitWhatsAppMessage(copy, u, dispatchPlace))}>
                       {copy.requestPrice}
                     </WhatsAppLink>
                   )}
-                  <WhatsAppLink className="link-btn" href={whatsappUrl(copy, unitWhatsAppMessage(copy, u))}>
+                  <WhatsAppLink className="link-btn" href={whatsappUrl(copy, unitWhatsAppMessage(copy, u, dispatchPlace))}>
                     {u.showPrice ? copy.requestQuote : copy.whatsappCta}
                   </WhatsAppLink>
                 </div>
@@ -515,27 +564,29 @@ export default function Catalog() {
                   {pdp.showPrice ? (
                     <>
                       <div className="amt">{money(pdp.gross)}</div>
-                      <div className="muted">IGV 18% {money(pdp.igv)} · neto {money(pdp.priceList)}</div>
+                      <div className="muted">Precio de oferta · IGV 18% {money(pdp.igv)} · neto {money(pdp.priceList)}</div>
                     </>
                   ) : (
-                    <div className="amt" style={{ fontSize: 20 }}>Solicitar precio</div>
+                    <>
+                      <div className="amt" style={{ fontSize: 20 }}>Solicitar precio</div>
+                      <div className="muted">El comercial confirma el precio al cotizar.</div>
+                    </>
                   )}
                 </div>
                 <div className="freight">
-                  <div className="muted">Estimado de flete (stub)</div>
-                  <div className="freight-row">
-                    <select value={zoneId} onChange={(e) => setZoneId(e.target.value)}>
-                      {(meta?.freightZones || []).map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
-                    </select>
-                    <button className="btn-ghost" type="button" onClick={() => estimateFreight(pdp.type)}>Calcular</button>
-                  </div>
-                  {freight ? <div className="freight-result show">≈ {money(freight.minSell)} · {freight.km} km · {freight.days} día(s)</div> : null}
+                  <label>Lugar de despacho</label>
+                  <input
+                    value={dispatchPlace}
+                    onChange={(e) => setDispatchPlace(e.target.value)}
+                    placeholder="Ej. Ate, Callao, Ica…"
+                    maxLength={200}
+                  />
                 </div>
                 <div className="pdp-cta-inline">
                   {pdp.reserved ? (
                     <button className="btn-primary" style={{ marginTop: 16, width: "100%" }} type="button" disabled>Reservado</button>
                   ) : (
-                    <WhatsAppLink href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp))}>
+                    <WhatsAppLink href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp, dispatchPlace))}>
                       {pdp.showPrice ? copy.requestQuote : copy.requestPrice}
                     </WhatsAppLink>
                   )}
@@ -544,7 +595,7 @@ export default function Catalog() {
             </div>
             {pdp.reserved ? null : (
               <div className="pdp-cta-bar">
-                <WhatsAppLink href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp))}>
+                <WhatsAppLink href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp, dispatchPlace))}>
                   {pdp.showPrice ? copy.requestQuote : copy.requestPrice}
                 </WhatsAppLink>
               </div>
@@ -561,7 +612,7 @@ export default function Catalog() {
               <button className="modal-close" type="button" onClick={() => setQuoteOpen(false)}>✕</button>
             </div>
             <div className="modal-body single">
-              <WhatsAppLink href={whatsappUrl(copy, cart.length ? cartWhatsAppMessage(copy, cart) : cartWhatsAppMessage(copy, []))}>
+              <WhatsAppLink href={whatsappUrl(copy, cart.length ? cartWhatsAppMessage(copy, cart, dispatchPlace) : cartWhatsAppMessage(copy, [], dispatchPlace))}>
                 {copy.whatsappCta} · {copy.requestQuote}
               </WhatsAppLink>
               {cart.length === 0 ? <p className="section-sub" style={{ marginTop: 12 }}>O arma una lista y te llevamos esas unidades al chat.</p> : (
@@ -576,6 +627,13 @@ export default function Catalog() {
                 Ver el stock es público. Para <b>solicitar, reservar, negociar o pagar</b> necesitas una cuenta con datos de tu empresa y una persona de contacto. Ahí verás las cuentas de ZDRY para transferir y adjuntar el voucher.
               </p>
               {error ? <div className="err">{error}</div> : null}
+              <label>Lugar de despacho (referencial)</label>
+              <input
+                value={dispatchPlace}
+                onChange={(e) => setDispatchPlace(e.target.value)}
+                placeholder="Ej. Ate, Callao, Ica…"
+                maxLength={200}
+              />
               <label>Tipo</label>
               <select value={kind} onChange={(e) => setKind(e.target.value)}>
                 <option value="venta">Venta</option>

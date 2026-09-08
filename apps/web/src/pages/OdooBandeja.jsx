@@ -17,6 +17,21 @@ function canPick(r) {
   return (r.status === "pending" || r.status === "qty_anomaly") && r.iso6346Ok;
 }
 
+function IconBtn({ title, onClick, disabled, danger, children }) {
+  return (
+    <button
+      type="button"
+      className={`icon-btn ${danger ? "danger" : ""}`}
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function OdooBandeja() {
   const { user } = useAuth();
   const canProbe = user?.role === "superadmin" || user?.role === "admin";
@@ -199,7 +214,6 @@ export default function OdooBandeja() {
               <th>Tara</th>
               <th>DUA</th>
               <th>Estado</th>
-              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -218,9 +232,42 @@ export default function OdooBandeja() {
                 </td>
                 <td><SyncIcon status={r.odooSyncStatus} compact /></td>
                 <td>
-                  <button type="button" className="odoo-open" onClick={() => setOpenId(r.id)}>
-                    <b className="card-iso">{r.isoNormalized || r.serialRaw}</b>
-                  </button>
+                  <div className="odoo-code-cell">
+                    <button type="button" className="odoo-open" onClick={() => setOpenId(r.id)}>
+                      <b className="card-iso">{r.isoNormalized || r.serialRaw}</b>
+                    </button>
+                    <span className="odoo-row-icons">
+                      <IconBtn title="Ver ficha" onClick={() => setOpenId(r.id)}>
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                          <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" />
+                          <circle cx="12" cy="12" r="3" />
+                        </svg>
+                      </IconBtn>
+                      {r.status === "pending" || r.status === "qty_anomaly" ? (
+                        <>
+                          <IconBtn
+                            title="Asimilar"
+                            disabled={!!busy}
+                            onClick={() => run("Asimilando", () => api("/odoo-import/assimilate", { method: "POST", body: { ids: [r.id] } }))}
+                          >
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                              <path d="M20 6 9 17l-5-5" />
+                            </svg>
+                          </IconBtn>
+                          <IconBtn
+                            title="Ignorar"
+                            danger
+                            disabled={!!busy}
+                            onClick={() => run("Ignorando", () => api(`/odoo-import/candidates/${r.id}/ignore`, { method: "POST" }))}
+                          >
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                              <path d="M18 6 6 18M6 6l12 12" />
+                            </svg>
+                          </IconBtn>
+                        </>
+                      ) : null}
+                    </span>
+                  </div>
                   {r.serialRaw && r.serialRaw.replace(/[\s-]/g, "").toUpperCase() !== r.isoNormalized ? (
                     <div className="muted">{r.serialRaw}</div>
                   ) : null}
@@ -238,29 +285,6 @@ export default function OdooBandeja() {
                 <td>{r.tareKg || "—"}</td>
                 <td>{r.dua || "—"}</td>
                 <td>{r.status === "assimilated" ? `En ZDRY · ${r.containerIso}` : r.status}</td>
-                <td>
-                  <button className="btn-ghost" type="button" onClick={() => setOpenId(r.id)}>Ver ficha</button>
-                  {r.status === "pending" || r.status === "qty_anomaly" ? (
-                    <>
-                      <button
-                        className="btn-ghost"
-                        type="button"
-                        disabled={!!busy}
-                        onClick={() => run("Asimilando", () => api("/odoo-import/assimilate", { method: "POST", body: { ids: [r.id] } }))}
-                      >
-                        Asimilar
-                      </button>
-                      <button
-                        className="btn-ghost"
-                        type="button"
-                        disabled={!!busy}
-                        onClick={() => run("Ignorando", () => api(`/odoo-import/candidates/${r.id}/ignore`, { method: "POST" }))}
-                      >
-                        Ignorar
-                      </button>
-                    </>
-                  ) : null}
-                </td>
               </tr>
             ))}
           </tbody>

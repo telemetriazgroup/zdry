@@ -28,11 +28,14 @@ import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { isOwnSaleStock } from "../domain/iso6346";
 import {
+  ACQUISITION_REFS_KEY,
   assertPriceFloor,
   computeListPrices,
   DEFAULT_PRICING_RULES,
   grossOf,
   igvOf,
+  normalizeAcquisitionRefs,
+  type AcquisitionRef,
   type PricingRule,
 } from "../domain/pricing";
 import {
@@ -41,6 +44,8 @@ import {
   FREE_MOVES,
   MOVEMENT_RATE,
   freightConsolidatedEstimate,
+  normalizeDispatchPlace,
+  referentialFreightSnapshot,
 } from "../domain/freight-stub";
 import { buildQuotePdf } from "../domain/quote-pdf";
 import { extForMime, sniffPurchaseDocMime } from "../domain/purchase-docs";
@@ -131,20 +136,27 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     return rows.map((r) => ({ id: r.id, scope: r.scope, target: r.target, show: r.show }));
   }
 
-  async ensureUnitPrices(iso: string, rules?: PricingRule[]) {
+  async loadAcquisitionRefs(): Promise<AcquisitionRef[]> {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: ACQUISITION_REFS_KEY } });
+    return normalizeAcquisitionRefs(row?.value);
+  }
+
+  async ensureUnitPrices(iso: string, rules?: PricingRule[], refs?: AcquisitionRef[]) {
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c) throw new NotFoundException("Unidad no encontrada.");
     if (c.priceList != null && c.priceMin != null) {
       return { priceList: n(c.priceList), priceMin: n(c.priceMin) };
     }
     const pricing = rules || (await this.loadPricing());
+    const acquisition = refs || (await this.loadAcquisitionRefs());
     const computed = computeListPrices(
       { iso: c.iso, type: c.type, cat: c.cat, manufacturer: c.manufacturer, fobCif: n(c.fobCif) },
       pricing,
+      acquisition,
     );
     await this.prisma.container.update({
       where: { iso },
-      data: { priceList: computed.priceList, priceMin: computed.priceMin },
+      data: { priceList: computed.priceList, priceMin: computed.priceMin, priceSource: c.priceSource || "rule" },
     });
     return { priceList: computed.priceList, priceMin: computed.priceMin };
   }
@@ -231,7 +243,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
           ? { year: "desc" }
           : { iso: "asc" };
 
-    const [total, rows, vis, pricing, types, cats] = await Promise.all([
+    const [total, rows, vis, pricing, types, cats, acquisition] = await Promise.all([
       this.prisma.container.count({ where }),
       this.prisma.container.findMany({
         where,
@@ -244,11 +256,12 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       this.loadPricing(),
       this.prisma.containerType.findMany(),
       this.prisma.category.findMany(),
+      this.loadAcquisitionRefs(),
     ]);
 
     const items = [];
     for (const c of rows) {
-      const prices = await this.ensureUnitPrices(c.iso, pricing);
+      const prices = await this.ensureUnitPrices(c.iso, pricing, acquisition);
       const showPrice = applyShowPrice(
         {
           iso: c.iso,
@@ -293,13 +306,14 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       include: { depot: true, photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { slot: true } } },
     });
     if (!c || !(await this.isCatalogVisible(iso))) throw new NotFoundException("Unidad no disponible en catálogo.");
-    const [vis, pricing, typeRow, catRow] = await Promise.all([
+    const [vis, pricing, typeRow, catRow, acquisition] = await Promise.all([
       this.loadVisibility(),
       this.loadPricing(),
       this.prisma.containerType.findUnique({ where: { code: c.type } }),
       this.prisma.category.findUnique({ where: { code: c.cat } }),
+      this.loadAcquisitionRefs(),
     ]);
-    const prices = await this.ensureUnitPrices(c.iso, pricing);
+    const prices = await this.ensureUnitPrices(c.iso, pricing, acquisition);
     const showPrice = applyShowPrice(
       {
         iso: c.iso,
@@ -517,6 +531,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       rucDni?: string;
       phone?: string;
       name?: string;
+      dispatchPlace?: string;
     },
     user: AuthUser | undefined,
     ip?: string,
@@ -526,7 +541,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     const kind = body.kind === "alquiler" ? "alquiler" : "venta";
     const customerId = await this.resolveCustomer(user, { customerId: body.customerId });
     const vendorId = await this.defaultVendorId();
-    const pricing = await this.loadPricing();
+    const [pricing, acquisition] = await Promise.all([this.loadPricing(), this.loadAcquisitionRefs()]);
 
     const lines = [];
     for (const iso of isos) {
@@ -537,7 +552,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       if (c.status !== "Disponible" && c.status !== "Reservado") {
         throw new ConflictException(`${iso} no está disponible.`);
       }
-      const prices = await this.ensureUnitPrices(iso, pricing);
+      const prices = await this.ensureUnitPrices(iso, pricing, acquisition);
       lines.push({
         iso,
         type: c.type,
@@ -550,6 +565,8 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
 
     const number = await this.nextQuoteNumber();
     const anyDemo = (await this.prisma.container.findMany({ where: { iso: { in: isos }, demo: true } })).length > 0;
+    const place = normalizeDispatchPlace(body.dispatchPlace);
+    const freightSnap = place ? referentialFreightSnapshot(place) : undefined;
     const quote = await this.prisma.quote.create({
       data: {
         number,
@@ -558,8 +575,17 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         customerId,
         vendorId,
         demo: anyDemo,
+        dispatchNotes: place || null,
+        freightSnapshot: freightSnap ? (freightSnap as object) : undefined,
         lines: { create: lines },
-        events: { create: { type: "creada", detail: `Solicitud ${kind} ${number}` } },
+        events: {
+          create: {
+            type: "creada",
+            detail: place
+              ? `Solicitud ${kind} ${number}. Destino referencial: ${place}.`
+              : `Solicitud ${kind} ${number}`,
+          },
+        },
       },
       include: QUOTE_INCLUDE,
     });

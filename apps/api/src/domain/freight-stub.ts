@@ -46,6 +46,20 @@ export function trucksNeededFor(units: { type: string }[]): number {
   return Math.ceil(count20 / 2) + countBig;
 }
 
+/** En esta fase el cliente escribe el destino; no es tarifa. */
+export function normalizeDispatchPlace(raw?: string | null): string {
+  return String(raw || "").replace(/\s+/g, " ").trim().slice(0, 200);
+}
+
+export function referentialFreightSnapshot(place: string) {
+  const clean = normalizeDispatchPlace(place);
+  return {
+    phase: "referential" as const,
+    place: clean,
+    note: "Referencia de destino para el comercial. No es un cálculo de flete.",
+  };
+}
+
 export function freightConsolidatedEstimate(units: { type: string }[], zoneId: string, vehicle = "cama_baja") {
   const zone = FREIGHT_ZONES.find((z) => z.id === zoneId);
   if (!zone || !units.length) return null;

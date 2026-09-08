@@ -105,22 +105,29 @@ export function whatsappUrl(copy, message) {
   return n ? `https://wa.me/${n}${q}` : `https://wa.me/${q}`;
 }
 
-export function unitWhatsAppMessage(copy, unit) {
+function withDispatchPlace(message, place) {
+  const dest = String(place || "").trim();
+  if (!dest) return message;
+  return `${message}\nLugar de despacho (referencia): ${dest}`;
+}
+
+export function unitWhatsAppMessage(copy, unit, place) {
   const price = unit?.showPrice && unit.gross != null
     ? `precio $${Math.round(Number(unit.gross)).toLocaleString("en-US")}`
     : "precio a consultar";
   const tpl = copy?.whatsappMessage || DEFAULT_CATALOG_COPY.whatsappMessage;
-  return tpl
+  const msg = tpl
     .replaceAll("{iso}", unit?.iso || "")
     .replaceAll("{type}", unit?.typeLabel || unit?.type || "")
     .replaceAll("{cat}", unit?.catLabel || "")
     .replaceAll("{price}", price);
+  return withDispatchPlace(msg, place);
 }
 
-export function cartWhatsAppMessage(copy, isos) {
+export function cartWhatsAppMessage(copy, isos, place) {
   const tpl = copy?.whatsappCartMessage || DEFAULT_CATALOG_COPY.whatsappCartMessage;
   const list = (isos || []).filter(Boolean).join(", ") || "unidades del catálogo";
-  return tpl.replaceAll("{isos}", list);
+  return withDispatchPlace(tpl.replaceAll("{isos}", list), place);
 }
 
 export function legalParagraphs(body) {

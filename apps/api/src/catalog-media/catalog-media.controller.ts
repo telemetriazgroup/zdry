@@ -83,6 +83,29 @@ export class CatalogMediaController {
     });
   }
 
+  @Get(":iso/price")
+  @Roles("admin", "gerente")
+  getPrice(@Param("iso") iso: string, @CurrentUser() user: AuthUser) {
+    return this.media.getOffer(iso, user);
+  }
+
+  @Patch(":iso/price")
+  @Roles("admin", "gerente")
+  setPrice(
+    @Param("iso") iso: string,
+    @Body()
+    body: {
+      priceNet?: number | string;
+      visibility?: string;
+      note?: string;
+      recompute?: boolean;
+    },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.media.setOffer(iso, body, user, req.ip);
+  }
+
   @Get(":iso")
   get(@Param("iso") iso: string) {
     return this.media.get(iso);

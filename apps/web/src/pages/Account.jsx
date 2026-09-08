@@ -237,6 +237,9 @@ export default function Account() {
             <div className="panel">
               <h3>{detail.number}</h3>
               <p className="section-sub">{STATUS_LABEL[detail.dealStatus]} · asesor {detail.vendor?.name}</p>
+              {detail.dispatchNotes ? (
+                <p className="section-sub">Destino referencial: {detail.dispatchNotes}. El flete lo confirma el comercial.</p>
+              ) : null}
               <ul>
                 {detail.lines.map((l) => <li key={l.id}>{l.iso} · neto {money(l.priceNet)} · IGV {money(l.priceNet * 0.18)}</li>)}
               </ul>

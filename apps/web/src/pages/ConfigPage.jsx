@@ -306,6 +306,8 @@ export default function ConfigPage() {
   const [rules, setRules] = useState(null);
   const [vis, setVis] = useState([]);
   const [pricing, setPricing] = useState([]);
+  const [refs, setRefs] = useState([]);
+  const [refMeta, setRefMeta] = useState({ types: [], categories: [] });
   const [services, setServices] = useState([]);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
@@ -315,6 +317,10 @@ export default function ConfigPage() {
     api("/config/yard-columns").then(setRules).catch(() => {});
     api("/config/visibility").then(setVis).catch(() => {});
     api("/config/pricing").then(setPricing).catch(() => {});
+    api("/config/acquisition-refs").then((d) => {
+      setRefs(d.refs || []);
+      setRefMeta({ types: d.types || [], categories: d.categories || [] });
+    }).catch(() => {});
     api("/config/commercial-services").then(setServices).catch(() => {});
   }, []);
 
@@ -351,6 +357,17 @@ export default function ConfigPage() {
     }
   }
 
+  async function saveRefs() {
+    setSaved("");
+    try {
+      const out = await api("/config/acquisition-refs", { method: "PUT", body: { refs } });
+      setRefs(out.refs || []);
+      setSaved("✓ Costos de referencia guardados. El cálculo de lista usa estos montos si la unidad no tiene FOB/CIF.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   return (
     <>
       <h2 className="section-title">Configuración</h2>
@@ -372,7 +389,7 @@ export default function ConfigPage() {
 
       <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Visibilidad de precios en catálogo</h3>
-        <p className="section-sub">Jerarquía global → tipo/categoría/depósito → fabricante → unidad. CIMC visible por defecto; el resto pide precio.</p>
+        <p className="section-sub">Jerarquía global → tipo/categoría/depósito → fabricante → unidad. CIMC visible por defecto; el resto pide precio. El neto, IGV e historial de una unidad se fijan en Ficha catálogo.</p>
         {vis.map((r, i) => (
           <div className="form-grid" key={r.id || i}>
             <div>
@@ -399,16 +416,80 @@ export default function ConfigPage() {
       </div>
 
       <div className="panel" style={{ marginBottom: 18 }}>
+        <h3>Costos de referencia (tipo / condición)</h3>
+        <p className="section-sub">
+          Base en USD cuando la unidad no tiene FOB/CIF. Una fila por tipo vale para todas las condiciones; si pones tipo + condición (ej. 20FR · 1TRIP), esa gana. El margen de abajo convierte esta base en neto de lista.
+        </p>
+        {refs.map((r, i) => (
+          <div className="form-grid" key={`${r.type}-${r.cat || "all"}-${i}`}>
+            <div>
+              <label>Tipo</label>
+              <select value={r.type} onChange={(e) => setRefs(refs.map((x, j) => j === i ? { ...x, type: e.target.value } : x))}>
+                {(refMeta.types.length ? refMeta.types : [{ code: r.type, label: r.type }]).map((t) => (
+                  <option key={t.code} value={t.code}>{t.code} · {t.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label>Condición (opcional)</label>
+              <select value={r.cat || ""} onChange={(e) => setRefs(refs.map((x, j) => j === i ? { ...x, cat: e.target.value || null } : x))}>
+                <option value="">Todas</option>
+                {refMeta.categories.map((c) => (
+                  <option key={c.code} value={c.code}>{c.code} · {c.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label>Costo referencia USD</label>
+              <input type="number" min="1" value={r.amount} onChange={(e) => setRefs(refs.map((x, j) => j === i ? { ...x, amount: Number(e.target.value) } : x))} />
+            </div>
+            <div style={{ display: "flex", alignItems: "end" }}>
+              <button className="btn-ghost" type="button" onClick={() => setRefs(refs.filter((_, j) => j !== i))}>Quitar</button>
+            </div>
+          </div>
+        ))}
+        <div className="action-row">
+          <button
+            className="btn-ghost"
+            type="button"
+            onClick={() => setRefs([...refs, { type: refMeta.types[0]?.code || "20GP", cat: null, amount: 2800 }])}
+          >
+            Añadir referencia
+          </button>
+          <button className="btn-primary" type="button" onClick={saveRefs}>Guardar referencias</button>
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Reglas de precio (margen / descuento máximo)</h3>
+        <p className="section-sub">Se aplica sobre el costo de referencia o el FOB/CIF. Ámbito más específico gana (unidad → fabricante → tipo/condición → global).</p>
         {pricing.map((r, i) => (
           <div className="form-grid" key={r.id || i}>
             <div>
               <label>Ámbito</label>
-              <input value={r.scope} onChange={(e) => setPricing(pricing.map((x, j) => j === i ? { ...x, scope: e.target.value } : x))} />
+              <select value={r.scope} onChange={(e) => setPricing(pricing.map((x, j) => j === i ? { ...x, scope: e.target.value } : x))}>
+                <option value="global">global</option>
+                <option value="type">tipo</option>
+                <option value="category">condición</option>
+                <option value="manufacturer">fabricante</option>
+                <option value="container">unidad</option>
+              </select>
             </div>
             <div>
               <label>Target</label>
-              <input value={r.target || ""} onChange={(e) => setPricing(pricing.map((x, j) => j === i ? { ...x, target: e.target.value || null } : x))} />
+              {r.scope === "type" ? (
+                <select value={r.target || ""} onChange={(e) => setPricing(pricing.map((x, j) => j === i ? { ...x, target: e.target.value || null } : x))}>
+                  <option value="">—</option>
+                  {refMeta.types.map((t) => <option key={t.code} value={t.code}>{t.code}</option>)}
+                </select>
+              ) : r.scope === "category" ? (
+                <select value={r.target || ""} onChange={(e) => setPricing(pricing.map((x, j) => j === i ? { ...x, target: e.target.value || null } : x))}>
+                  <option value="">—</option>
+                  {refMeta.categories.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
+                </select>
+              ) : (
+                <input value={r.target || ""} onChange={(e) => setPricing(pricing.map((x, j) => j === i ? { ...x, target: e.target.value || null } : x))} placeholder={r.scope === "global" ? "—" : "CIMC / ISO"} />
+              )}
             </div>
             <div>
               <label>Margen %</label>
@@ -420,7 +501,10 @@ export default function ConfigPage() {
             </div>
           </div>
         ))}
-        <button className="btn-primary" type="button" onClick={savePricing}>Guardar precios</button>
+        <div className="action-row">
+          <button className="btn-ghost" type="button" onClick={() => setPricing([...pricing, { scope: "category", target: "1TRIP", marginPct: 14, maxDiscountPct: 5 }])}>Añadir regla</button>
+          <button className="btn-primary" type="button" onClick={savePricing}>Guardar precios</button>
+        </div>
       </div>
 
       {services.length ? (

@@ -1,7 +1,7 @@
 import { completeIso } from "./iso6346";
 import { assertPriceFloor, computeListPrices, DEFAULT_PRICING_RULES } from "./pricing";
 import { applyShowPrice, DEFAULT_VISIBILITY_RULES } from "./visibility";
-import { freightConsolidatedEstimate, trucksNeededFor } from "./freight-stub";
+import { freightConsolidatedEstimate, normalizeDispatchPlace, trucksNeededFor } from "./freight-stub";
 import { canAssignProduct, canTransition, holdClockPaused } from "../deal-close/deal-close.types";
 
 describe("pricing jerárquico y piso de lista", () => {
@@ -25,6 +25,13 @@ describe("visibilidad de catálogo", () => {
     const other = applyShowPrice({ iso: "B", type: "40HC", cat: "CW", manufacturer: "Singamas" }, DEFAULT_VISIBILITY_RULES);
     expect(cimc).toBe(true);
     expect(other).toBe(false);
+  });
+});
+
+describe("destino referencial", () => {
+  it("limpia y recorta el lugar escrito a mano", () => {
+    expect(normalizeDispatchPlace("  Ate, Lima  ")).toBe("Ate, Lima");
+    expect(normalizeDispatchPlace("x".repeat(250)).length).toBe(200);
   });
 });
 

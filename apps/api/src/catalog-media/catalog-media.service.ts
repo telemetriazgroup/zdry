@@ -20,6 +20,19 @@ import {
   PHOTO_STATUS_REJECTED,
   isMediaApproved,
 } from "../domain/catalog-media";
+import {
+  ACQUISITION_REFS_KEY,
+  DEFAULT_PRICING_RULES,
+  computeListPrices,
+  describeOffer,
+  normalizeAcquisitionRefs,
+  overrideFromVisibilityMode,
+  parseMoneyAmount,
+  type AcquisitionRef,
+  type OfferVisibilityMode,
+  type PricingRule,
+} from "../domain/pricing";
+import { DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
 
 const ACTIVE_PHOTOS = { where: { status: PHOTO_STATUS_ACTIVE } };
 export const WATERMARK_KEY = "catalog_watermark";
@@ -420,9 +433,173 @@ export class CatalogMediaService {
     }
   }
 
+  async getOffer(iso: string, user: AuthUser) {
+    this.assertApprover(user);
+    const c = await this.prisma.container.findUnique({ where: { iso } });
+    if (!c || c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
+    const [pricing, vis, refs] = await Promise.all([this.loadPricing(), this.loadVisibility(), this.loadAcquisitionRefs()]);
+    let priceList = c.priceList != null ? Number(c.priceList) : null;
+    let priceMin = c.priceMin != null ? Number(c.priceMin) : null;
+    if (priceList == null || priceMin == null) {
+      const computed = computeListPrices(
+        { iso: c.iso, type: c.type, cat: c.cat, manufacturer: c.manufacturer, fobCif: Number(c.fobCif) },
+        pricing,
+        refs,
+      );
+      priceList = computed.priceList;
+      priceMin = computed.priceMin;
+      await this.prisma.container.update({
+        where: { iso },
+        data: { priceList, priceMin, priceSource: c.priceSource || "rule" },
+      });
+    }
+    const offer = describeOffer(
+      { iso: c.iso, type: c.type, cat: c.cat, manufacturer: c.manufacturer, fobCif: Number(c.fobCif), depotId: c.depotId, status: c.status },
+      pricing,
+      vis,
+      {
+        priceList,
+        priceMin,
+        priceSource: c.priceSource,
+        showPriceOverride: c.showPriceOverride,
+        adjustedByName: c.priceAdjustedByName,
+        adjustedAt: c.priceAdjustedAt,
+      },
+      refs,
+    );
+    const history = await this.prisma.containerPriceChange.findMany({
+      where: { iso },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    });
+    return {
+      ...offer,
+      fobCif: Number(c.fobCif) || 0,
+      history: history.map((h) => ({
+        id: h.id,
+        priceList: Number(h.priceList),
+        priceMin: Number(h.priceMin),
+        showPrice: h.showPrice,
+        source: h.source,
+        note: h.note,
+        changedByName: h.changedByName,
+        createdAt: h.createdAt,
+      })),
+    };
+  }
+
+  async setOffer(
+    iso: string,
+    body: {
+      priceNet?: number | string;
+      priceGross?: number | string;
+      visibility?: OfferVisibilityMode | string;
+      note?: string;
+      recompute?: boolean;
+    },
+    user: AuthUser,
+    ip?: string,
+  ) {
+    this.assertApprover(user);
+    const c = await this.prisma.container.findUnique({ where: { iso } });
+    if (!c || c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
+    const [pricing, vis, refs] = await Promise.all([this.loadPricing(), this.loadVisibility(), this.loadAcquisitionRefs()]);
+    const unit = { iso: c.iso, type: c.type, cat: c.cat, manufacturer: c.manufacturer, fobCif: Number(c.fobCif) };
+    const computed = computeListPrices(unit, pricing, refs);
+    let priceList = computed.priceList;
+    let priceMin = computed.priceMin;
+    let source = "rule";
+    if (!body.recompute) {
+      const net = parseMoneyAmount(body.priceNet);
+      if (net == null) throw new BadRequestException("Indica el precio neto de oferta (USD).");
+      priceList = net;
+      priceMin = Math.round(net * (1 - (computed.maxDiscountPct || 10) / 100));
+      source = "manual";
+    }
+    const showPriceOverride = overrideFromVisibilityMode(body.visibility);
+    const now = new Date();
+    await this.prisma.container.update({
+      where: { iso },
+      data: {
+        priceList,
+        priceMin,
+        priceSource: source,
+        showPriceOverride,
+        priceAdjustedAt: now,
+        priceAdjustedByName: user.name,
+      },
+    });
+    const described = describeOffer(
+      { ...unit, depotId: c.depotId, status: c.status },
+      pricing,
+      vis,
+      {
+        priceList,
+        priceMin,
+        priceSource: source,
+        showPriceOverride,
+        adjustedByName: user.name,
+        adjustedAt: now,
+      },
+      refs,
+    );
+    const note = (body.note || "").trim().slice(0, 240);
+    await this.prisma.containerPriceChange.create({
+      data: {
+        iso,
+        priceList,
+        priceMin,
+        showPrice: described.showPrice,
+        source,
+        note,
+        changedById: user.id,
+        changedByName: user.name,
+      },
+    });
+    await this.prisma.containerHistory.create({
+      data: {
+        iso,
+        type: "Precio",
+        detail: `${described.title}: neto $${priceList} / con IGV $${described.gross}. ${described.visibilityLabel}${note ? ` ${note}` : ""}`,
+      },
+    });
+    await this.audit.log({
+      user,
+      action: "update",
+      entity: "ContainerPrice",
+      entityId: iso,
+      after: { priceList, showPriceOverride, source, note },
+      ip,
+    });
+    return this.getOffer(iso, user);
+  }
+
+  private async loadPricing(): Promise<PricingRule[]> {
+    const rows = await this.prisma.pricingRule.findMany();
+    if (!rows.length) return DEFAULT_PRICING_RULES;
+    return rows.map((r) => ({
+      id: r.id,
+      scope: r.scope,
+      target: r.target,
+      marginPct: Number(r.marginPct),
+      maxDiscountPct: Number(r.maxDiscountPct),
+    }));
+  }
+
+  private async loadVisibility(): Promise<VisibilityRule[]> {
+    const rows = await this.prisma.visibilityRule.findMany();
+    if (!rows.length) return DEFAULT_VISIBILITY_RULES;
+    return rows.map((r) => ({ id: r.id, scope: r.scope, target: r.target, show: r.show }));
+  }
+
+  private async loadAcquisitionRefs(): Promise<AcquisitionRef[]> {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: ACQUISITION_REFS_KEY } });
+    return normalizeAcquisitionRefs(row?.value);
+  }
+
   private assertApprover(user: AuthUser) {
     if (!MEDIA_APPROVER_ROLES.includes(user.role as (typeof MEDIA_APPROVER_ROLES)[number])) {
-      throw new ForbiddenException("Solo Administrador o Gerencia pueden publicar, ocultar o rechazar fotos.");
+      throw new ForbiddenException("Solo Administrador o Gerencia pueden publicar, ocultar, rechazar fotos o fijar el precio de oferta.");
     }
   }
 }

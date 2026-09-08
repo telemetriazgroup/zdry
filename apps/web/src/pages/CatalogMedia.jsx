@@ -28,6 +28,7 @@ function firstPreview(unit) {
 export default function CatalogMedia() {
   const { user } = useAuth();
   const canApprove = user.role === "admin" || user.role === "gerente";
+  const canPrice = canApprove;
   const lb = useLightbox();
   const [meta, setMeta] = useState({ photoLabels: [] });
   const [rows, setRows] = useState([]);
@@ -43,6 +44,26 @@ export default function CatalogMedia() {
   const [preview, setPreview] = useState(null);
   const [histPreview, setHistPreview] = useState(null);
   const [portrait, setPortrait] = useState({});
+  const [offer, setOffer] = useState(null);
+  const [priceNet, setPriceNet] = useState("");
+  const [showMode, setShowMode] = useState("inherit");
+  const [priceNote, setPriceNote] = useState("");
+  const [priceBusy, setPriceBusy] = useState(false);
+
+  async function loadOffer(nextIso) {
+    if (!canPrice || !nextIso) {
+      setOffer(null);
+      return;
+    }
+    try {
+      const o = await api(`/catalog-media/${nextIso}/price`);
+      setOffer(o);
+      setPriceNet(String(o.priceList ?? ""));
+      setShowMode(o.visibility || "inherit");
+    } catch {
+      setOffer(null);
+    }
+  }
 
   const loadList = useCallback(() => {
     api("/catalog-media").then(setRows).catch((e) => setError(e.message));
@@ -71,6 +92,7 @@ export default function CatalogMedia() {
     setPreview(firstPreview(u));
     setHistPreview(null);
     setRejectingSlot(null);
+    await loadOffer(nextIso);
   }
 
   async function applyUnit(u, text) {
@@ -80,6 +102,29 @@ export default function CatalogMedia() {
     setRejectingSlot(null);
     setRejectNote("");
     loadList();
+  }
+
+  async function saveOffer(recompute = false) {
+    if (!iso || !canPrice) return;
+    setError("");
+    setPriceBusy(true);
+    try {
+      const o = await api(`/catalog-media/${iso}/price`, {
+        method: "PATCH",
+        body: recompute
+          ? { recompute: true, visibility: showMode, note: priceNote }
+          : { priceNet: Number(priceNet), visibility: showMode, note: priceNote },
+      });
+      setOffer(o);
+      setPriceNet(String(o.priceList ?? ""));
+      setShowMode(o.visibility || "inherit");
+      setPriceNote("");
+      setMsg(recompute ? "Precio recalculado según reglas." : "Precio de oferta guardado. Queda en el historial.");
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    } finally {
+      setPriceBusy(false);
+    }
   }
 
   async function saveNotes() {
@@ -448,6 +493,60 @@ export default function CatalogMedia() {
               placeholder="Estado de la unidad, particularidades, qué ve el cliente en la ficha…"
             />
             <button className="btn-ghost" type="button" style={{ marginTop: 8 }} onClick={saveNotes}>Guardar evaluación y descripción</button>
+
+            {canPrice && offer ? (
+              <div className="offer-box">
+                <h4>Precio de oferta</h4>
+                <p className="section-sub"><b>{offer.title}</b></p>
+                <p className="section-sub">{offer.detail}</p>
+                <p className="section-sub">{offer.visibilityLabel}</p>
+                <div className="form-grid">
+                  <div>
+                    <label>Neto USD (sin IGV)</label>
+                    <input type="number" min="1" step="1" value={priceNet} onChange={(e) => setPriceNet(e.target.value)} />
+                  </div>
+                  <div>
+                    <label>IGV 18%</label>
+                    <input readOnly value={priceNet ? Math.round(Number(priceNet) * 0.18) : ""} />
+                  </div>
+                  <div>
+                    <label>Con IGV</label>
+                    <input readOnly value={priceNet ? Math.round(Number(priceNet) * 1.18) : ""} />
+                  </div>
+                  <div>
+                    <label>Qué ve el cliente</label>
+                    <select value={showMode} onChange={(e) => setShowMode(e.target.value)}>
+                      <option value="show">Mostrar este precio</option>
+                      <option value="request">No mostrar — solicitar precio</option>
+                      <option value="inherit">Según reglas (CIMC visible, resto consulta)</option>
+                    </select>
+                  </div>
+                </div>
+                <label>Nota del cambio (opcional)</label>
+                <input value={priceNote} onChange={(e) => setPriceNote(e.target.value)} placeholder="Ej. ajuste por 1-trip 2025" maxLength={240} />
+                <div className="action-row" style={{ marginTop: 8 }}>
+                  <button className="btn-primary" type="button" disabled={priceBusy} onClick={() => saveOffer(false)}>Guardar precio</button>
+                  <button className="btn-ghost" type="button" disabled={priceBusy} onClick={() => saveOffer(true)}>Recalcular por reglas</button>
+                </div>
+                {(offer.history || []).length ? (
+                  <div className="offer-hist">
+                    <b>Historial de precio</b>
+                    <ul>
+                      {offer.history.map((h) => (
+                        <li key={h.id}>
+                          {formatWhen(h.createdAt)} · {h.changedByName} · neto ${Math.round(Number(h.priceList))}
+                          {h.source === "manual" ? " (oferta)" : " (regla)"}
+                          {h.showPrice ? " · visible" : " · solicitar precio"}
+                          {h.note ? ` — ${h.note}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="section-sub" style={{ marginTop: 8 }}>Aún no hay cambios guardados. El primer ajuste queda aquí.</p>
+                )}
+              </div>
+            ) : null}
 
             {Object.values(portrait).some(Boolean) ? (
               <div className="warn-inline" style={{ marginTop: 14 }}>

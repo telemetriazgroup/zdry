@@ -97,6 +97,9 @@ model Container {
   reservationExpiry  DateTime?
   reservedQuoteId    String?
   showPriceOverride  Boolean?
+  priceSource        String?
+  priceAdjustedAt    DateTime?
+  priceAdjustedByName String?
   intakeType         String              @default("compra")
   invoicePending     Boolean             @default(false)
   physicallyReceived Boolean             @default(false)
@@ -149,6 +152,7 @@ model Container {
   depotCosts              DepotCostEntry[]
   documents               ContainerDocument[]
   gateVisits              GateVisit[]
+  priceChanges            ContainerPriceChange[]
 
   @@index([depotId])
   @@index([odooLotId])
@@ -163,6 +167,22 @@ model Container {
   @@index([fieldRegularizedAt])
   @@index([mediaApprovedAt])
   @@index([campoEnabledAt])
+}
+
+model ContainerPriceChange {
+  id             String    @id @default(uuid())
+  iso            String
+  container      Container @relation(fields: [iso], references: [iso], onDelete: Cascade)
+  priceList      Decimal   @db.Decimal(12, 2)
+  priceMin       Decimal   @db.Decimal(12, 2)
+  showPrice      Boolean
+  source         String
+  note           String    @default("")
+  changedById    String?
+  changedByName  String
+  createdAt      DateTime  @default(now())
+
+  @@index([iso, createdAt])
 }
 
 model ContainerHistory {

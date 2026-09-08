@@ -68,6 +68,7 @@ export class CatalogController {
       rucDni?: string;
       phone?: string;
       name?: string;
+      dispatchPlace?: string;
     },
     @CurrentUser() user: AuthUser | undefined,
     @Req() req: Request,
