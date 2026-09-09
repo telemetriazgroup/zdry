@@ -9,6 +9,7 @@ import { AuditService } from "../audit/audit.service";
 import { LayoutRules, normalizeLayoutRules } from "../domain/yard";
 import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
 import { ACQUISITION_REFS_KEY, DEFAULT_ACQUISITION_REFS, effectiveAcquisitionRefs, normalizeAcquisitionRefs } from "../domain/pricing";
+import { EvaluationService } from "../evaluation/evaluation.service";
 import { ACTIVE_MASTER } from "../domain/masters";
 
 export const CONFIG_SECTIONS = [
@@ -19,7 +20,7 @@ export const CONFIG_SECTIONS = [
   { id: "freight", title: "Tarifario de fletes", blurb: "Zonas, terrenos, márgenes min/rec/premium, vehículos." },
   { id: "rentals", title: "Reglas de alquiler", blurb: "Depreciación, márgenes, descuento por plazo y riesgo A–D." },
   { id: "providers", title: "Proveedores", blurb: "Lectura; el alta vive en Personas." },
-  { id: "depot-services", title: "Servicios propios del depósito", blurb: "Gate in/out, reparación, lavado, movimiento interno." },
+  { id: "evaluation", title: "Evaluación de unidades", blurb: "Conceptos (piso, techo, y los que agregues) y niveles (excelente, bueno, pésimo…) que usa patio y recepción." },
   { id: "commercial-services", title: "Servicios comerciales", blurb: "Precio fijo para cotización; nunca texto libre." },
   { id: "extra-concepts", title: "Conceptos de costos adicionales", blurb: "Catálogo que usa Compras." },
   { id: "yard-columns", title: "Reglas de columna de patio", blurb: "Min/max nivel, agrupar por condición o fabricante." },
@@ -35,6 +36,7 @@ export class ConfigController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly evaluation: EvaluationService,
   ) {}
 
   @Get("sections")
@@ -42,7 +44,7 @@ export class ConfigController {
     return {
       sections: CONFIG_SECTIONS.map((s) => ({
         ...s,
-        status: ["catalog-copy", "watermark", "yard-columns", "visibility", "acquisition-refs", "commercial-services", "depot-services"].includes(s.id)
+        status: ["catalog-copy", "watermark", "yard-columns", "visibility", "acquisition-refs", "commercial-services", "depot-services", "evaluation"].includes(s.id)
           ? ("live" as const)
           : s.id === "freight"
             ? ("partial" as const)
@@ -245,5 +247,42 @@ export class ConfigController {
     const row = await this.prisma.depotCostConcept.update({ where: { id }, data });
     await this.audit.log({ user, action: "update", entity: "DepotCostConcept", entityId: id, after: data, ip: req.ip });
     return { ...row, amount: Number(row.amount) };
+  }
+
+  @Get("evaluation")
+  async evaluationCatalog() {
+    await this.evaluation.ensureDefaults();
+    const [concepts, levels] = await Promise.all([this.evaluation.adminConcepts(), this.evaluation.adminLevels()]);
+    return { concepts, levels };
+  }
+
+  @Post("evaluation/concepts")
+  createEvalConcept(@Body() body: { label?: string }, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.evaluation.createConcept(body.label || "", user, req.ip);
+  }
+
+  @Put("evaluation/concepts/:id")
+  updateEvalConcept(
+    @Param("id") id: string,
+    @Body() body: { label?: string; sortOrder?: number; active?: boolean; archived?: boolean },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.evaluation.updateConcept(id, body, user, req.ip);
+  }
+
+  @Post("evaluation/levels")
+  createEvalLevel(@Body() body: { label?: string; color?: string }, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.evaluation.createLevel(body, user, req.ip);
+  }
+
+  @Put("evaluation/levels/:id")
+  updateEvalLevel(
+    @Param("id") id: string,
+    @Body() body: { label?: string; color?: string; sortOrder?: number; active?: boolean; archived?: boolean },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.evaluation.updateLevel(id, body, user, req.ip);
   }
 }

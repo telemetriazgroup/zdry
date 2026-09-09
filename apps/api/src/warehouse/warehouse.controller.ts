@@ -128,6 +128,16 @@ export class WarehouseController {
     return this.warehouse.patchUnit(iso, body, user, req.ip);
   }
 
+  @Post("units/:iso/ratings")
+  setRating(
+    @Param("iso") iso: string,
+    @Body() body: { conceptId?: string; levelId?: string; reason?: string; note?: string; source?: "patio" | "recepcion" | "catalogo" },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.setUnitRating(iso, body, user, req.ip);
+  }
+
   @Post("units/:iso/enable-campo")
   @Roles("admin", "coordinador")
   enableCampo(@Param("iso") iso: string, @CurrentUser() user: AuthUser, @Req() req: Request) {

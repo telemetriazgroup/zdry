@@ -3,12 +3,24 @@ import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 
-export function stripAudioCopyArgs(input: string, output: string) {
-  return ["-y", "-i", input, "-c:v", "copy", "-an", "-movflags", "+faststart", output];
-}
-
 export function stripAudioEncodeArgs(input: string, output: string) {
-  return ["-y", "-i", input, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-an", "-movflags", "+faststart", output];
+  return [
+    "-y",
+    "-i",
+    input,
+    "-map",
+    "0:v:0",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-crf",
+    "23",
+    "-an",
+    "-movflags",
+    "+faststart",
+    output,
+  ];
 }
 
 function runFfmpeg(args: string[]) {
@@ -26,7 +38,7 @@ function runFfmpeg(args: string[]) {
   });
 }
 
-/** Quita el audio. Si ffmpeg no está o falla, devuelve el original. */
+/** Recodifica el video sin pista de audio. Si ffmpeg falla, no se guarda el original. */
 export async function stripVideoAudio(input: Buffer, ext = "mp4"): Promise<{ buffer: Buffer; mime: string; stripped: boolean }> {
   const safeExt = ["mp4", "webm", "mov"].includes(String(ext || "").toLowerCase()) ? String(ext).toLowerCase() : "mp4";
   const dir = await mkdtemp(join(tmpdir(), "zdry-vid-"));
@@ -34,11 +46,7 @@ export async function stripVideoAudio(input: Buffer, ext = "mp4"): Promise<{ buf
   const outPath = join(dir, "out.mp4");
   await writeFile(inPath, input);
   try {
-    try {
-      await runFfmpeg(stripAudioCopyArgs(inPath, outPath));
-    } catch {
-      await runFfmpeg(stripAudioEncodeArgs(inPath, outPath));
-    }
+    await runFfmpeg(stripAudioEncodeArgs(inPath, outPath));
     const buffer = await readFile(outPath);
     if (!buffer.length) return { buffer: input, mime: "video/mp4", stripped: false };
     return { buffer, mime: "video/mp4", stripped: true };

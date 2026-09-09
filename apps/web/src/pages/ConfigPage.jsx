@@ -300,6 +300,173 @@ function DepotConceptsPanel({ onSaved, onError }) {
   );
 }
 
+function EvaluationPanel({ onSaved, onError }) {
+  const [concepts, setConcepts] = useState([]);
+  const [levels, setLevels] = useState([]);
+  const [conceptLabel, setConceptLabel] = useState("");
+  const [levelLabel, setLevelLabel] = useState("");
+  const [levelColor, setLevelColor] = useState("#5c6370");
+
+  async function load() {
+    const d = await api("/config/evaluation");
+    setConcepts(d.concepts || []);
+    setLevels(d.levels || []);
+  }
+
+  useEffect(() => {
+    load().catch((e) => onError(e.message));
+  }, []);
+
+  async function saveConcept(row, patch) {
+    onError("");
+    try {
+      await api(`/config/evaluation/concepts/${row.id}`, { method: "PUT", body: patch });
+      await load();
+      onSaved("Concepto de evaluación actualizado.");
+    } catch (e) {
+      onError(e.message);
+    }
+  }
+
+  async function saveLevel(row, patch) {
+    onError("");
+    try {
+      await api(`/config/evaluation/levels/${row.id}`, { method: "PUT", body: patch });
+      await load();
+      onSaved("Nivel de evaluación actualizado.");
+    } catch (e) {
+      onError(e.message);
+    }
+  }
+
+  return (
+    <div className="panel" style={{ marginBottom: 18 }}>
+      <h3>Evaluación de unidades</h3>
+      <p className="section-sub">Conceptos (piso, techo, y los que agregues) y niveles (excelente, bueno, pésimo…). Patio y recepción usan este catálogo.</p>
+      <div className="tablewrap">
+        <table className="data">
+          <thead><tr><th>Concepto</th><th>Orden</th><th></th></tr></thead>
+          <tbody>
+            {concepts.filter((c) => !c.archivedAt).map((c) => (
+              <tr key={c.id}>
+                <td>
+                  <input
+                    defaultValue={c.label}
+                    onBlur={(e) => { if (e.target.value.trim() && e.target.value.trim() !== c.label) saveConcept(c, { label: e.target.value }); }}
+                  />
+                  {c.system ? <span className="recv-who">sistema</span> : null}
+                </td>
+                <td>
+                  <input
+                    type="number"
+                    defaultValue={c.sortOrder}
+                    style={{ width: 70 }}
+                    onBlur={(e) => saveConcept(c, { sortOrder: Number(e.target.value) })}
+                  />
+                </td>
+                <td>
+                  <button className="btn-ghost" type="button" onClick={() => saveConcept(c, { active: !c.active })}>
+                    {c.active ? "Ocultar" : "Mostrar"}
+                  </button>
+                  {!c.system ? (
+                    <button className="btn-ghost" type="button" onClick={() => saveConcept(c, { archived: true })}>Archivar</button>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="form-grid" style={{ marginTop: 10 }}>
+        <div><label>Nuevo concepto</label><input value={conceptLabel} onChange={(e) => setConceptLabel(e.target.value)} placeholder="Ej. Sellos" /></div>
+      </div>
+      <button
+        className="btn-primary"
+        type="button"
+        style={{ marginTop: 8 }}
+        onClick={async () => {
+          onError("");
+          try {
+            await api("/config/evaluation/concepts", { method: "POST", body: { label: conceptLabel } });
+            setConceptLabel("");
+            await load();
+            onSaved("Concepto agregado.");
+          } catch (e) {
+            onError(e.message);
+          }
+        }}
+      >
+        Agregar concepto
+      </button>
+
+      <h4 style={{ marginTop: 22 }}>Niveles</h4>
+      <div className="tablewrap">
+        <table className="data">
+          <thead><tr><th>Nivel</th><th>Color</th><th>Orden</th><th></th></tr></thead>
+          <tbody>
+            {levels.filter((l) => !l.archivedAt).map((l) => (
+              <tr key={l.id}>
+                <td>
+                  <input
+                    defaultValue={l.label}
+                    onBlur={(e) => { if (e.target.value.trim() && e.target.value.trim() !== l.label) saveLevel(l, { label: e.target.value }); }}
+                  />
+                  {l.system ? <span className="recv-who">sistema</span> : null}
+                </td>
+                <td>
+                  <input
+                    type="color"
+                    defaultValue={l.color || "#5c6370"}
+                    onBlur={(e) => saveLevel(l, { color: e.target.value })}
+                  />
+                </td>
+                <td>
+                  <input
+                    type="number"
+                    defaultValue={l.sortOrder}
+                    style={{ width: 70 }}
+                    onBlur={(e) => saveLevel(l, { sortOrder: Number(e.target.value) })}
+                  />
+                </td>
+                <td>
+                  <button className="btn-ghost" type="button" onClick={() => saveLevel(l, { active: !l.active })}>
+                    {l.active ? "Ocultar" : "Mostrar"}
+                  </button>
+                  {!l.system ? (
+                    <button className="btn-ghost" type="button" onClick={() => saveLevel(l, { archived: true })}>Archivar</button>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="form-grid" style={{ marginTop: 10 }}>
+        <div><label>Nuevo nivel</label><input value={levelLabel} onChange={(e) => setLevelLabel(e.target.value)} placeholder="Ej. Péssimo" /></div>
+        <div><label>Color</label><input type="color" value={levelColor} onChange={(e) => setLevelColor(e.target.value)} /></div>
+      </div>
+      <button
+        className="btn-primary"
+        type="button"
+        style={{ marginTop: 8 }}
+        onClick={async () => {
+          onError("");
+          try {
+            await api("/config/evaluation/levels", { method: "POST", body: { label: levelLabel, color: levelColor } });
+            setLevelLabel("");
+            await load();
+            onSaved("Nivel agregado.");
+          } catch (e) {
+            onError(e.message);
+          }
+        }}
+      >
+        Agregar nivel
+      </button>
+    </div>
+  );
+}
+
 export default function ConfigPage() {
   const { user } = useAuth();
   const [data, setData] = useState(null);
@@ -386,6 +553,7 @@ export default function ConfigPage() {
       {user?.role === "admin" ? <DemoPanel /> : null}
 
       {user?.role === "admin" ? <DepotConceptsPanel onSaved={setSaved} onError={setError} /> : null}
+      {(user?.role === "admin" || user?.role === "gerente") ? <EvaluationPanel onSaved={setSaved} onError={setError} /> : null}
 
       <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Visibilidad de precios en catálogo</h3>

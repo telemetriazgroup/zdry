@@ -32,6 +32,7 @@ import {
   type OfferVisibilityMode,
   type PricingRule,
 } from "../domain/pricing";
+import { EvaluationService } from "../evaluation/evaluation.service";
 import { DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
 
 const ACTIVE_PHOTOS = { where: { status: PHOTO_STATUS_ACTIVE } };
@@ -44,10 +45,11 @@ export class CatalogMediaService {
     private readonly audit: AuditService,
     private readonly warehouse: WarehouseService,
     private readonly storage: StorageService,
+    private readonly evaluation: EvaluationService,
   ) {}
 
   async meta() {
-    const custom = await this.customWatermarkKey();
+    const [custom, evalCatalog] = await Promise.all([this.customWatermarkKey(), this.evaluation.presentCatalog()]);
     return {
       photoLabels: PHOTO_LABELS,
       approverRoles: MEDIA_APPROVER_ROLES,
@@ -55,6 +57,7 @@ export class CatalogMediaService {
       watermarkReady: true,
       watermarkSource: custom ? "custom" : "default",
       watermarkName: custom ? custom.name : "zg_marca.png",
+      ...evalCatalog,
     };
   }
 
@@ -109,6 +112,8 @@ export class CatalogMediaService {
     });
     if (!c) throw new NotFoundException("Unidad no encontrada.");
     if (c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
+    await this.evaluation.importLegacyForUnit(c.iso, c);
+    const evalData = await this.evaluation.forUnit(c.iso);
     const active = c.photos.filter((p) => p.status === PHOTO_STATUS_ACTIVE);
     const history = c.photos
       .filter((p) => p.status === PHOTO_STATUS_REJECTED)
@@ -150,6 +155,8 @@ export class CatalogMediaService {
       conditionPaint: c.conditionPaint,
       conditionWalls: c.conditionWalls,
       roofHole: c.roofHole,
+      ratings: evalData.ratings,
+      ratingHistory: evalData.ratingHistory,
     };
   }
 
@@ -177,6 +184,19 @@ export class CatalogMediaService {
     }
     if (body.roofHole !== undefined) data.roofHole = body.roofHole == null ? null : !!body.roofHole;
     await this.prisma.container.update({ where: { iso }, data });
+    await this.evaluation.syncLegacyFields(
+      iso,
+      {
+        conditionFloor: body.conditionFloor,
+        conditionRoof: body.conditionRoof,
+        conditionDoors: body.conditionDoors,
+        conditionPaint: body.conditionPaint,
+        conditionWalls: body.conditionWalls,
+      },
+      user,
+      ip,
+      "catalogo",
+    );
     await this.audit.log({
       user,
       action: "update",
@@ -185,6 +205,18 @@ export class CatalogMediaService {
       after: data as object,
       ip,
     });
+    return this.get(iso);
+  }
+
+  async setRating(
+    iso: string,
+    body: { conceptId?: string; levelId?: string; reason?: string; note?: string },
+    user: AuthUser,
+    ip?: string,
+  ) {
+    const c = await this.prisma.container.findUnique({ where: { iso } });
+    if (!c || c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
+    await this.evaluation.setRating(iso, { ...body, source: "catalogo" }, user, ip);
     return this.get(iso);
   }
 

@@ -5,6 +5,7 @@ import { useAuth } from "../auth.jsx";
 import SearchCreate from "../search-create.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 import { parseIso6346 } from "../iso6346.js";
+import { EvalCorrect } from "../eval-ratings.jsx";
 
 const ARCHIVE_PRESETS = ["Contenedor mal ingresado", "Información incorrecta"];
 const PAGE_SIZE = 20;
@@ -530,17 +531,33 @@ export default function Recepcion() {
 
   async function deleteVisit() {
     const id = unit?.visit?.id || editingVisitId || pickVisitId;
-    if (!id || !window.confirm("¿Eliminar esta visita?")) return;
+    if (!id) return;
+    const reason = window.prompt("Motivo para archivar la visita (queda disponible para auditoría):", "Archivada desde recepción") || "";
+    if (!reason.trim()) return;
     try {
-      await api(`/gate-visits/${id}`, { method: "DELETE" });
+      await api(`/gate-visits/${id}/archive`, { method: "POST", body: { reason: reason.trim() } });
       const next = inspectIso ? await api(`/warehouse/units/${inspectIso}`) : null;
       if (next) setUnit(next);
       setVisitForm(EMPTY_VISIT);
       setVisitMode("pick");
       setEditingVisitId("");
       setPickVisitId("");
-      setMsg("Visita eliminada.");
+      setMsg("Visita archivada. Los datos siguen disponibles en Visitas → Archivadas.");
       await loadVisits();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function correctRating({ conceptId, levelId, reason }) {
+    if (!inspectIso) return;
+    try {
+      const next = await api(`/warehouse/units/${inspectIso}/ratings`, {
+        method: "POST",
+        body: { conceptId, levelId, reason, source: "recepcion" },
+      });
+      setUnit(next);
+      setMsg("Corrección de evaluación guardada. Queda en la trazabilidad.");
     } catch (e) {
       setError(e.message);
     }
@@ -822,7 +839,7 @@ export default function Recepcion() {
                     </button>
                   ) : null}
                   {unit.visit ? <button className="btn-ghost" type="button" onClick={unlinkVisit}>Desvincular</button> : null}
-                  {(unit.visit || editingVisitId || pickVisitId) ? <button className="btn-ghost" type="button" onClick={deleteVisit}>Eliminar visita</button> : null}
+                  {(unit.visit || editingVisitId || pickVisitId) ? <button className="btn-ghost" type="button" onClick={deleteVisit}>Archivar visita</button> : null}
                   {unit.visit || visitMode !== "pick" ? (
                     <button className="btn-ghost" type="button" onClick={() => { setVisitMode("pick"); setVisitForm(EMPTY_VISIT); }}>Elegir otra visita</button>
                   ) : null}
@@ -917,12 +934,18 @@ export default function Recepcion() {
             )}
             {canCoord ? (
               <>
-                <div style={{ margin: "10px 0" }}>
+                <div className="recv-capture-note">
                   <label>Nota de tu toma (opcional)</label>
-                  <input value={capNote} onChange={(e) => setCapNote(e.target.value)} placeholder="Ej. foto de placa o daño al llegar" />
-                  <label className="btn-ghost" style={{ display: "inline-block", marginTop: 8 }}>
+                  <p className="section-sub">Describe qué se ve en la foto o video antes de adjuntarlo. Queda en la bandeja de evidencias.</p>
+                  <textarea
+                    rows={3}
+                    value={capNote}
+                    onChange={(e) => setCapNote(e.target.value)}
+                    placeholder="Ej. foto de placa, golpe en puerta derecha o sello roto"
+                  />
+                  <label className="btn-ghost recv-capture-file">
                     + Foto o video del coordinador
-                    <input type="file" accept="image/*,video/*" style={{ display: "none" }} onChange={(e) => { uploadCoordCapture(e.target.files?.[0]); e.target.value = ""; }} />
+                    <input type="file" accept="image/*,video/*" hidden onChange={(e) => { uploadCoordCapture(e.target.files?.[0]); e.target.value = ""; }} />
                   </label>
                 </div>
                 <div className="checklist recv-checklist">
@@ -992,6 +1015,17 @@ export default function Recepcion() {
                 </div>
               </>
             ) : null}
+            <div className="eval-recepcion">
+              <h4>Evaluación de patio</h4>
+              <p className="section-sub">Lo que cargó campo. Si las fotos muestran otra cosa, corrige y deja el motivo. No se borra el historial.</p>
+              <EvalCorrect
+                concepts={meta.evaluationConcepts || []}
+                levels={meta.evaluationLevels || []}
+                ratings={unit.ratings || []}
+                history={unit.ratingHistory || []}
+                onCorrect={correctRating}
+              />
+            </div>
             <div className="recv-services">
               <button className="btn-ghost" type="button" onClick={() => setActivity({ open: true, conceptKey: meta.costConcepts?.[0]?.key || "", note: "" })}>Registrar actividad</button>
             </div>

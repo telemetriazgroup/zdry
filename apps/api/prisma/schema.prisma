@@ -153,6 +153,8 @@ model Container {
   documents               ContainerDocument[]
   gateVisits              GateVisit[]
   priceChanges            ContainerPriceChange[]
+  ratings                 ContainerRating[]
+  ratingHistory           ContainerRatingHistory[]
 
   @@index([depotId])
   @@index([odooLotId])
@@ -673,12 +675,119 @@ model GateVisit {
   unitPhotoApprovedBy   String?
   unitPhotoRejectedAt   DateTime?
   publicToken   String     @unique @default(uuid())
+  clientIp          String?
+  userAgent         String?   @db.Text
+  referer           String?   @db.Text
+  originHost        String?
+  acceptLanguage    String?
+  forwardedFor      String?   @db.Text
+  originMeta        Json?
+  archivedAt        DateTime?
+  archiveReason     String?
+  archivedById      String?
+  archivedByName    String?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
   @@index([tractorPlate])
   @@index([containerIso])
   @@index([linkedAt])
+  @@index([archivedAt])
+  @@index([clientIp])
+}
+
+model EvaluationConcept {
+  id         String    @id @default(uuid())
+  key        String    @unique
+  label      String
+  sortOrder  Int       @default(0)
+  system     Boolean   @default(false)
+  active     Boolean   @default(true)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  ratings    ContainerRating[]
+
+  @@index([archivedAt, sortOrder])
+}
+
+model EvaluationLevel {
+  id         String    @id @default(uuid())
+  key        String    @unique
+  label      String
+  sortOrder  Int       @default(0)
+  color      String    @default("#5c6370")
+  system     Boolean   @default(false)
+  active     Boolean   @default(true)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  ratings    ContainerRating[]
+
+  @@index([archivedAt, sortOrder])
+}
+
+model ContainerRating {
+  id           String             @id @default(uuid())
+  iso          String
+  container    Container          @relation(fields: [iso], references: [iso], onDelete: Cascade)
+  conceptId    String
+  concept      EvaluationConcept  @relation(fields: [conceptId], references: [id])
+  conceptKey   String
+  conceptLabel String
+  levelId      String
+  level        EvaluationLevel    @relation(fields: [levelId], references: [id])
+  levelKey     String
+  levelLabel   String
+  note         String             @default("")
+  source       String             @default("patio")
+  setById      String?
+  setByName    String
+  setAt        DateTime           @default(now())
+
+  @@unique([iso, conceptId])
+  @@index([iso, setAt])
+}
+
+model ContainerRatingHistory {
+  id             String    @id @default(uuid())
+  iso            String
+  container      Container @relation(fields: [iso], references: [iso], onDelete: Cascade)
+  conceptId      String
+  conceptKey     String
+  conceptLabel   String
+  fromLevelKey   String?
+  fromLevelLabel String?
+  toLevelKey     String
+  toLevelLabel   String
+  reason         String    @default("")
+  source         String
+  setById        String?
+  setByName      String
+  createdAt      DateTime  @default(now())
+
+  @@index([iso, createdAt])
+}
+
+model GateVisitAccessLog {
+  id             String   @id @default(uuid())
+  action         String
+  tractorPlate   String?
+  visitId        String?
+  ip             String
+  userAgent      String   @default("") @db.Text
+  referer        String   @default("") @db.Text
+  originHost     String   @default("")
+  acceptLanguage String   @default("")
+  forwardedFor   String   @default("") @db.Text
+  extra          Json?
+  blocked        Boolean  @default(false)
+  blockReason    String?
+  createdAt      DateTime @default(now())
+
+  @@index([ip, createdAt])
+  @@index([createdAt])
+  @@index([blocked, createdAt])
 }
 
 model DataBackup {

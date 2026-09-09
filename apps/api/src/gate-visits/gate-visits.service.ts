@@ -1,11 +1,14 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { randomUUID } from "crypto";
+import type Redis from "ioredis";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { AuthUser } from "../auth/auth.types";
 import { StorageService } from "../storage/storage.service";
 import { limaDayRange } from "../odoo/odoo-lot-photos";
+import { REDIS } from "../redis/redis.constants";
+import { PUBLIC_VISIT_LIMITS, type ClientOrigin, type PublicVisitAction } from "../domain/client-origin";
 import {
   canPublicEditVisit,
   normalizePlate,
@@ -31,9 +34,10 @@ export class GateVisitsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly storage: StorageService,
+    @Inject(REDIS) private readonly redis: Redis,
   ) {}
 
-  present(row: VisitRow) {
+  present(row: VisitRow, staff = false) {
     const photoStatus = visitPhotoStatus(row);
     return {
       id: row.id,
@@ -58,6 +62,20 @@ export class GateVisitsService {
       photoStatus,
       photoName: row.unitPhotoName || null,
       photoApprovedBy: row.unitPhotoApprovedBy,
+      archived: !!row.archivedAt,
+      archivedAt: row.archivedAt,
+      archiveReason: row.archiveReason,
+      archivedByName: row.archivedByName,
+      origin: staff
+        ? {
+            ip: row.clientIp,
+            userAgent: row.userAgent,
+            referer: row.referer,
+            originHost: row.originHost,
+            acceptLanguage: row.acceptLanguage,
+            forwardedFor: row.forwardedFor,
+          }
+        : undefined,
     };
   }
 
@@ -90,11 +108,12 @@ export class GateVisitsService {
     };
   }
 
-  async byPlate(raw: string) {
+  async byPlate(raw: string, origin?: ClientOrigin) {
+    if (origin) await this.guardPublic("lookup", origin, { tractorPlate: normalizePlate(raw) });
     const tractorPlate = normalizePlate(raw);
     if (tractorPlate.length < 3) throw new BadRequestException("Indica la placa del tracto.");
     const row = await this.prisma.gateVisit.findFirst({
-      where: { tractorPlate },
+      where: { tractorPlate, archivedAt: null },
       orderBy: { updatedAt: "desc" },
     });
     if (!row) return { found: false, tractorPlate, locked: false, visit: null };
@@ -114,41 +133,74 @@ export class GateVisitsService {
     };
   }
 
-  async upsertPublic(body: {
-    tractorPlate?: string;
-    company?: string;
-    ruc?: string;
-    driverName?: string;
-    visitAt?: string;
-    license?: string;
-    motive?: string;
-    trailerPlate?: string;
-    phone?: string;
-    equipmentCode?: string;
-  }) {
+  async upsertPublic(
+    body: {
+      tractorPlate?: string;
+      company?: string;
+      ruc?: string;
+      driverName?: string;
+      visitAt?: string;
+      license?: string;
+      motive?: string;
+      trailerPlate?: string;
+      phone?: string;
+      equipmentCode?: string;
+    },
+    origin?: ClientOrigin,
+  ) {
     const data = this.visitFields(body);
+    if (origin) await this.guardPublic("submit", origin, { tractorPlate: data.tractorPlate });
     const existing = await this.prisma.gateVisit.findFirst({
-      where: { tractorPlate: data.tractorPlate },
+      where: { tractorPlate: data.tractorPlate, archivedAt: null },
       orderBy: { updatedAt: "desc" },
     });
     if (existing && !canPublicEditVisit(existing.linkedAt)) {
       throw new ForbiddenException("Esta placa ya está vinculada a un contenedor. Solo el coordinador o el administrador pueden desvincular.");
     }
+    const originData = origin
+      ? {
+          clientIp: existing?.clientIp || origin.ip,
+          userAgent: origin.userAgent,
+          referer: origin.referer,
+          originHost: origin.originHost,
+          acceptLanguage: origin.acceptLanguage,
+          forwardedFor: origin.forwardedFor,
+          originMeta: {
+            first: existing?.originMeta || origin,
+            last: origin,
+          } as Prisma.InputJsonValue,
+        }
+      : {};
     const row = existing
-      ? await this.prisma.gateVisit.update({ where: { id: existing.id }, data })
-      : await this.prisma.gateVisit.create({ data });
+      ? await this.prisma.gateVisit.update({ where: { id: existing.id }, data: { ...data, ...originData } })
+      : await this.prisma.gateVisit.create({ data: { ...data, ...originData } });
+    if (origin) {
+      await this.logAccess({
+        action: "submit",
+        tractorPlate: data.tractorPlate,
+        visitId: row.id,
+        origin,
+        blocked: false,
+      });
+    }
     return { ok: true, visit: this.present(row), saved: true, editable: !visitIsLocked(row.linkedAt) };
   }
 
-  async list(filter: "pending" | "linked" | "all" = "pending") {
-    const where =
-      filter === "pending" ? { linkedAt: null } : filter === "linked" ? { linkedAt: { not: null } } : {};
+  async list(filter: "pending" | "linked" | "all" | "archived" = "pending") {
+    const where: Prisma.GateVisitWhereInput =
+      filter === "archived"
+        ? { archivedAt: { not: null } }
+        : filter === "pending"
+          ? { linkedAt: null, archivedAt: null }
+          : filter === "linked"
+            ? { linkedAt: { not: null }, archivedAt: null }
+            : { archivedAt: null };
     const rows = await this.prisma.gateVisit.findMany({
       where,
       orderBy: { updatedAt: "desc" },
       take: 200,
     });
-    return rows.map((r) => this.present(r));
+    return rows.map((r) => this.present(r, true));
   }
 
   async arrivals() {
@@ -156,6 +208,7 @@ export class GateVisitsService {
     const rows = await this.prisma.gateVisit.findMany({
       where: {
         OR: [{ linkedAt: null }, { linkedAt: { gte: start } }],
+        archivedAt: null,
       },
       orderBy: { updatedAt: "desc" },
       take: 200,
@@ -186,7 +239,7 @@ export class GateVisitsService {
             ],
           };
     const visits = await this.prisma.gateVisit.findMany({
-      where: visitWhere,
+      where: { AND: [visitWhere, { archivedAt: null }] },
       orderBy: { updatedAt: "desc" },
       take: 40,
     });
@@ -315,21 +368,54 @@ export class GateVisitsService {
     return this.present(row);
   }
 
-  async remove(id: string, user: AuthUser, ip?: string) {
+  async remove(id: string, user: AuthUser, ip?: string, reason = "Archivada por el coordinador") {
+    return this.archive(id, reason, user, ip);
+  }
+
+  async archive(id: string, reason: string, user: AuthUser, ip?: string) {
     if (!staffManagesVisits(user.role)) throw new ForbiddenException("Sin acceso.");
     const visit = await this.prisma.gateVisit.findUnique({ where: { id } });
     if (!visit) throw new NotFoundException("Visita no encontrada.");
-    if (visit.unitPhotoKey) await this.storage.delete(visit.unitPhotoKey).catch(() => undefined);
-    await this.prisma.gateVisit.delete({ where: { id } });
+    if (visit.archivedAt) return this.present(visit, true);
+    const row = await this.prisma.gateVisit.update({
+      where: { id },
+      data: {
+        archivedAt: new Date(),
+        archiveReason: String(reason || "Archivada para auditoría").trim() || "Archivada para auditoría",
+        archivedById: user.id,
+        archivedByName: user.name,
+        containerIso: visit.containerIso,
+        linkedAt: visit.linkedAt,
+      },
+    });
     await this.audit.log({
       user,
-      action: "delete",
+      action: "archive",
       entity: "GateVisit",
       entityId: id,
-      after: { tractorPlate: visit.tractorPlate, iso: visit.containerIso },
+      after: { tractorPlate: visit.tractorPlate, iso: visit.containerIso, reason: row.archiveReason },
       ip,
     });
-    return { ok: true };
+    return this.present(row, true);
+  }
+
+  async restore(id: string, user: AuthUser, ip?: string) {
+    if (!staffManagesVisits(user.role)) throw new ForbiddenException("Sin acceso.");
+    const visit = await this.prisma.gateVisit.findUnique({ where: { id } });
+    if (!visit) throw new NotFoundException("Visita no encontrada.");
+    const row = await this.prisma.gateVisit.update({
+      where: { id },
+      data: { archivedAt: null, archiveReason: null, archivedById: null, archivedByName: null },
+    });
+    await this.audit.log({
+      user,
+      action: "restore",
+      entity: "GateVisit",
+      entityId: id,
+      after: { tractorPlate: visit.tractorPlate },
+      ip,
+    });
+    return this.present(row, true);
   }
 
   async link(id: string, isoRaw: string, user: AuthUser, ip?: string) {
@@ -387,18 +473,30 @@ export class GateVisitsService {
   async uploadPublicPhoto(
     plateRaw: string,
     file: { buffer: Buffer; originalname: string; size: number } | undefined,
+    origin?: ClientOrigin,
   ) {
     const tractorPlate = normalizePlate(plateRaw);
+    if (origin) await this.guardPublic("photo", origin, { tractorPlate });
     if (tractorPlate.length < 3) throw new BadRequestException("Indica la placa del tracto.");
     const visit = await this.prisma.gateVisit.findFirst({
-      where: { tractorPlate },
+      where: { tractorPlate, archivedAt: null },
       orderBy: { updatedAt: "desc" },
     });
     if (!visit) throw new BadRequestException("Primero envía la ficha de visita y luego adjunta la foto.");
     if (!canPublicEditVisit(visit.linkedAt)) {
       throw new ForbiddenException("Esta placa ya está vinculada. El coordinador revisa la foto.");
     }
-    return this.storePhoto(visit, file);
+    const row = await this.storePhoto(visit, file);
+    if (origin) {
+      await this.logAccess({
+        action: "photo",
+        tractorPlate,
+        visitId: visit.id,
+        origin,
+        blocked: false,
+      });
+    }
+    return row;
   }
 
   async uploadStaffPhoto(
@@ -458,7 +556,7 @@ export class GateVisitsService {
   async openPublicPhoto(plateRaw: string) {
     const tractorPlate = normalizePlate(plateRaw);
     const visit = await this.prisma.gateVisit.findFirst({
-      where: { tractorPlate },
+      where: { tractorPlate, archivedAt: null },
       orderBy: { updatedAt: "desc" },
     });
     if (!visit) throw new NotFoundException("Foto no encontrada.");
@@ -500,5 +598,89 @@ export class GateVisitsService {
       },
     });
     return this.present(row);
+  }
+
+  async accessLogs() {
+    return this.prisma.gateVisitAccessLog.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 120,
+    });
+  }
+
+  private async guardPublic(action: PublicVisitAction, origin: ClientOrigin, extra?: { tractorPlate?: string }) {
+    const limits = PUBLIC_VISIT_LIMITS[action];
+    const ip = origin.ip || "unknown";
+    let blocked = false;
+    let blockReason = "";
+    try {
+      const burstKey = `gv:${action}:${ip}:burst`;
+      const winKey = `gv:${action}:${ip}:win`;
+      const burst = await this.redis.incr(burstKey);
+      if (burst === 1) await this.redis.expire(burstKey, limits.burst.ttl);
+      const win = await this.redis.incr(winKey);
+      if (win === 1) await this.redis.expire(winKey, limits.window.ttl);
+      if (burst > limits.burst.max) {
+        blocked = true;
+        blockReason = "Ráfaga de envíos";
+      } else if (win > limits.window.max) {
+        blocked = true;
+        blockReason = "Demasiados envíos en poco tiempo";
+      }
+      if (action === "submit" && extra?.tractorPlate && "plates" in limits) {
+        const plateKey = `gv:plates:${ip}`;
+        await this.redis.sadd(plateKey, extra.tractorPlate);
+        await this.redis.expire(plateKey, limits.plates.ttl);
+        const plateCount = await this.redis.scard(plateKey);
+        if (plateCount > limits.plates.max) {
+          blocked = true;
+          blockReason = "Demasiadas placas distintas desde la misma conexión";
+        }
+      }
+    } catch {
+      const since = new Date(Date.now() - limits.window.ttl * 1000);
+      const count = await this.prisma.gateVisitAccessLog.count({
+        where: { ip, action, createdAt: { gte: since } },
+      });
+      if (count >= limits.window.max) {
+        blocked = true;
+        blockReason = "Demasiados envíos en poco tiempo";
+      }
+    }
+    if (blocked) {
+      await this.logAccess({
+        action,
+        tractorPlate: extra?.tractorPlate,
+        origin,
+        blocked: true,
+        blockReason,
+      });
+      throw new HttpException("Demasiados envíos desde esta conexión. Espera unos minutos e inténtalo de nuevo.", HttpStatus.TOO_MANY_REQUESTS);
+    }
+  }
+
+  private async logAccess(input: {
+    action: string;
+    tractorPlate?: string;
+    visitId?: string;
+    origin: ClientOrigin;
+    blocked: boolean;
+    blockReason?: string;
+  }) {
+    await this.prisma.gateVisitAccessLog.create({
+      data: {
+        action: input.action,
+        tractorPlate: input.tractorPlate || null,
+        visitId: input.visitId || null,
+        ip: input.origin.ip || "unknown",
+        userAgent: input.origin.userAgent,
+        referer: input.origin.referer,
+        originHost: input.origin.originHost,
+        acceptLanguage: input.origin.acceptLanguage,
+        forwardedFor: input.origin.forwardedFor,
+        extra: input.origin.extra,
+        blocked: input.blocked,
+        blockReason: input.blockReason || null,
+      },
+    }).catch(() => undefined);
   }
 }

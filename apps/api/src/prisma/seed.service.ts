@@ -7,6 +7,7 @@ import { DEFAULT_PRICING_RULES, computeListPrices } from "../domain/pricing";
 import { DEFAULT_VISIBILITY_RULES } from "../domain/visibility";
 import { DEFAULT_PAYMENT_ACCOUNTS } from "../domain/payment-accounts";
 import { SYSTEM_DEPOT_CONCEPTS } from "../domain/depot-costs";
+import { EvaluationService } from "../evaluation/evaluation.service";
 
 const PASSWORD = process.env.SEED_PASSWORD || "Zdry123!";
 
@@ -53,7 +54,10 @@ const USERS: { email: string; name: string; role: Role }[] = [
 export class SeedService implements OnModuleInit {
   private readonly log = new Logger(SeedService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly evaluation: EvaluationService,
+  ) {}
 
   async onModuleInit() {
     const hash = await argon2.hash(PASSWORD);
@@ -235,6 +239,8 @@ export class SeedService implements OnModuleInit {
         data: { priceList: p.priceList, priceMin: p.priceMin },
       });
     }
+
+    await this.evaluation.ensureDefaults();
 
     this.log.log(`Seed listo. Superadmin ${SUPERADMIN.email}; staff: ${USERS.map((u) => u.email).join(", ")} / clave ${PASSWORD}`);
   }

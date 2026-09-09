@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, apiUpload, apiUrl, formatWhen } from "../api.js";
 import { useAuth } from "../auth.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
+import { EvalGrid } from "../eval-ratings.jsx";
 
 const PAGE_SIZE = 20;
 const GRADES = [
@@ -152,6 +153,19 @@ export default function PatioCampo() {
     try {
       const body = key === "roofHole" ? { roofHole: value } : { [key]: value || null };
       const next = await api(`/warehouse/units/${iso}`, { method: "PATCH", body });
+      setUnit(next);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function saveRating(conceptId, levelId) {
+    if (!iso || !levelId) return;
+    try {
+      const next = await api(`/warehouse/units/${iso}/ratings`, {
+        method: "POST",
+        body: { conceptId, levelId, source: "patio" },
+      });
       setUnit(next);
     } catch (e) {
       setError(e.message);
@@ -389,22 +403,33 @@ export default function PatioCampo() {
           </div>
           <div className="campo-section">
             <h3>Información de campo</h3>
-            <p className="section-sub">Condición y notas para quien publique la ficha. No sustituyen los datos de Odoo.</p>
-            <div className="form-grid">
-              {[
-                ["conditionFloor", "Piso"],
-                ["conditionRoof", "Techo"],
-                ["conditionWalls", "Paredes"],
-                ["conditionDoors", "Puertas"],
-                ["conditionPaint", "Pintura"],
-              ].map(([key, label]) => (
-                <div key={key}>
-                  <label>{label}</label>
-                  <select value={unit[key] || ""} onChange={(e) => saveGrade(key, e.target.value)}>
-                    {GRADES.map((g) => <option key={g.value || "empty"} value={g.value}>{g.label}</option>)}
-                  </select>
-                </div>
-              ))}
+            <p className="section-sub">Condición y notas para quien publique la ficha. Los conceptos los arma el administrador.</p>
+            {(meta.evaluationConcepts || []).length ? (
+              <EvalGrid
+                concepts={meta.evaluationConcepts}
+                levels={meta.evaluationLevels}
+                ratings={unit.ratings}
+                onChange={saveRating}
+              />
+            ) : (
+              <div className="form-grid">
+                {[
+                  ["conditionFloor", "Piso"],
+                  ["conditionRoof", "Techo"],
+                  ["conditionWalls", "Paredes"],
+                  ["conditionDoors", "Puertas"],
+                  ["conditionPaint", "Pintura"],
+                ].map(([key, label]) => (
+                  <div key={key}>
+                    <label>{label}</label>
+                    <select value={unit[key] || ""} onChange={(e) => saveGrade(key, e.target.value)}>
+                      {GRADES.map((g) => <option key={g.value || "empty"} value={g.value}>{g.label}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="form-grid" style={{ marginTop: 8 }}>
               <div>
                 <label>Hueco en techo</label>
                 <select value={unit.roofHole == null ? "" : unit.roofHole ? "si" : "no"} onChange={(e) => saveGrade("roofHole", e.target.value === "" ? null : e.target.value === "si")}>

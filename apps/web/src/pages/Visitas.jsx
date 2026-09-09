@@ -37,7 +37,7 @@ export default function Visitas() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [creating, setCreating] = useState(false);
-  const qr = typeof window !== "undefined" ? `${window.location.origin}${publicUrl("/visita")}` : "/zdry/visita";
+  const [logs, setLogs] = useState(null);
 
   function openEdit(v) {
     setCreating(false);
@@ -122,12 +122,24 @@ export default function Visitas() {
   }
 
   async function remove(id) {
-    if (!window.confirm("¿Eliminar esta visita?")) return;
+    const reason = window.prompt("Motivo para archivar (la visita no se borra):", "Archivada para auditoría") || "";
+    if (!reason.trim()) return;
     setError("");
     try {
-      await api(`/gate-visits/${id}`, { method: "DELETE" });
-      setMsg("Visita eliminada.");
+      await api(`/gate-visits/${id}/archive`, { method: "POST", body: { reason: reason.trim() } });
+      setMsg("Visita archivada. Sigue disponible en Archivadas.");
       if (editing === id) setEditing(null);
+      await load(filter);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function restore(id) {
+    setError("");
+    try {
+      await api(`/gate-visits/${id}/restore`, { method: "POST" });
+      setMsg("Visita restaurada.");
       await load(filter);
     } catch (e) {
       setError(e.message);
@@ -160,6 +172,7 @@ export default function Visitas() {
         <button className={`btn-ghost ${filter === "pending" ? "on" : ""}`} type="button" onClick={() => { setFilter("pending"); load("pending"); }}>Pendientes</button>
         <button className={`btn-ghost ${filter === "linked" ? "on" : ""}`} type="button" onClick={() => { setFilter("linked"); load("linked"); }}>Vinculadas</button>
         <button className={`btn-ghost ${filter === "all" ? "on" : ""}`} type="button" onClick={() => { setFilter("all"); load("all"); }}>Todas</button>
+        <button className={`btn-ghost ${filter === "archived" ? "on" : ""}`} type="button" onClick={() => { setFilter("archived"); load("archived"); }}>Archivadas</button>
         <button className="btn-primary" type="button" onClick={() => { setCreating(true); setEditing("new"); setForm(emptyForm); setIso(""); }}>
           + Registrar visita
         </button>
@@ -197,7 +210,7 @@ export default function Visitas() {
       <div className="tablewrap">
         <table className="data">
           <thead>
-            <tr><th>Tracto</th><th>Conductor</th><th>Motivo</th><th>Foto unidad</th><th>ISO</th><th></th></tr>
+            <tr><th>Tracto</th><th>Conductor</th><th>Motivo</th><th>Foto unidad</th><th>ISO</th><th>Origen</th><th></th></tr>
           </thead>
           <tbody>
             {rows.map((v) => (
@@ -241,8 +254,20 @@ export default function Visitas() {
                   ) : "—"}
                 </td>
                 <td>
+                  {v.origin?.ip ? (
+                    <div className="recv-who">
+                      {v.origin.ip}
+                      <br />
+                      {(v.origin.userAgent || "").slice(0, 48) || "—"}
+                      {v.archived ? <><br />Archivada: {v.archiveReason || "—"}</> : null}
+                    </div>
+                  ) : (v.archived ? <span className="recv-who">Archivada · {v.archiveReason || "—"}</span> : "—")}
+                </td>
+                <td>
                   <div className="action-row" style={{ flexWrap: "wrap" }}>
-                    {v.locked ? (
+                    {v.archived ? (
+                      <button className="btn-primary" type="button" onClick={() => restore(v.id)}>Restaurar</button>
+                    ) : v.locked ? (
                       <>
                         <button className="btn-primary" type="button" onClick={() => downloadVisitPdf(v, v.hasPhoto ? apiUrl(`/gate-visits/${v.id}/photo`) : "").catch((e) => setError(e.message))}>Descargar PDF</button>
                         <button className="btn-ghost" type="button" onClick={() => unlink(v.id)}>Desvincular</button>
@@ -252,7 +277,7 @@ export default function Visitas() {
                         <button className="btn-ghost" type="button" onClick={() => openEdit(v)}>Editar</button>
                         <input placeholder="ISO" value={iso} onChange={(e) => setIso(e.target.value.toUpperCase())} style={{ width: 130 }} />
                         <button className="btn-primary" type="button" onClick={() => link(v.id)}>Vincular</button>
-                        <button className="btn-ghost" type="button" onClick={() => remove(v.id)}>Eliminar</button>
+                        <button className="btn-ghost" type="button" onClick={() => remove(v.id)}>Archivar</button>
                       </>
                     )}
                   </div>
@@ -263,6 +288,30 @@ export default function Visitas() {
         </table>
       </div>
       {!rows.length ? <p className="section-sub">No hay visitas en este filtro.</p> : null}
+      <div className="action-row" style={{ marginTop: 16 }}>
+        <button className="btn-ghost" type="button" onClick={() => api("/gate-visits/access-logs").then(setLogs).catch((e) => setError(e.message))}>
+          Ver intentos públicos
+        </button>
+      </div>
+      {logs ? (
+        <div className="tablewrap" style={{ marginTop: 10 }}>
+          <table className="data">
+            <thead><tr><th>Cuándo</th><th>IP</th><th>Acción</th><th>Placa</th><th>Bloqueado</th><th>Navegador</th></tr></thead>
+            <tbody>
+              {logs.map((r) => (
+                <tr key={r.id}>
+                  <td>{new Date(r.createdAt).toLocaleString("es-PE")}</td>
+                  <td>{r.ip}</td>
+                  <td>{r.action}</td>
+                  <td>{r.tractorPlate || "—"}</td>
+                  <td>{r.blocked ? (r.blockReason || "sí") : "—"}</td>
+                  <td className="recv-who">{(r.userAgent || "").slice(0, 72)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
       {lb.node}
     </div>
   );

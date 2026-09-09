@@ -26,6 +26,7 @@ import {
 } from "../domain/catalog-options";
 import { canApplyGateIn, GATE_IN_KEY, presentDepotCost } from "../domain/depot-costs";
 import { visitPhotoStatus } from "../domain/gate-visit";
+import { EvaluationService } from "../evaluation/evaluation.service";
 import {
   extForInspectionMime,
   MAX_INSPECTION_PHOTO_BYTES,
@@ -108,6 +109,7 @@ export class WarehouseService {
     private readonly storage: StorageService,
     private readonly locks: YardLockService,
     private readonly odoo: OdooClient,
+    private readonly evaluation: EvaluationService,
   ) {}
 
   async getLayoutRules(): Promise<LayoutRules> {
@@ -134,7 +136,7 @@ export class WarehouseService {
   }
 
   async meta(user?: AuthUser) {
-    const [types, categories, depots, customers, rules, colorRow, mfrRow, docRow, concepts] = await Promise.all([
+    const [types, categories, depots, customers, rules, colorRow, mfrRow, docRow, concepts, evalCatalog] = await Promise.all([
       this.prisma.containerType.findMany({ where: ACTIVE_MASTER, orderBy: { code: "asc" } }),
       this.prisma.category.findMany({ where: ACTIVE_MASTER, orderBy: { code: "asc" } }),
       this.prisma.depot.findMany({ where: ACTIVE_MASTER, orderBy: { name: "asc" } }),
@@ -144,6 +146,7 @@ export class WarehouseService {
       this.prisma.appSetting.findUnique({ where: { key: MANUFACTURERS_KEY } }),
       this.prisma.appSetting.findUnique({ where: { key: DOCUMENTS_KEY } }),
       this.prisma.depotCostConcept.findMany({ where: { active: true }, orderBy: [{ system: "desc" }, { label: "asc" }] }),
+      this.evaluation.presentCatalog(),
     ]);
     const maxY = new Date().getFullYear();
     const years: number[] = [];
@@ -177,6 +180,7 @@ export class WarehouseService {
       documentConceptLabels: mergeCatalogOptions(DEFAULT_DOCUMENT_CONCEPTS, docRow?.value),
       maxPhotoBytes: MAX_INSPECTION_PHOTO_BYTES,
       maxVideoBytes: MAX_INSPECTION_VIDEO_BYTES,
+      ...evalCatalog,
     };
   }
 
@@ -247,6 +251,7 @@ export class WarehouseService {
 
   async getUnit(iso: string, opts: { hideOdoo?: boolean; hideOdooIds?: boolean; hideRates?: boolean } = {}) {
     const c = await this.loadUnit(iso);
+    await this.evaluation.importLegacyForUnit(c.iso, c);
     const [types, categories, rules, extras] = await Promise.all([
       this.prisma.containerType.findMany(),
       this.prisma.category.findMany(),
@@ -258,6 +263,17 @@ export class WarehouseService {
     );
     const suggested = bestSlotFor(occupants, c.depotId, c.type, c.cat, DEFAULT_YARD_CONFIG, rules);
     return { ...this.presentUnit(c, types, categories, suggested, opts.hideOdoo, opts.hideOdooIds), ...extras };
+  }
+
+  async setUnitRating(
+    iso: string,
+    body: { conceptId?: string; levelId?: string; reason?: string; note?: string; source?: "patio" | "recepcion" | "catalogo" },
+    user: AuthUser,
+    ip?: string,
+  ) {
+    await this.loadUnit(iso);
+    await this.evaluation.setRating(iso, body, user, ip);
+    return this.presentFor(iso, user);
   }
 
   private presentFor(iso: string, user: AuthUser) {
@@ -416,6 +432,19 @@ export class WarehouseService {
     }
     if (body.roofHole !== undefined) data.roofHole = body.roofHole == null || body.roofHole === ("" as never) ? null : !!body.roofHole;
     await this.prisma.container.update({ where: { iso: c.iso }, data });
+    await this.evaluation.syncLegacyFields(
+      c.iso,
+      {
+        conditionFloor: body.conditionFloor,
+        conditionRoof: body.conditionRoof,
+        conditionDoors: body.conditionDoors,
+        conditionPaint: body.conditionPaint,
+        conditionWalls: body.conditionWalls,
+      },
+      user,
+      ip,
+      "patio",
+    );
     await this.audit.log({
       user,
       action: "update",
@@ -478,6 +507,9 @@ export class WarehouseService {
       }
       const ext = extForInspectionMime(mime);
       const processed = await stripVideoAudio(file.buffer, ext);
+      if (!processed.stripped) {
+        throw new BadRequestException("No se pudo quitar el audio del video. Sube un MP4 válido.");
+      }
       const storageKey = `warehouse/${c.iso}/video360.mp4`;
       await this.storage.put(storageKey, processed.buffer, processed.mime);
       await this.prisma.container.update({
@@ -944,6 +976,9 @@ export class WarehouseService {
     let storedSize = file.size;
     if (kind === "video") {
       const processed = await stripVideoAudio(file.buffer, ext);
+      if (!processed.stripped) {
+        throw new BadRequestException("No se pudo quitar el audio del video. Sube un MP4 válido.");
+      }
       payload = processed.buffer;
       storedMime = processed.mime;
       storedExt = "mp4";
@@ -1294,11 +1329,12 @@ export class WarehouseService {
   }
 
   private async loadUnitExtras(iso: string, hideRates: boolean) {
-    const [captures, costs, documents, visit] = await Promise.all([
+    const [captures, costs, documents, visit, evalData] = await Promise.all([
       this.prisma.fieldCapture.findMany({ where: { iso }, orderBy: { createdAt: "desc" } }),
       this.prisma.depotCostEntry.findMany({ where: { iso }, orderBy: { createdAt: "desc" } }),
       this.prisma.containerDocument.findMany({ where: { iso }, orderBy: { createdAt: "desc" } }),
-      this.prisma.gateVisit.findFirst({ where: { containerIso: iso }, orderBy: { linkedAt: "desc" } }),
+      this.prisma.gateVisit.findFirst({ where: { containerIso: iso, archivedAt: null }, orderBy: { linkedAt: "desc" } }),
+      this.evaluation.forUnit(iso),
     ]);
     return {
       captures: captures.map((r) => ({
@@ -1344,6 +1380,8 @@ export class WarehouseService {
             publicToken: visit.publicToken,
           }
         : null,
+      ratings: evalData.ratings,
+      ratingHistory: evalData.ratingHistory,
     };
   }
 

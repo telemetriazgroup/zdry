@@ -20,6 +20,7 @@ import { Roles } from "../auth/roles.decorator";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
 import { GateVisitsService } from "./gate-visits.service";
+import { clientOrigin } from "../domain/client-origin";
 import { MAX_INSPECTION_PHOTO_BYTES } from "../domain/inspection-media";
 
 type VisitBody = {
@@ -58,8 +59,8 @@ export class GateVisitsController {
 
   @Public()
   @Get("by-plate/:plate")
-  byPlate(@Param("plate") plate: string) {
-    return this.visits.byPlate(plate || "");
+  byPlate(@Param("plate") plate: string, @Req() req: Request) {
+    return this.visits.byPlate(plate || "", clientOrigin(req));
   }
 
   @Public()
@@ -81,8 +82,8 @@ export class GateVisitsController {
 
   @Public()
   @Post("public")
-  upsertPublic(@Body() body: VisitBody) {
-    return this.visits.upsertPublic(body);
+  upsertPublic(@Body() body: VisitBody, @Req() req: Request) {
+    return this.visits.upsertPublic(body, clientOrigin(req));
   }
 
   @Public()
@@ -91,14 +92,21 @@ export class GateVisitsController {
   uploadPublicPhoto(
     @Body("tractorPlate") tractorPlate: string,
     @UploadedFile() file: Express.Multer.File | undefined,
+    @Req() req: Request,
   ) {
-    return this.visits.uploadPublicPhoto(tractorPlate || "", file);
+    return this.visits.uploadPublicPhoto(tractorPlate || "", file, clientOrigin(req));
   }
 
   @Roles("admin", "coordinador")
   @Get()
-  list(@Query("filter") filter?: "pending" | "linked" | "all") {
+  list(@Query("filter") filter?: "pending" | "linked" | "all" | "archived") {
     return this.visits.list(filter || "pending");
+  }
+
+  @Roles("admin", "coordinador")
+  @Get("access-logs")
+  accessLogs() {
+    return this.visits.accessLogs();
   }
 
   @Roles("admin", "almacen", "coordinador")
@@ -134,6 +142,23 @@ export class GateVisitsController {
   @Delete(":id")
   remove(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.visits.remove(id, user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Post(":id/archive")
+  archive(
+    @Param("id") id: string,
+    @Body() body: { reason?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.visits.archive(id, body.reason || "", user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Post(":id/restore")
+  restore(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.visits.restore(id, user, req.ip);
   }
 
   @Roles("admin", "almacen", "coordinador")

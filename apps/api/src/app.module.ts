@@ -19,6 +19,7 @@ import { CatalogMediaModule } from "./catalog-media/catalog-media.module";
 import { DemoModule } from "./demo/demo.module";
 import { SuperadminModule } from "./superadmin/superadmin.module";
 import { OdooImportModule } from "./odoo-import/odoo-import.module";
+import { EvaluationModule } from "./evaluation/evaluation.module";
 import { GateVisitsModule } from "./gate-visits/gate-visits.module";
 
 @Module({
@@ -37,6 +38,7 @@ import { GateVisitsModule } from "./gate-visits/gate-visits.module";
     WarehouseModule,
     QuotesModule,
     CatalogMediaModule,
+    EvaluationModule,
     ConfigAppModule,
     DemoModule,
     SuperadminModule,

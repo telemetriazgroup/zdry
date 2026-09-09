@@ -1206,6 +1206,38 @@ tr.visit-focus { outline: 2px solid var(--orange); outline-offset: -2px; }
 .visit-photo-preview { width: 160px; height: 110px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); background: #eef1f6; display: block; margin-top: 6px; cursor: zoom-in; }
 .visit-photo-box { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; margin-top: 8px; }
 .visit-photo-actions { display: flex; flex-direction: column; gap: 8px; }
+.recv-capture-note {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f6f8fb;
+}
+.recv-capture-note textarea {
+  width: 100%;
+  min-height: 76px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  resize: vertical;
+}
+.recv-capture-file { align-self: flex-start; }
+.eval-recepcion { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.eval-correct-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: #fff;
+}
+.eval-correct-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+.eval-history { margin-top: 12px; }
+.eval-history ul { margin: 8px 0 0; padding-left: 18px; }
+.eval-history li { margin-bottom: 6px; }
 
 @media (max-width: 420px) {
   .tile-row { grid-template-columns: 1fr; }

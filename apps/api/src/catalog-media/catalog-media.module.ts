@@ -2,9 +2,10 @@ import { Module } from "@nestjs/common";
 import { CatalogMediaController } from "./catalog-media.controller";
 import { CatalogMediaService } from "./catalog-media.service";
 import { WarehouseModule } from "../warehouse/warehouse.module";
+import { EvaluationModule } from "../evaluation/evaluation.module";
 
 @Module({
-  imports: [WarehouseModule],
+  imports: [WarehouseModule, EvaluationModule],
   controllers: [CatalogMediaController],
   providers: [CatalogMediaService],
 })

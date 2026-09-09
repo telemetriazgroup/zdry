@@ -4,6 +4,7 @@ import { api, apiUpload, ApiError, apiUrl, formatWhen } from "../api.js";
 import { useAuth } from "../auth.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 import VideoMarks, { videoSilenceProps } from "../video-marks.jsx";
+import { EvalGrid } from "../eval-ratings.jsx";
 
 const PAGE_SIZE = 20;
 
@@ -149,6 +150,16 @@ export default function CatalogMedia() {
         conditionPaint: u.conditionPaint || "",
       });
       await applyUnit(u, "Evaluación y descripción guardadas. No salen al catálogo público.");
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    }
+  }
+
+  async function saveRating(conceptId, levelId) {
+    if (!iso || !levelId) return;
+    try {
+      const u = await api(`/catalog-media/${iso}/ratings`, { method: "POST", body: { conceptId, levelId } });
+      await applyUnit(u, "Evaluación actualizada.");
     } catch (e) {
       setError(e instanceof ApiError ? e.message : e.message);
     }
@@ -515,22 +526,31 @@ export default function CatalogMedia() {
             ) : null}
 
             <h4 style={{ fontSize: 14, margin: "16px 0 8px" }}>Evaluación interna</h4>
-            <p className="section-sub">Piso, techo, puertas y pintura. Solo staff; el cliente no lo ve.</p>
-            <div className="odoo-form">
-              {[
-                ["conditionFloor", "Piso"],
-                ["conditionRoof", "Techo"],
-                ["conditionDoors", "Puertas"],
-                ["conditionPaint", "Pintura"],
-              ].map(([key, label]) => (
-                <label key={key}>
-                  <span>{label}</span>
-                  <select value={conds[key] || ""} onChange={(e) => setConds((c) => ({ ...c, [key]: e.target.value }))}>
-                    {GRADES.map((g) => <option key={g.value || "empty"} value={g.value}>{g.label}</option>)}
-                  </select>
-                </label>
-              ))}
-            </div>
+            <p className="section-sub">Conceptos que arma el admin. Solo staff; el cliente no lo ve.</p>
+            {(meta.evaluationConcepts || []).length ? (
+              <EvalGrid
+                concepts={meta.evaluationConcepts}
+                levels={meta.evaluationLevels}
+                ratings={unit.ratings}
+                onChange={saveRating}
+              />
+            ) : (
+              <div className="odoo-form">
+                {[
+                  ["conditionFloor", "Piso"],
+                  ["conditionRoof", "Techo"],
+                  ["conditionDoors", "Puertas"],
+                  ["conditionPaint", "Pintura"],
+                ].map(([key, label]) => (
+                  <label key={key}>
+                    <span>{label}</span>
+                    <select value={conds[key] || ""} onChange={(e) => setConds((c) => ({ ...c, [key]: e.target.value }))}>
+                      {GRADES.map((g) => <option key={g.value || "empty"} value={g.value}>{g.label}</option>)}
+                    </select>
+                  </label>
+                ))}
+              </div>
+            )}
 
             <label style={{ marginTop: 16, display: "block" }}>Descripción para el cliente</label>
             <textarea

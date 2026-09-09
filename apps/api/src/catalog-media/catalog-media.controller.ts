@@ -130,6 +130,16 @@ export class CatalogMediaController {
     return this.media.patchUnit(iso, body, user, req.ip);
   }
 
+  @Post(":iso/ratings")
+  setRating(
+    @Param("iso") iso: string,
+    @Body() body: { conceptId?: string; levelId?: string; reason?: string; note?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.media.setRating(iso, body, user, req.ip);
+  }
+
   @Post(":iso/photos")
   @UseInterceptors(
     FileInterceptor("file", {

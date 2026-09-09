@@ -8,9 +8,12 @@ export function videoSilenceProps() {
   return {
     muted: true,
     playsInline: true,
+    controlsList: "nodownload noplaybackrate",
+    disablePictureInPicture: true,
     onVolumeChange: (e) => silenceVideo(e.currentTarget),
     onLoadedMetadata: (e) => silenceVideo(e.currentTarget),
     onPlay: (e) => silenceVideo(e.currentTarget),
+    onContextMenu: (e) => e.preventDefault(),
   };
 }
 
