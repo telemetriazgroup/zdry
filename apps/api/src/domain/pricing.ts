@@ -18,6 +18,8 @@ export type PricedUnit = {
   cat: string;
   manufacturer?: string | null;
   fobCif?: number | null;
+  costSource?: string | null;
+  dryReferential?: number | null;
 };
 
 export function pricingSpecificity(scope: string): number {
@@ -84,6 +86,9 @@ export function effectiveAcquisitionRefs(refs?: AcquisitionRef[] | null): Acquis
 export function resolveAcquisition(unit: PricedUnit, refs?: AcquisitionRef[] | null) {
   if (unit.fobCif && unit.fobCif > 0) {
     return { amount: Number(unit.fobCif), kind: "fobCif" as const, type: unit.type, cat: unit.cat || null };
+  }
+  if ((unit.costSource === "referential" || unit.costSource === "mo") && unit.dryReferential && unit.dryReferential > 0) {
+    return { amount: Number(unit.dryReferential), kind: "referential" as const, type: unit.type, cat: unit.cat || null };
   }
   const list = effectiveAcquisitionRefs(refs);
   const type = String(unit.type || "").toUpperCase();
@@ -192,7 +197,9 @@ export function describeOffer(
   const baseLabel =
     acq.kind === "fobCif"
       ? `costo FOB/CIF ${moneyUsd(base)}`
-      : acq.kind === "refTypeCat"
+      : acq.kind === "referential"
+        ? `costo referencial DRY ${moneyUsd(base)}`
+        : acq.kind === "refTypeCat"
         ? `costo de referencia ${unit.type} · ${unit.cat} (${moneyUsd(base)})`
         : `costo de referencia del tipo ${unit.type} (${moneyUsd(base)})`;
   const ruleLabel = `${SCOPE_LABEL[rule.scope] || rule.scope}${rule.target ? ` ${rule.target}` : ""}`;

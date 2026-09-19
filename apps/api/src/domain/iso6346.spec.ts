@@ -1,4 +1,4 @@
-import { completeIso, damFormatOk, iso6346CheckDigit, parseIso6346 } from "./iso6346";
+import { completeIso, damFormatOk, iso6346CheckDigit, isOwnSaleStock, parseIso6346, requiresNationalization } from "./iso6346";
 
 describe("ISO 6346", () => {
   it("completa el dígito de control y lo valida", () => {
@@ -43,6 +43,19 @@ describe("ISO 6346", () => {
     if (!parsed.checkOk) {
       expect(parsed.suggested).toBe(parsed.code10 + String(parsed.expectedCheckDigit));
     }
+  });
+});
+
+describe("stock propio", () => {
+  it("un ajuste Odoo se puede vender y no exige DAM", () => {
+    expect(isOwnSaleStock("ajuste_odoo")).toBe(true);
+    expect(requiresNationalization("ajuste_odoo")).toBe(false);
+    expect(isOwnSaleStock("almacenaje_cliente")).toBe(false);
+  });
+
+  it("una fabricación Odoo es stock propio y no exige DAM", () => {
+    expect(isOwnSaleStock("fabricacion_odoo")).toBe(true);
+    expect(requiresNationalization("fabricacion_odoo")).toBe(false);
   });
 });
 

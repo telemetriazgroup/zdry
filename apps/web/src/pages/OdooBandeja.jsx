@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../auth.jsx";
+import { costLabel, originBadge } from "../odoo-origin.js";
 import OdooLotFicha, { SyncIcon } from "./OdooLotFicha.jsx";
 
 const PAGE_SIZE = 20;
 
 function searchable(r) {
-  return [r.isoNormalized, r.serialRaw, r.productCode, r.productName, r.locationName, r.dua]
+  return [r.isoNormalized, r.serialRaw, r.productCode, r.productName, r.locationName, r.dua, r.odooMoName, r.odooSourceProductCode]
     .filter(Boolean)
     .join(" ")
     .toUpperCase();
@@ -43,6 +44,8 @@ export default function OdooBandeja() {
   const [busy, setBusy] = useState("");
   const [sel, setSel] = useState({});
   const [onlyReview, setOnlyReview] = useState(false);
+  const [originFilter, setOriginFilter] = useState("");
+  const [referential, setReferential] = useState(null);
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [openId, setOpenId] = useState(null);
@@ -52,6 +55,7 @@ export default function OdooBandeja() {
   async function load() {
     const list = await api("/odoo-import/candidates");
     setRows(Array.isArray(list) ? list : []);
+    api("/odoo-import/referential").then(setReferential).catch(() => {});
   }
 
   useEffect(() => {
@@ -65,10 +69,11 @@ export default function OdooBandeja() {
     const needle = q.trim().toUpperCase().replace(/[\s-]/g, "");
     return rows.filter((r) => {
       if (onlyReview && r.iso6346Ok) return false;
+      if (originFilter && (r.odooIntakeKind || (r.odooPoName ? "purchase" : "unknown")) !== originFilter) return false;
       if (!needle) return true;
       return searchable(r).replace(/[\s-]/g, "").includes(needle) || searchable(r).includes(q.trim().toUpperCase());
     });
-  }, [rows, onlyReview, q]);
+  }, [rows, onlyReview, originFilter, q]);
 
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, pages);
@@ -79,7 +84,7 @@ export default function OdooBandeja() {
 
   useEffect(() => {
     setPage(1);
-  }, [q, onlyReview]);
+  }, [q, onlyReview, originFilter]);
 
   async function run(label, fn) {
     setBusy(label);
@@ -126,8 +131,9 @@ export default function OdooBandeja() {
     <>
       <h2 className="section-title">Odoo — regularizar DRY</h2>
       <p className="section-sub">
-        «Buscar en Odoo» baja solo lotes a la mano (existencias internas) con la ficha completa. Abre un serial para
-        editar en local; Odoo se actualiza al guardar, y el sistema avisa si quedó en vivo o hubo un error.
+        «Buscar en Odoo» baja lotes DRY a la mano y clasifica si entraron por <b>ajuste</b>, <b>OC/IN</b> o <b>fabricación (MO)</b>.
+        Un ajuste o una MO no inventa factura; usa el precio referencial
+        {referential?.effective != null ? ` (USD ${Number(referential.effective).toLocaleString("en-US")})` : ""}.
       </p>
       {probe && !probe.ok ? <div className="err">{probe.message}</div> : null}
       {probe?.ok ? <div className="ok-msg">Odoo conectado{probe.user?.name ? ` · ${probe.user.name}` : ""}.</div> : null}
@@ -166,6 +172,16 @@ export default function OdooBandeja() {
         <label className="odoo-filter">
           <input type="checkbox" checked={onlyReview} onChange={(e) => setOnlyReview(e.target.checked)} />
           Solo por revisar
+        </label>
+        <label className="odoo-filter">
+          Origen
+          <select value={originFilter} onChange={(e) => setOriginFilter(e.target.value)} style={{ marginLeft: 6 }}>
+            <option value="">Todos</option>
+            <option value="adjustment">Ajuste</option>
+            <option value="purchase">OC / IN</option>
+            <option value="fabrication">Fabricación</option>
+            <option value="unknown">Sin origen</option>
+          </select>
         </label>
         {canReset ? (
           <button className="btn-ghost" type="button" disabled={!!busy} onClick={() => { setResetOn((v) => !v); setResetText(""); }}>
@@ -208,6 +224,8 @@ export default function OdooBandeja() {
               <th>Odoo</th>
               <th>Serial</th>
               <th>ISO 6346</th>
+              <th>Origen</th>
+              <th>Costo</th>
               <th>Producto</th>
               <th>Almacén</th>
               <th>Color</th>
@@ -279,6 +297,12 @@ export default function OdooBandeja() {
                     <span className="badge-scope" style={{ background: "#c92a2a" }}>Por revisar</span>
                   )}
                 </td>
+                <td>
+                  <span className="badge-scope" style={{ background: originBadge(r).color }} title={r.odooPickingName || ""}>
+                    {originBadge(r).label}
+                  </span>
+                </td>
+                <td>{costLabel(r, referential)}</td>
                 <td>{r.productCode ? `[${r.productCode}] ` : ""}{r.productName}</td>
                 <td>{r.locationName || "—"}</td>
                 <td>{r.color || "—"}</td>

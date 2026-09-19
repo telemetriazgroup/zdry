@@ -56,6 +56,24 @@ describe("origen y visibilidad de oferta", () => {
     expect(d.suggestedList).toBeGreaterThan(0);
   });
 
+  it("ajuste DRY usa el referencial, no el costo de catálogo", () => {
+    expect(
+      resolveAcquisition(
+        { iso: "APHU6789309", type: "40HC", cat: "ASIS", fobCif: 0, costSource: "referential", dryReferential: 1110.19 },
+        [{ type: "40HC", cat: null, amount: 4200 }],
+      ),
+    ).toMatchObject({ amount: 1110.19, kind: "referential" });
+  });
+
+  it("fabricación DRY usa el referencial del SKU terminado", () => {
+    expect(
+      resolveAcquisition(
+        { iso: "LATU9011171", type: "40HC", cat: "ASIS", fobCif: 0, costSource: "mo", dryReferential: 1224.69 },
+        [{ type: "40HC", cat: null, amount: 4200 }],
+      ),
+    ).toMatchObject({ amount: 1224.69, kind: "referential" });
+  });
+
   it("referencia por tipo+condición gana sobre el tipo", () => {
     const refs = [
       { type: "20FR", cat: null, amount: 2800 },

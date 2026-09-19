@@ -27,6 +27,7 @@ import { Readable } from "stream";
 import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { isOwnSaleStock } from "../domain/iso6346";
+import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import {
   ACQUISITION_REFS_KEY,
   assertPriceFloor,
@@ -149,8 +150,17 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     }
     const pricing = rules || (await this.loadPricing());
     const acquisition = refs || (await this.loadAcquisitionRefs());
+    const dry = await presentDryReferential(this.prisma);
     const computed = computeListPrices(
-      { iso: c.iso, type: c.type, cat: c.cat, manufacturer: c.manufacturer, fobCif: n(c.fobCif) },
+      {
+        iso: c.iso,
+        type: c.type,
+        cat: c.cat,
+        manufacturer: c.manufacturer,
+        fobCif: n(c.fobCif),
+        costSource: c.costSource,
+        dryReferential: dry.effective,
+      },
       pricing,
       acquisition,
     );
@@ -164,7 +174,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   private async catalogWhere(): Promise<Prisma.ContainerWhereInput> {
     return {
       ...(await this.prisma.liveContainers()),
-      intakeType: { in: ["compra", "pendiente_factura"] },
+      intakeType: { in: ["compra", "pendiente_factura", "ajuste_odoo", "fabricacion_odoo"] },
       physicallyReceived: true,
       status: { in: ["Disponible", "Reservado"] },
       mediaStatus: "aprobado",

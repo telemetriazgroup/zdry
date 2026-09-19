@@ -23,9 +23,17 @@ import {
   coerceOdooWriteValue,
 } from "../domain/odoo-lot-map";
 import { listOdooLotPhotos, openOdooLotPhoto } from "../odoo/odoo-lot-photos";
-import { parseSerialsFromPoText, purchaseRefFromOrder, type OdooPurchaseRef } from "../domain/odoo-purchase";
+import { applySerialTextRefs, assignRefsBySharedMove, purchaseRefFromOrder, type OdooPurchaseRef } from "../domain/odoo-purchase";
+import {
+  assimilateCostPlan,
+  classifyLotOrigin,
+  isDryContainerProduct,
+  splitOdooProductLabel,
+  type LotMoveFact,
+} from "../domain/odoo-origin";
+import { presentDryReferential } from "./dry-referential.store";
 
-const DRY_DOMAIN = ["|", ["name", "ilike", "contenedor dry"], ["name", "ilike", "dry"]];
+const DRY_DOMAIN = [["name", "ilike", "contenedor dry"]];
 
 @Injectable()
 export class OdooImportService {
@@ -37,6 +45,10 @@ export class OdooImportService {
 
   probe() {
     return this.odoo.probe();
+  }
+
+  referential() {
+    return presentDryReferential(this.prisma);
   }
 
   async list(status?: string) {
@@ -54,9 +66,10 @@ export class OdooImportService {
     const probe = await this.odoo.probe();
     if (!probe.ok) throw new BadRequestException(probe.message);
 
-    const products = await this.odoo.searchRead("product.product", DRY_DOMAIN, ["id", "name", "default_code", "categ_id"], {
+    const rawProducts = await this.odoo.searchRead("product.product", DRY_DOMAIN, ["id", "name", "default_code", "categ_id"], {
       limit: 400,
     });
+    const products = rawProducts.filter((p) => isDryContainerProduct(String(p.name || ""), String(p.default_code || "")));
     const productIds = products.map((p) => Number(p.id));
     if (!productIds.length) {
       return { ok: true, products: 0, quants: 0, upserted: 0, message: "Odoo no devolvió productos DRY." };
@@ -169,12 +182,14 @@ export class OdooImportService {
     });
 
     const purchaseHits = await this.attachPurchaseRefs([...seen]);
+    const originHits = await this.attachIntakeOrigins([...seen]);
+    const fabricationHits = await this.attachFabricationLineage([...seen]);
 
     await this.audit.log({
       user,
       action: "odoo_lot_sync",
       entity: "OdooLotCandidate",
-      after: { products: products.length, quants: quants.length, upserted, purchaseHits },
+      after: { products: products.length, quants: quants.length, upserted, purchaseHits, originHits, fabricationHits },
       ip,
     });
 
@@ -183,6 +198,8 @@ export class OdooImportService {
       `Listo. ${seen.size} lotes a la mano (existencias internas) cargados en ZDRY.`,
       incomplete ? `${incomplete} ficha(s) sin tara/color/DUA en Odoo.` : "Fichas locales listas: abre una para editar.",
       purchaseHits ? `${purchaseHits} lote(s) con OC/factura referenciada.` : "",
+      originHits ? `${originHits} lote(s) con origen (ajuste/OC/MO) clasificado.` : "",
+      fabricationHits ? `${fabricationHits} lote(s) con precursor de fabricación.` : "",
       isoReview ? `${isoReview} serial(es) por revisar ISO.` : "",
       "Odoo solo se escribe cuando guardas un cambio.",
     ]
@@ -196,6 +213,8 @@ export class OdooImportService {
       upserted,
       incomplete,
       isoReview,
+      originHits,
+      fabricationHits,
       message,
     };
   }
@@ -204,8 +223,16 @@ export class OdooImportService {
     if (!ids?.length) throw new BadRequestException("Elige al menos un lote.");
     const out: { iso: string; created: boolean; isoReview: boolean }[] = [];
     for (const id of ids) {
-      const cand = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
+      let cand = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
       if (!cand) throw new NotFoundException("Candidato no encontrado.");
+      if (!cand.odooIntakeKind) {
+        await this.attachIntakeOrigins([cand.odooLotId]);
+        cand = (await this.prisma.odooLotCandidate.findUnique({ where: { id } })) || cand;
+      }
+      if (cand.odooIntakeKind === "fabrication" && !cand.odooSourceLotId) {
+        await this.attachFabricationLineage([cand.odooLotId]);
+        cand = (await this.prisma.odooLotCandidate.findUnique({ where: { id } })) || cand;
+      }
       out.push(await this.assimilateOne(cand, user, ip));
     }
     return { ok: true, items: out };
@@ -233,6 +260,16 @@ export class OdooImportService {
       odooVendorName?: string | null;
       odooBillName?: string | null;
       odooUnitPrice?: Prisma.Decimal | number | null;
+      odooIntakeKind?: string | null;
+      odooPickingName?: string | null;
+      costSource?: string | null;
+      odooMoName?: string | null;
+      odooSourceLotId?: number | null;
+      odooSourceProductCode?: string | null;
+      odooSourceProductName?: string | null;
+      odooSourceIntakeKind?: string | null;
+      odooSourcePoName?: string | null;
+      odooSourceUnitPrice?: Prisma.Decimal | number | null;
       qtyOnHand: number;
       payload?: unknown;
       zdryType?: string | null;
@@ -245,13 +282,27 @@ export class OdooImportService {
     const iso = isoInfo.isoNormalized;
     if (!iso) throw new BadRequestException("Ese lote no tiene serial.");
 
+    const plan = assimilateCostPlan({
+      odooIntakeKind: cand.odooIntakeKind,
+      odooUnitPrice: cand.odooUnitPrice != null ? Number(cand.odooUnitPrice) : null,
+      odooBillName: cand.odooBillName,
+      odooPoName: cand.odooPoName,
+    });
+
     const existing = await this.prisma.container.findUnique({ where: { iso } });
     if (existing) {
       await this.prisma.odooLotCandidate.update({
         where: { id: cand.id },
-        data: { status: "assimilated", containerIso: existing.iso, assimilatedAt: new Date() },
+        data: {
+          status: "assimilated",
+          containerIso: existing.iso,
+          assimilatedAt: new Date(),
+          odooIntakeKind: plan.odooIntakeKind,
+          costSource: plan.costSource,
+          odooPickingName: cand.odooPickingName,
+        },
       });
-      await this.fillEmptyFromOdoo(iso, cand);
+      await this.fillEmptyFromOdoo(iso, { ...cand, ...plan });
       return { iso, created: false, isoReview: !isoInfo.iso6346Ok || existing.isoException };
     }
 
@@ -283,22 +334,32 @@ export class OdooImportService {
           tareKg: mapped.tareKg,
           mgwKg: mapped.mgwKg,
           payloadKg: mapped.payloadKg,
-          intakeType: "pendiente_factura",
-          invoicePending: true,
+          intakeType: plan.intakeType,
+          invoicePending: plan.invoicePending,
           physicallyReceived: true,
           physicalStatus: "en_patio",
-          fobCif: 0,
+          fobCif: plan.fobCif,
           isoException: isoInfo.isoException,
           isoExceptionReason: isoInfo.isoException ? "Serial Odoo no cumple ISO 6346 — revisar en campo" : null,
           intakeOrigin: "odoo",
           odooLotId: cand.odooLotId,
           odooLocation: cand.locationName,
           odooDua: cand.dua,
-          odooPoName: cand.odooPoName,
-          odooPoId: cand.odooPoId,
-          odooVendorName: cand.odooVendorName,
-          odooBillName: cand.odooBillName,
-          odooUnitPrice: cand.odooUnitPrice,
+          odooPoName: plan.odooIntakeKind === "purchase" ? cand.odooPoName : null,
+          odooPoId: plan.odooIntakeKind === "purchase" ? cand.odooPoId : null,
+          odooVendorName: plan.odooIntakeKind === "purchase" ? cand.odooVendorName : null,
+          odooBillName: plan.odooIntakeKind === "purchase" ? cand.odooBillName : null,
+          odooUnitPrice: plan.odooIntakeKind === "purchase" ? cand.odooUnitPrice : null,
+          odooIntakeKind: plan.odooIntakeKind,
+          odooPickingName: cand.odooPickingName,
+          costSource: plan.costSource,
+          odooMoName: plan.odooIntakeKind === "fabrication" ? cand.odooMoName || cand.odooPickingName : null,
+          odooSourceLotId: plan.odooIntakeKind === "fabrication" ? cand.odooSourceLotId : null,
+          odooSourceProductCode: plan.odooIntakeKind === "fabrication" ? cand.odooSourceProductCode : null,
+          odooSourceProductName: plan.odooIntakeKind === "fabrication" ? cand.odooSourceProductName : null,
+          odooSourceIntakeKind: plan.odooIntakeKind === "fabrication" ? cand.odooSourceIntakeKind : null,
+          odooSourcePoName: plan.odooIntakeKind === "fabrication" ? cand.odooSourcePoName : null,
+          odooSourceUnitPrice: plan.odooIntakeKind === "fabrication" ? cand.odooSourceUnitPrice : null,
           originCountry: cand.originCountry,
           odooSource: source as Prisma.InputJsonValue,
           inspectionNotes: mapped.notes,
@@ -311,12 +372,23 @@ export class OdooImportService {
         data: {
           iso,
           type: "Integración Odoo",
-          detail: `Asimilado desde Odoo lote ${cand.odooLotId} (${cand.serialRaw}). Almacén: ${cand.locationName || "—"}. ${isoInfo.isoException ? "ISO 6346 pendiente de revisión." : "ISO 6346 válido."} Regularizar fotos y datos en Recepción.`,
+          detail: `Asimilado desde Odoo lote ${cand.odooLotId} (${cand.serialRaw}). Origen ${plan.odooIntakeKind}${cand.odooPickingName ? ` · ${cand.odooPickingName}` : ""}${
+            plan.odooIntakeKind === "fabrication" && cand.odooSourceProductCode
+              ? `. Antes [${cand.odooSourceProductCode}]${cand.odooSourceIntakeKind ? ` por ${cand.odooSourceIntakeKind}` : ""}${cand.odooSourcePoName ? ` ${cand.odooSourcePoName}` : ""}`
+              : ""
+          }. Costo ${plan.costSource}${plan.fobCif ? ` USD ${plan.fobCif}` : ""}. Almacén: ${cand.locationName || "—"}. ${isoInfo.isoException ? "ISO 6346 pendiente de revisión." : "ISO 6346 válido."} Regularizar fotos y datos en Recepción.`,
         },
       });
       await tx.odooLotCandidate.update({
         where: { id: cand.id },
-        data: { status: "assimilated", containerIso: iso, assimilatedAt: new Date() },
+        data: {
+          status: "assimilated",
+          containerIso: iso,
+          assimilatedAt: new Date(),
+          odooIntakeKind: plan.odooIntakeKind,
+          costSource: plan.costSource,
+          odooPickingName: cand.odooPickingName,
+        },
       });
     });
 
@@ -325,7 +397,7 @@ export class OdooImportService {
       action: "odoo_assimilate",
       entity: "Container",
       entityId: iso,
-      after: { odooLotId: cand.odooLotId, isoException: isoInfo.isoException, depot: depot.name },
+      after: { odooLotId: cand.odooLotId, isoException: isoInfo.isoException, depot: depot.name, odooIntakeKind: plan.odooIntakeKind, costSource: plan.costSource },
       ip,
     });
     return { iso, created: true, isoReview: isoInfo.isoException };
@@ -348,8 +420,10 @@ export class OdooImportService {
         return [f, last?.status === "pending" ? "deferred" : last?.status === "error" ? "error" : row.odooSyncStatus || "live"];
       }),
     );
+    const dryReferential = await presentDryReferential(this.prisma);
     return {
       ...row,
+      dryReferential,
       fieldStatus,
       odooFields: ODOO_OWNED_FIELDS.map((key) => ({
         key,
@@ -655,8 +729,259 @@ export class OdooImportService {
     return hits;
   }
 
+  private async attachIntakeOrigins(lotIds: number[]) {
+    if (!lotIds.length) return 0;
+    let factsByLot = new Map<number, LotMoveFact[]>();
+    try {
+      factsByLot = await this.loadMoveFacts(lotIds);
+    } catch {
+      factsByLot = new Map();
+    }
+    const cands = await this.prisma.odooLotCandidate.findMany({
+      where: { odooLotId: { in: lotIds } },
+      select: { odooLotId: true, odooPoName: true, containerIso: true },
+    });
+    let hits = 0;
+    for (const cand of cands) {
+      const facts = factsByLot.get(cand.odooLotId);
+      const origin = facts?.length
+        ? classifyLotOrigin(facts)
+        : {
+            odooIntakeKind: (cand.odooPoName ? "purchase" : "unknown") as "purchase" | "unknown",
+            odooPickingName: null as string | null,
+            purchaseName: cand.odooPoName || null,
+            costSource: (cand.odooPoName ? "oc" : "none") as "oc" | "none",
+            odooMoName: null as string | null,
+          };
+      const originData = {
+        odooIntakeKind: origin.odooIntakeKind,
+        odooPickingName: origin.odooPickingName,
+        costSource: origin.costSource,
+        odooMoName: origin.odooMoName,
+        ...(origin.purchaseName && !cand.odooPoName ? { odooPoName: origin.purchaseName } : {}),
+      };
+      await this.prisma.odooLotCandidate.updateMany({
+        where: { odooLotId: cand.odooLotId },
+        data: originData,
+      });
+      if (cand.containerIso) {
+        await this.prisma.container.updateMany({
+          where: { iso: cand.containerIso },
+          data: originData,
+        });
+      }
+      hits += 1;
+    }
+    return hits;
+  }
+
+  private async attachFabricationLineage(lotIds: number[]) {
+    if (!lotIds.length) return 0;
+    const cands = await this.prisma.odooLotCandidate.findMany({
+      where: { odooLotId: { in: lotIds }, odooIntakeKind: "fabrication" },
+      select: {
+        odooLotId: true,
+        serialRaw: true,
+        isoNormalized: true,
+        productCode: true,
+        containerIso: true,
+        odooMoName: true,
+        odooPickingName: true,
+      },
+    });
+    if (!cands.length) return 0;
+    let hits = 0;
+    for (const cand of cands) {
+      try {
+        const lineage = await this.reconstructPrecursor(cand);
+        if (!lineage) continue;
+        const data = {
+          odooMoName: lineage.odooMoName || cand.odooMoName || cand.odooPickingName,
+          odooSourceLotId: lineage.odooSourceLotId,
+          odooSourceProductCode: lineage.odooSourceProductCode,
+          odooSourceProductName: lineage.odooSourceProductName,
+          odooSourceIntakeKind: lineage.odooSourceIntakeKind,
+          odooSourcePoName: lineage.odooSourcePoName,
+          odooSourceUnitPrice: lineage.odooSourceUnitPrice,
+        };
+        await this.prisma.odooLotCandidate.updateMany({
+          where: { odooLotId: cand.odooLotId },
+          data,
+        });
+        if (cand.containerIso) {
+          await this.prisma.container.updateMany({
+            where: { iso: cand.containerIso },
+            data,
+          });
+        }
+        hits += 1;
+      } catch {
+        /* precursor off-hand is best-effort; the finished lot stays classified as fabrication */
+      }
+    }
+    return hits;
+  }
+
+  private async reconstructPrecursor(cand: {
+    odooLotId: number;
+    serialRaw: string;
+    isoNormalized: string;
+    productCode: string;
+    odooMoName?: string | null;
+    odooPickingName?: string | null;
+  }) {
+    const raw = String(cand.serialRaw || cand.isoNormalized || "").trim();
+    if (!raw) return null;
+    const compact = raw.replace(/-/g, "");
+    const lots = await this.odoo.searchRead(
+      "stock.lot",
+      ["&", ["id", "!=", cand.odooLotId], "|", ["name", "=", raw], ["name", "=", compact]],
+      ["id", "name", "product_id"],
+      { limit: 20 },
+    );
+    if (!lots.length) return null;
+    const productIds = [...new Set(lots.map((l) => this.relId(l.product_id)).filter((n): n is number => n > 0))];
+    const products = productIds.length
+      ? await this.odoo.searchRead(
+          "product.product",
+          [["id", "in", productIds]],
+          ["id", "default_code", "name", "display_name"],
+          { limit: productIds.length },
+        )
+      : [];
+    const productMap = new Map(products.map((p) => [Number(p.id), p]));
+    const siblings = lots
+      .map((lot) => {
+        const productId = this.relId(lot.product_id);
+        const product = productMap.get(productId);
+        const fromLabel = splitOdooProductLabel(this.relName(lot.product_id) || this.str(product?.display_name));
+        const code = String(product?.default_code || fromLabel.code || "").trim();
+        const name = String(product?.name || fromLabel.name || "").trim();
+        return { lotId: Number(lot.id), productId, code, name };
+      })
+      .filter((s) => s.lotId && s.code && s.code !== cand.productCode);
+    const precursor = siblings[0];
+    if (!precursor) return null;
+
+    let sourceKind: string | null = null;
+    let sourcePo: string | null = null;
+    let sourcePrice: number | null = null;
+    try {
+      const facts = await this.loadMoveFacts([precursor.lotId]);
+      const origin = classifyLotOrigin(facts.get(precursor.lotId) || []);
+      sourceKind = origin.odooIntakeKind;
+      sourcePo = origin.purchaseName;
+      if (origin.odooIntakeKind === "purchase") {
+        const refs = await this.resolvePurchaseRefs([precursor.lotId]);
+        const ref = refs.get(precursor.lotId);
+        if (ref) {
+          sourcePo = ref.odooPoName || sourcePo;
+          sourcePrice = ref.odooUnitPrice != null ? Number(ref.odooUnitPrice) : null;
+        }
+      }
+    } catch {
+      /* keep product identity even if moves fail */
+    }
+
+    return {
+      odooMoName: cand.odooMoName || cand.odooPickingName || null,
+      odooSourceLotId: precursor.lotId,
+      odooSourceProductCode: precursor.code || null,
+      odooSourceProductName: precursor.name || null,
+      odooSourceIntakeKind: sourceKind,
+      odooSourcePoName: sourcePo,
+      odooSourceUnitPrice: sourcePrice,
+    };
+  }
+
+  private async loadMoveFacts(lotIds: number[]): Promise<Map<number, LotMoveFact[]>> {
+    const out = new Map<number, LotMoveFact[]>();
+    const moveLines = await this.odoo.searchRead(
+      "stock.move.line",
+      [["lot_id", "in", lotIds]],
+      ["lot_id", "move_id", "picking_id", "location_id", "location_dest_id", "state", "reference"],
+      { limit: 4000 },
+    );
+    const moveIds = [...new Set(moveLines.map((l) => this.relId(l.move_id)).filter((n): n is number => n > 0))];
+    const moves = moveIds.length
+      ? await this.odoo.searchRead(
+          "stock.move",
+          [["id", "in", moveIds]],
+          ["id", "picking_id", "purchase_line_id", "location_id", "location_dest_id", "origin", "reference", "state"],
+          { limit: moveIds.length },
+        )
+      : [];
+    const moveMap = new Map(moves.map((m) => [Number(m.id), m]));
+    const pickingIds = [
+      ...new Set(
+        [...moveLines.map((l) => this.relId(l.picking_id)), ...moves.map((m) => this.relId(m.picking_id))].filter(
+          (n): n is number => n > 0,
+        ),
+      ),
+    ];
+    const pickings = pickingIds.length
+      ? await this.odoo.searchRead(
+          "stock.picking",
+          [["id", "in", pickingIds]],
+          ["id", "name", "origin", "purchase_id", "picking_type_code", "state"],
+          { limit: pickingIds.length },
+        )
+      : [];
+    const pickMap = new Map(pickings.map((p) => [Number(p.id), p]));
+    const locIds = [
+      ...new Set(
+        [
+          ...moveLines.flatMap((l) => [this.relId(l.location_id), this.relId(l.location_dest_id)]),
+          ...moves.flatMap((m) => [this.relId(m.location_id), this.relId(m.location_dest_id)]),
+        ].filter((n): n is number => n > 0),
+      ),
+    ];
+    const locations = locIds.length
+      ? await this.odoo.searchRead("stock.location", [["id", "in", locIds]], ["id", "name", "complete_name", "usage"], {
+          limit: locIds.length,
+        })
+      : [];
+    const locMap = new Map(locations.map((l) => [Number(l.id), l]));
+    const locName = (id: number) => {
+      const loc = locMap.get(id);
+      return loc ? String(loc.complete_name || loc.name || "") : "";
+    };
+    const locUsage = (id: number) => {
+      const loc = locMap.get(id);
+      return loc ? String(loc.usage || "") : "";
+    };
+
+    for (const line of moveLines) {
+      const lotId = this.relId(line.lot_id);
+      if (!lotId) continue;
+      const move = moveMap.get(this.relId(line.move_id));
+      const pick = pickMap.get(this.relId(line.picking_id) || this.relId(move?.picking_id));
+      const srcId = this.relId(move?.location_id) || this.relId(line.location_id);
+      const destId = this.relId(move?.location_dest_id) || this.relId(line.location_dest_id);
+      const fact: LotMoveFact = {
+        state: String(move?.state || line.state || ""),
+        origin: move?.origin ? String(move.origin) : null,
+        reference: String(move?.reference || line.reference || pick?.name || ""),
+        pickingCode: pick ? String(pick.picking_type_code || "") : null,
+        pickingState: pick ? String(pick.state || "") : null,
+        pickingName: pick ? String(pick.name || "") : null,
+        purchaseId: this.relId(pick?.purchase_id) || null,
+        purchaseName: this.relName(pick?.purchase_id) || null,
+        purchaseLineId: this.relId(move?.purchase_line_id) || null,
+        srcUsage: locUsage(srcId) || null,
+        destUsage: locUsage(destId) || null,
+        srcName: locName(srcId) || null,
+        destName: locName(destId) || null,
+      };
+      const list = out.get(lotId) || [];
+      list.push(fact);
+      out.set(lotId, list);
+    }
+    return out;
+  }
+
   private async resolvePurchaseRefs(lotIds: number[]): Promise<Map<number, OdooPurchaseRef>> {
-    const out = new Map<number, OdooPurchaseRef>();
+    let out = new Map<number, OdooPurchaseRef>();
     const cands = await this.prisma.odooLotCandidate.findMany({
       where: { odooLotId: { in: lotIds } },
       select: { odooLotId: true, isoNormalized: true },
@@ -667,117 +992,154 @@ export class OdooImportService {
       const moveLines = await this.odoo.searchRead(
         "stock.move.line",
         [["lot_id", "in", lotIds]],
-        ["lot_id", "move_id"],
-        { limit: 2000 },
+        ["lot_id", "move_id", "picking_id"],
+        { limit: 4000 },
       );
-      const moveIds = [...new Set(moveLines.map((l) => this.relId(l.move_id)).filter((n): n is number => n > 0))];
+      const lineLots = moveLines
+        .map((l) => ({ lotId: this.relId(l.lot_id), moveId: this.relId(l.move_id), pickingId: this.relId(l.picking_id) }))
+        .filter((l) => l.lotId && l.moveId);
+      const moveIds = [...new Set(lineLots.map((l) => l.moveId))];
+      const pickingIds = [...new Set(lineLots.map((l) => l.pickingId).filter(Boolean))];
       if (moveIds.length) {
         const moves = await this.odoo.searchRead(
           "stock.move",
-          [["id", "in", moveIds], ["purchase_line_id", "!=", false]],
-          ["id", "purchase_line_id"],
+          [["id", "in", moveIds]],
+          ["id", "purchase_line_id", "picking_id"],
           { limit: moveIds.length },
         );
+        const pickings = pickingIds.length
+          ? await this.odoo.searchRead(
+              "stock.picking",
+              [["id", "in", pickingIds]],
+              ["id", "purchase_id", "origin"],
+              { limit: pickingIds.length },
+            )
+          : [];
+        const pickMap = new Map(pickings.map((p) => [Number(p.id), p]));
         const plIds = [...new Set(moves.map((m) => this.relId(m.purchase_line_id)).filter((n): n is number => n > 0))];
-        if (plIds.length) {
-          const polines = await this.odoo.searchRead(
-            "purchase.order.line",
-            [["id", "in", plIds]],
-            ["id", "order_id", "price_unit"],
-            { limit: plIds.length },
+        const poIdsFromPick = [
+          ...new Set(pickings.map((p) => this.relId(p.purchase_id)).filter((n): n is number => n > 0)),
+        ];
+        const polines = plIds.length
+          ? await this.odoo.searchRead(
+              "purchase.order.line",
+              [["id", "in", plIds]],
+              ["id", "order_id", "price_unit"],
+              { limit: plIds.length },
+            )
+          : [];
+        const orderIds = [
+          ...new Set([
+            ...polines.map((p) => this.relId(p.order_id)),
+            ...poIdsFromPick,
+          ].filter((n): n is number => n > 0)),
+        ];
+        const orders = orderIds.length
+          ? await this.odoo.searchRead(
+              "purchase.order",
+              [["id", "in", orderIds]],
+              ["id", "name", "partner_id", "invoice_ids"],
+              { limit: orderIds.length },
+            )
+          : [];
+        const orderMap = new Map(orders.map((o) => [Number(o.id), o]));
+        const bills = await this.billsByOrders(orders);
+        const pricedByOrder = await this.pricedUnitByOrders(orderIds);
+        const refByMoveId = new Map<number, OdooPurchaseRef>();
+        for (const m of moves) {
+          const pl = polines.find((p) => Number(p.id) === this.relId(m.purchase_line_id));
+          const pick = pickMap.get(this.relId(m.picking_id));
+          const order = orderMap.get(this.relId(pl?.order_id) || this.relId(pick?.purchase_id) || 0);
+          if (!order) continue;
+          const oid = Number(order.id);
+          refByMoveId.set(
+            Number(m.id),
+            purchaseRefFromOrder({
+              poId: oid,
+              poName: String(order.name || ""),
+              vendorName: this.relName(order.partner_id),
+              billName: bills.get(oid) || null,
+              unitPrice: Number(pl?.price_unit) || pricedByOrder.get(oid) || null,
+            }),
           );
-          const orderIds = [...new Set(polines.map((p) => this.relId(p.order_id)).filter((n): n is number => n > 0))];
-          const orders = orderIds.length
-            ? await this.odoo.searchRead(
-                "purchase.order",
-                [["id", "in", orderIds]],
-                ["id", "name", "partner_id", "invoice_ids"],
-                { limit: orderIds.length },
-              )
-            : [];
-          const orderMap = new Map(orders.map((o) => [Number(o.id), o]));
-          const bills = await this.billsByOrders(orders);
-          const moveToLot = new Map<number, number>();
-          for (const l of moveLines) {
-            const mid = this.relId(l.move_id);
-            const lid = this.relId(l.lot_id);
-            if (mid && lid) moveToLot.set(mid, lid);
-          }
-          for (const m of moves) {
-            const lotId = moveToLot.get(Number(m.id));
-            const pl = polines.find((p) => Number(p.id) === this.relId(m.purchase_line_id));
-            const order = orderMap.get(this.relId(pl?.order_id) || 0);
-            if (!lotId || !order) continue;
-            out.set(
-              lotId,
-              purchaseRefFromOrder({
-                poId: Number(order.id),
-                poName: String(order.name || ""),
-                vendorName: this.relName(order.partner_id),
-                billName: bills.get(Number(order.id)) || null,
-                unitPrice: Number(pl?.price_unit) || null,
-              }),
-            );
-          }
         }
+        out = assignRefsBySharedMove(lineLots, refByMoveId);
       }
     } catch {
       /* sigue con el texto de la OC */
     }
 
     try {
-      const noteLines = await this.odoo.searchRead(
-        "purchase.order.line",
-        [["name", "ilike", "//"]],
-        ["id", "order_id", "name", "price_unit"],
-        { limit: 400 },
-      );
+      let noteLines: Record<string, unknown>[] = [];
+      try {
+        noteLines = await this.odoo.searchRead(
+          "purchase.order.line",
+          ["|", ["name", "ilike", "//"], ["display_type", "=", "line_note"]],
+          ["id", "order_id", "name", "price_unit"],
+          { limit: 800 },
+        );
+      } catch {
+        noteLines = await this.odoo.searchRead(
+          "purchase.order.line",
+          [["name", "ilike", "//"]],
+          ["id", "order_id", "name", "price_unit"],
+          { limit: 800 },
+        );
+      }
       const orderIds = [...new Set(noteLines.map((l) => this.relId(l.order_id)).filter((n): n is number => n > 0))];
       if (!orderIds.length) return out;
-      const priced = await this.odoo.searchRead(
-        "purchase.order.line",
-        [
-          ["order_id", "in", orderIds],
-          ["product_id", "!=", false],
-          ["price_unit", ">", 0],
-        ],
-        ["order_id", "price_unit"],
-        { limit: 400 },
-      );
-      const priceByOrder = new Map<number, number>();
-      for (const l of priced) {
-        const oid = this.relId(l.order_id);
-        if (oid && !priceByOrder.has(oid)) priceByOrder.set(oid, Number(l.price_unit) || 0);
-      }
+      const pricedByOrder = await this.pricedUnitByOrders(orderIds);
       const orders = await this.odoo.searchRead(
         "purchase.order",
         [["id", "in", orderIds]],
         ["id", "name", "partner_id", "invoice_ids"],
         { limit: orderIds.length },
       );
-      const orderMap = new Map(orders.map((o) => [Number(o.id), o]));
       const bills = await this.billsByOrders(orders);
-      for (const line of noteLines) {
-        const isos = parseSerialsFromPoText(String(line.name || ""));
-        const oid = this.relId(line.order_id);
-        const po = orderMap.get(oid || 0);
-        if (!po || !isos.length) continue;
-        const ref = purchaseRefFromOrder({
-          poId: oid,
-          poName: String(po.name || this.relName(line.order_id) || ""),
-          vendorName: this.relName(po.partner_id),
-          billName: bills.get(oid || 0) || null,
-          unitPrice: priceByOrder.get(oid || 0) || Number(line.price_unit) || null,
-        });
-        for (const iso of isos) {
-          const lotId = byIso.get(iso);
-          if (lotId && !out.has(lotId)) out.set(lotId, ref);
-        }
+      const refByOrder = new Map<number, OdooPurchaseRef>();
+      for (const po of orders) {
+        const oid = Number(po.id);
+        refByOrder.set(
+          oid,
+          purchaseRefFromOrder({
+            poId: oid,
+            poName: String(po.name || ""),
+            vendorName: this.relName(po.partner_id),
+            billName: bills.get(oid) || null,
+            unitPrice: pricedByOrder.get(oid) || null,
+          }),
+        );
       }
+      out = applySerialTextRefs(
+        noteLines.map((l) => ({ name: String(l.name || ""), orderId: this.relId(l.order_id) })),
+        byIso,
+        refByOrder,
+        out,
+      );
     } catch {
       /* sin OC en texto */
     }
     return out;
+  }
+
+  private async pricedUnitByOrders(orderIds: number[]) {
+    const priceByOrder = new Map<number, number>();
+    if (!orderIds.length) return priceByOrder;
+    const priced = await this.odoo.searchRead(
+      "purchase.order.line",
+      [
+        ["order_id", "in", orderIds],
+        ["product_id", "!=", false],
+        ["price_unit", ">", 0],
+      ],
+      ["order_id", "price_unit"],
+      { limit: 800 },
+    );
+    for (const l of priced) {
+      const oid = this.relId(l.order_id);
+      if (oid && !priceByOrder.has(oid)) priceByOrder.set(oid, Number(l.price_unit) || 0);
+    }
+    return priceByOrder;
   }
 
   private async billsByOrders(orders: Record<string, unknown>[]) {
@@ -1094,6 +1456,19 @@ export class OdooImportService {
       material?: string | null;
       zgroupCode?: string | null;
       payload?: unknown;
+      odooIntakeKind?: string | null;
+      odooPickingName?: string | null;
+      costSource?: string | null;
+      odooMoName?: string | null;
+      odooSourceLotId?: number | null;
+      odooSourceProductCode?: string | null;
+      odooSourceProductName?: string | null;
+      odooSourceIntakeKind?: string | null;
+      odooSourcePoName?: string | null;
+      odooSourceUnitPrice?: Prisma.Decimal | number | null;
+      fobCif?: number | null;
+      intakeType?: string | null;
+      invoicePending?: boolean;
     },
   ) {
     const c = await this.prisma.container.findUnique({ where: { iso } });
@@ -1105,6 +1480,21 @@ export class OdooImportService {
       odooLotId: c.odooLotId || cand.odooLotId || undefined,
       intakeOrigin: c.intakeOrigin === "manual" ? "odoo" : c.intakeOrigin,
     };
+    if (!c.odooIntakeKind && cand.odooIntakeKind) data.odooIntakeKind = cand.odooIntakeKind;
+    if (!c.odooPickingName && cand.odooPickingName) data.odooPickingName = cand.odooPickingName;
+    if (!c.costSource && cand.costSource) data.costSource = cand.costSource;
+    if (!c.odooMoName && cand.odooMoName) data.odooMoName = cand.odooMoName;
+    if (!c.odooSourceLotId && cand.odooSourceLotId) data.odooSourceLotId = cand.odooSourceLotId;
+    if (!c.odooSourceProductCode && cand.odooSourceProductCode) data.odooSourceProductCode = cand.odooSourceProductCode;
+    if (!c.odooSourceProductName && cand.odooSourceProductName) data.odooSourceProductName = cand.odooSourceProductName;
+    if (!c.odooSourceIntakeKind && cand.odooSourceIntakeKind) data.odooSourceIntakeKind = cand.odooSourceIntakeKind;
+    if (!c.odooSourcePoName && cand.odooSourcePoName) data.odooSourcePoName = cand.odooSourcePoName;
+    if (c.odooSourceUnitPrice == null && cand.odooSourceUnitPrice != null) data.odooSourceUnitPrice = cand.odooSourceUnitPrice;
+    if ((!c.fobCif || Number(c.fobCif) === 0) && cand.fobCif && cand.fobCif > 0) data.fobCif = cand.fobCif;
+    if (c.intakeType === "pendiente_factura" && cand.intakeType && cand.intakeType !== "pendiente_factura") {
+      data.intakeType = cand.intakeType;
+      if (cand.invoicePending !== undefined) data.invoicePending = cand.invoicePending;
+    }
     if (!c.odooLocation && cand.locationName) data.odooLocation = cand.locationName;
     if (!c.odooDua && cand.dua) data.odooDua = cand.dua;
     if (!c.originCountry && cand.originCountry) data.originCountry = cand.originCountry;

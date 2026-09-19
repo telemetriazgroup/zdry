@@ -408,6 +408,8 @@ export function intakeTypeLabel(intakeType: string): string {
         compra: "Compra",
         almacenaje_cliente: "Almacenaje de cliente",
         pendiente_factura: "Compra (factura pendiente)",
+        ajuste_odoo: "Ajuste Odoo (referencial)",
+        fabricacion_odoo: "Fabricación Odoo (MO)",
       } as Record<string, string>
     )[intakeType] || intakeType || "—"
   );

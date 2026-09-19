@@ -270,6 +270,14 @@ export class PurchasesService {
         intakeOrigin: "odoo",
         ...(await this.prisma.liveContainers()),
         status: { not: "Vendido" },
+        NOT: [
+          { odooIntakeKind: "adjustment" },
+          { odooIntakeKind: "fabrication" },
+          { intakeType: "ajuste_odoo" },
+          { intakeType: "fabricacion_odoo" },
+          { costSource: "referential" },
+          { costSource: "mo" },
+        ],
       },
       include: { depot: { select: { name: true } }, purchaseInvoice: { select: { id: true, number: true } } },
       orderBy: { iso: "asc" },
@@ -303,6 +311,19 @@ export class PurchasesService {
     });
     if (units.length !== isos.length) {
       throw new BadRequestException("Solo se enlazan unidades asimiladas desde Odoo y no archivadas.");
+    }
+    if (
+      units.some(
+        (u) =>
+          u.odooIntakeKind === "adjustment" ||
+          u.odooIntakeKind === "fabrication" ||
+          u.intakeType === "ajuste_odoo" ||
+          u.intakeType === "fabricacion_odoo" ||
+          u.costSource === "referential" ||
+          u.costSource === "mo",
+      )
+    ) {
+      throw new BadRequestException("Un ajuste o una fabricación no genera factura ZDRY.");
     }
 
     let invoice = input.invoiceId

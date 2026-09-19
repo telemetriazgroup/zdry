@@ -130,6 +130,16 @@ model Container {
   odooVendorName     String?
   odooBillName       String?
   odooUnitPrice      Decimal?            @db.Decimal(12, 2)
+  odooIntakeKind     String?
+  odooPickingName    String?
+  costSource         String?
+  odooMoName         String?
+  odooSourceLotId    Int?
+  odooSourceProductCode String?
+  odooSourceProductName String?
+  odooSourceIntakeKind String?
+  odooSourcePoName   String?
+  odooSourceUnitPrice Decimal? @db.Decimal(12, 2)
   originCountry      String?
   conditionFloor     String?
   conditionRoof      String?
@@ -545,6 +555,16 @@ model OdooLotCandidate {
   odooVendorName String?
   odooBillName   String?
   odooUnitPrice  Decimal?  @db.Decimal(12, 2)
+  odooIntakeKind String?
+  odooPickingName String?
+  costSource     String?
+  odooMoName     String?
+  odooSourceLotId Int?
+  odooSourceProductCode String?
+  odooSourceProductName String?
+  odooSourceIntakeKind String?
+  odooSourcePoName String?
+  odooSourceUnitPrice Decimal? @db.Decimal(12, 2)
   originCountry  String?
   material       String?
   zgroupCode     String?

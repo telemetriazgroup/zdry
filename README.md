@@ -1,8 +1,10 @@
 # ZDRY — El supermercado de contenedores
 
-Sistema operativo de venta y alquiler de contenedores. Plan: [`proyecto_zdry.md`](proyecto_zdry.md).
+Sistema operativo de venta y alquiler de contenedores. Plan de producto: [`proyecto_zdry.md`](proyecto_zdry.md).
 
 **Cierre comercial:** comprobante + validación humana → Odoo. Sin SUNAT ni pasarela.
+
+**Plan conjunto Odoo + ZDRY (fases J1–J6, siguiente = J1):** [`docs/fases_conjunto/README.md`](docs/fases_conjunto/README.md).
 
 ## Arranque
 

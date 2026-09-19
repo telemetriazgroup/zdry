@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, apiUrl } from "../api.js";
+import { costLabel, originBadge } from "../odoo-origin.js";
 
 function SyncIcon({ status, compact }) {
   const s = status || "live";
@@ -152,6 +153,7 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
             </div>
             <div className="odoo-sheet-meta">
               {row.iso6346Ok ? <span className="badge-scope" style={{ background: "#2f9e44" }}>ISO OK</span> : <span className="badge-scope" style={{ background: "#c92a2a" }}>Por revisar</span>}
+              <span className="badge-scope" style={{ background: originBadge(row).color }}>{originBadge(row).label}</span>
               <div>Cantidad a la mano: <b>{row.qtyOnHand || 0}</b></div>
               <div>Ubicación: <b>{row.locationName || "—"}</b></div>
               <div>Estado: <b>{row.status === "assimilated" ? `En ZDRY · ${row.containerIso}` : row.status}</b></div>
@@ -171,6 +173,77 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
               </label>
             ))}
           </div>
+
+          <h4>Origen y costo <small>trazabilidad Odoo: ajuste, OC o fabricación. Un ajuste o una MO no inventa factura ZDRY.</small></h4>
+          <div className="odoo-form">
+            <label>
+              <span>Origen</span>
+              <input readOnly value={originBadge(row).label} />
+            </label>
+            <label>
+              <span>Albarán / movimiento</span>
+              <input readOnly value={row.odooPickingName || "—"} />
+            </label>
+            <label>
+              <span>Fuente de costo</span>
+              <input
+                readOnly
+                value={
+                  row.costSource === "oc"
+                    ? "OC / factura"
+                    : row.costSource === "referential"
+                      ? "Referencial DRY"
+                      : row.costSource === "mo"
+                        ? "MO / referencial DRY"
+                        : "Sin costo"
+                }
+              />
+            </label>
+            <label>
+              <span>Costo a usar</span>
+              <input readOnly value={costLabel(row, row.dryReferential)} />
+            </label>
+          </div>
+
+          {row.odooIntakeKind === "fabrication" ? (
+            <>
+              <h4>Precursor <small>mismo serial, otro producto. No se crea una segunda unidad vendible.</small></h4>
+              <div className="odoo-form">
+                <label>
+                  <span>Orden de fabricación</span>
+                  <input readOnly value={row.odooMoName || row.odooPickingName || "—"} />
+                </label>
+                <label>
+                  <span>Era</span>
+                  <input
+                    readOnly
+                    value={
+                      row.odooSourceProductCode
+                        ? `[${row.odooSourceProductCode}] ${row.odooSourceProductName || ""}`.trim()
+                        : "—"
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Origen del precursor</span>
+                  <input
+                    readOnly
+                    value={
+                      row.odooSourceIntakeKind === "purchase"
+                        ? row.odooSourcePoName || "OC"
+                        : row.odooSourceIntakeKind === "adjustment"
+                          ? "Ajuste"
+                          : row.odooSourceIntakeKind || "—"
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Lote precursor Odoo</span>
+                  <input readOnly value={row.odooSourceLotId != null ? String(row.odooSourceLotId) : "—"} />
+                </label>
+              </div>
+            </>
+          ) : null}
 
           <h4>Compras Odoo <small>referencia de OC / factura; Compras enlaza la deuda. No se inventa factura al asimilar.</small></h4>
           <div className="odoo-form">

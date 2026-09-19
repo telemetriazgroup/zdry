@@ -24,6 +24,40 @@ export function parseSerialsFromPoText(text: string): string[] {
   return out;
 }
 
+/** Un stock.move con N seriales: todos heredan la misma OC/precio. */
+export function assignRefsBySharedMove(
+  lines: Array<{ lotId: number; moveId: number }>,
+  refByMoveId: Map<number, OdooPurchaseRef>,
+): Map<number, OdooPurchaseRef> {
+  const out = new Map<number, OdooPurchaseRef>();
+  for (const line of lines) {
+    const lotId = Number(line.lotId);
+    const ref = refByMoveId.get(Number(line.moveId));
+    if (!lotId || !ref?.odooPoName) continue;
+    out.set(lotId, ref);
+  }
+  return out;
+}
+
+export function applySerialTextRefs(
+  noteLines: Array<{ name?: string | null; orderId?: number | null }>,
+  byIso: Map<string, number>,
+  refByOrder: Map<number, OdooPurchaseRef>,
+  existing: Map<number, OdooPurchaseRef> = new Map(),
+): Map<number, OdooPurchaseRef> {
+  const out = new Map(existing);
+  for (const line of noteLines) {
+    const oid = Number(line.orderId) || 0;
+    const ref = refByOrder.get(oid);
+    if (!ref?.odooPoName) continue;
+    for (const iso of parseSerialsFromPoText(String(line.name || ""))) {
+      const lotId = byIso.get(iso);
+      if (lotId && !out.has(lotId)) out.set(lotId, ref);
+    }
+  }
+  return out;
+}
+
 export function purchaseRefFromOrder(input: {
   poId?: number | null;
   poName?: string | null;

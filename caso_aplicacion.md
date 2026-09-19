@@ -1,0 +1,14 @@
+# contexto
+
+se tiene como objetivo integrar equipos contenedores DRY que estan en odoo , e ingresarlos masivamente 
+
+ya en un anterior proyecto hice la consulta de clientes en el modulo contactos , y fue exitoso , en el module .enb tengo estos datos que me seirvieron para la conexion 
+ODOO_URL=
+ODOO_DB=
+ODOO_USER=
+ODOO_API_KEY=
+
+
+entonces teniendo en cuenta que  ya tenemos acceso a la API de odoo se requiere que se cargara esa informacion de los dry disponibles para caragr con su serial a nuestro sistema si es posible con sus caracteristicas y dejara pendiente informacion como las fotos que se requiera , y entender que estos contenedores dry estas disponibles para cargar fotos y mostrarse en la web de ventas . dejando en deuda aun las facturas que lo relacionaa que se deben de cargar con las ordenes de compras y relacionarlas 
+
+te envio un grupo de imagenes donde estan la infromacion que se quiere consumir  , se hace click en el numero de serie de cada contenedor dry ejemplo "INKU252806-7" y nos muestra una interfaz donde estan sus datos y un grupo de imagenes ya cargados en notas , y una opcion de ingresar a compras para ver la orden de compra que da origen al producto , entonces la idea es consumir toda esta informacion y relacionarala en el sistema interno , e ir validando de froma progresiva , los datos de ese producyo , la orden d ecompra y tener toda esa infromacion en nuestro sistema y si hay alguna modificacion con respecto a esos productos solo tener en cuenta la diferencia y no ir caragando de forma periodica los datos para evitara saturar odoo , la idea es ir asimilando uno por uno esos dispositivos a la mano , tenerlo todo los equipos asimilados en la interfaz de recepcion en pendientes dado a que muchos aun no tienen foto y si viene de una integracion esta pendiente de recibir aprobacion de publicar en la web para vender , un apartado importante cuando se asimilien los productos con el codigo de serie y toda la infromaicon , adaptar la informacion a los acampos de odoo , se debe tener un campo de evaluacion donde permita cargar la infromacion de lista de condiciones en el que esta el dry PISO (bueno , regular , malo) , TECHO (bueno , regular , malo)  , PUERTAS (bueno , regular , malo) , pintura (Buena , regular ,mala) , esta infro es netamente adminsitrativa y no  se muestra en la web publica para el cliente tiene criterio para evaluar el precio que se va a vender y que en configuracion el sistema permita poener una imagen como marca de agua a las imagen que s evan a apublicar en la web para su venta una vez que se procese para publicar , ningun dato es bloqueante para crear un contendor dry pendiente solo el codigo 

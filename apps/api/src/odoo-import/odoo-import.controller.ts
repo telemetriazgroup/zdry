@@ -16,6 +16,12 @@ export class OdooImportController {
     return this.svc.probe();
   }
 
+  @Get("referential")
+  @Roles("superadmin", "admin")
+  referential() {
+    return this.svc.referential();
+  }
+
   @Get("candidates")
   candidates(@Query("status") status?: string) {
     return this.svc.list(status);

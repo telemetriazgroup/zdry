@@ -94,13 +94,15 @@ export function damFormatOk(dam: string): boolean {
   return DAM_REGEX.test(String(dam || "").trim());
 }
 
+export const OWN_SALE_INTAKE_TYPES = ["compra", "pendiente_factura", "ajuste_odoo", "fabricacion_odoo"] as const;
+
 export function requiresNationalization(intakeType: string): boolean {
   return intakeType === "compra" || intakeType === "pendiente_factura";
 }
 
-/** Stock propio de ZDRY (compra facturada o reentrega aún sin factura). No es custodia de cliente. */
+/** Stock propio de ZDRY (compra, reentrega sin factura o ajuste Odoo). No es custodia de cliente. */
 export function isOwnSaleStock(intakeType: string | null | undefined): boolean {
-  return intakeType === "compra" || intakeType === "pendiente_factura";
+  return (OWN_SALE_INTAKE_TYPES as readonly string[]).includes(intakeType || "");
 }
 
 export function isNationalized(intakeType: string, damNumber: string | null | undefined): boolean {

@@ -9,6 +9,8 @@ import { AuditService } from "../audit/audit.service";
 import { LayoutRules, normalizeLayoutRules } from "../domain/yard";
 import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
 import { ACQUISITION_REFS_KEY, DEFAULT_ACQUISITION_REFS, effectiveAcquisitionRefs, normalizeAcquisitionRefs } from "../domain/pricing";
+import { DRY_REFERENTIAL_KEY, normalizeDryReferential } from "../domain/dry-referential";
+import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { EvaluationService } from "../evaluation/evaluation.service";
 import { ACTIVE_MASTER } from "../domain/masters";
 
@@ -17,6 +19,7 @@ export const CONFIG_SECTIONS = [
   { id: "watermark", title: "Marca de agua del catálogo", blurb: "Logo que se repite sobre las fotos públicas. Si no subes uno, se usa zg_marca.png." },
   { id: "visibility", title: "Visibilidad de precios", blurb: "Reglas jerárquicas global → tipo → fabricante → unidad." },
   { id: "acquisition-refs", title: "Costos de referencia", blurb: "Base USD por tipo y condición para calcular la lista (neto + margen)." },
+  { id: "dry-referential", title: "Precio referencial DRY", blurb: "Costo que usa un DRY que entró por ajuste o por fabricación (MO), sin OC del SKU actual." },
   { id: "freight", title: "Tarifario de fletes", blurb: "Zonas, terrenos, márgenes min/rec/premium, vehículos." },
   { id: "rentals", title: "Reglas de alquiler", blurb: "Depreciación, márgenes, descuento por plazo y riesgo A–D." },
   { id: "providers", title: "Proveedores", blurb: "Lectura; el alta vive en Personas." },
@@ -44,7 +47,7 @@ export class ConfigController {
     return {
       sections: CONFIG_SECTIONS.map((s) => ({
         ...s,
-        status: ["catalog-copy", "watermark", "yard-columns", "visibility", "acquisition-refs", "commercial-services", "depot-services", "evaluation"].includes(s.id)
+        status: ["catalog-copy", "watermark", "yard-columns", "visibility", "acquisition-refs", "dry-referential", "commercial-services", "depot-services", "evaluation"].includes(s.id)
           ? ("live" as const)
           : s.id === "freight"
             ? ("partial" as const)
@@ -164,6 +167,34 @@ export class ConfigController {
     });
     await this.audit.log({ user, action: "update", entity: "AppSetting", entityId: ACQUISITION_REFS_KEY, after: { count: refs.length }, ip: req.ip });
     return this.getAcquisitionRefs();
+  }
+
+  @Get("dry-referential")
+  dryReferential() {
+    return presentDryReferential(this.prisma);
+  }
+
+  @Put("dry-referential")
+  async putDryReferential(
+    @Body() body: { amount?: number | null; windowMonths?: number },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const value = normalizeDryReferential(body);
+    await this.prisma.appSetting.upsert({
+      where: { key: DRY_REFERENTIAL_KEY },
+      update: { value: value as object },
+      create: { key: DRY_REFERENTIAL_KEY, value: value as object },
+    });
+    await this.audit.log({
+      user,
+      action: "update",
+      entity: "AppSetting",
+      entityId: DRY_REFERENTIAL_KEY,
+      after: value as object,
+      ip: req.ip,
+    });
+    return presentDryReferential(this.prisma);
   }
 
   @Get("pricing")

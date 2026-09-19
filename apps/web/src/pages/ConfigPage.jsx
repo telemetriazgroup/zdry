@@ -475,6 +475,7 @@ export default function ConfigPage() {
   const [pricing, setPricing] = useState([]);
   const [refs, setRefs] = useState([]);
   const [refMeta, setRefMeta] = useState({ types: [], categories: [] });
+  const [dryRef, setDryRef] = useState({ amount: "", windowMonths: 24, computed: null, effective: null, sample: 0 });
   const [services, setServices] = useState([]);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
@@ -487,6 +488,15 @@ export default function ConfigPage() {
     api("/config/acquisition-refs").then((d) => {
       setRefs(d.refs || []);
       setRefMeta({ types: d.types || [], categories: d.categories || [] });
+    }).catch(() => {});
+    api("/config/dry-referential").then((d) => {
+      setDryRef({
+        amount: d.amount ?? "",
+        windowMonths: d.windowMonths || 24,
+        computed: d.computed,
+        effective: d.effective,
+        sample: d.sample || 0,
+      });
     }).catch(() => {});
     api("/config/commercial-services").then(setServices).catch(() => {});
   }, []);
@@ -519,6 +529,29 @@ export default function ConfigPage() {
       const out = await api("/config/pricing", { method: "PUT", body: { rules: pricing } });
       setPricing(out);
       setSaved("✓ Reglas de precio actualizadas. Las unidades nuevas las usan al cotizar.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function saveDryRef() {
+    setSaved("");
+    try {
+      const out = await api("/config/dry-referential", {
+        method: "PUT",
+        body: {
+          amount: dryRef.amount === "" || dryRef.amount == null ? null : Number(dryRef.amount),
+          windowMonths: Number(dryRef.windowMonths) || 24,
+        },
+      });
+      setDryRef({
+        amount: out.amount ?? "",
+        windowMonths: out.windowMonths || 24,
+        computed: out.computed,
+        effective: out.effective,
+        sample: out.sample || 0,
+      });
+      setSaved("✓ Precio referencial DRY guardado. Los ajustes de inventario lo usan como costo.");
     } catch (e) {
       setError(e.message);
     }
@@ -625,6 +658,41 @@ export default function ConfigPage() {
             Añadir referencia
           </button>
           <button className="btn-primary" type="button" onClick={saveRefs}>Guardar referencias</button>
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 18 }}>
+        <h3>Precio referencial DRY (ajustes de inventario)</h3>
+        <p className="section-sub">
+          Costo que usa un contenedor DRY que entró a Odoo por ajuste, sin OC. Si dejas el monto vacío se usa el
+          promedio de precios de OC/factura DRY ({dryRef.sample} lote(s)
+          {dryRef.computed != null ? ` · promedio USD ${Number(dryRef.computed).toLocaleString("en-US")}` : ""}).
+          Vigente: {dryRef.effective != null ? `USD ${Number(dryRef.effective).toLocaleString("en-US")}` : "sin dato aún — busca en Odoo primero"}.
+        </p>
+        <div className="form-grid">
+          <div>
+            <label>Monto admin USD (opcional)</label>
+            <input
+              type="number"
+              min="0"
+              placeholder={dryRef.computed != null ? String(dryRef.computed) : "Automático"}
+              value={dryRef.amount}
+              onChange={(e) => setDryRef({ ...dryRef, amount: e.target.value })}
+            />
+          </div>
+          <div>
+            <label>Ventana (meses)</label>
+            <input
+              type="number"
+              min="1"
+              max="120"
+              value={dryRef.windowMonths}
+              onChange={(e) => setDryRef({ ...dryRef, windowMonths: e.target.value })}
+            />
+          </div>
+        </div>
+        <div className="action-row">
+          <button className="btn-primary" type="button" onClick={saveDryRef}>Guardar referencial DRY</button>
         </div>
       </div>
 

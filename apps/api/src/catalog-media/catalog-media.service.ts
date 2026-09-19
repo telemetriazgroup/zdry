@@ -33,6 +33,7 @@ import {
   type PricingRule,
 } from "../domain/pricing";
 import { EvaluationService } from "../evaluation/evaluation.service";
+import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
 
 const ACTIVE_PHOTOS = { where: { status: PHOTO_STATUS_ACTIVE } };
@@ -65,7 +66,7 @@ export class CatalogMediaService {
     const rows = await this.prisma.container.findMany({
       where: {
         ...(await this.prisma.liveContainers()),
-        intakeType: { in: ["compra", "pendiente_factura"] },
+        intakeType: { in: ["compra", "pendiente_factura", "ajuste_odoo", "fabricacion_odoo"] },
         status: { in: ["Disponible", "Reservado", "Pendiente de ingreso"] },
         OR: [{ physicallyReceived: true }, { lado: { not: null } }],
       },
@@ -469,12 +470,28 @@ export class CatalogMediaService {
     this.assertApprover(user);
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c || c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
-    const [pricing, vis, refs] = await Promise.all([this.loadPricing(), this.loadVisibility(), this.loadAcquisitionRefs()]);
+    const [pricing, vis, refs, dry] = await Promise.all([
+      this.loadPricing(),
+      this.loadVisibility(),
+      this.loadAcquisitionRefs(),
+      presentDryReferential(this.prisma),
+    ]);
+    const unit = {
+      iso: c.iso,
+      type: c.type,
+      cat: c.cat,
+      manufacturer: c.manufacturer,
+      fobCif: Number(c.fobCif),
+      costSource: c.costSource,
+      dryReferential: dry.effective,
+      depotId: c.depotId,
+      status: c.status,
+    };
     let priceList = c.priceList != null ? Number(c.priceList) : null;
     let priceMin = c.priceMin != null ? Number(c.priceMin) : null;
     if (priceList == null || priceMin == null) {
       const computed = computeListPrices(
-        { iso: c.iso, type: c.type, cat: c.cat, manufacturer: c.manufacturer, fobCif: Number(c.fobCif) },
+        unit,
         pricing,
         refs,
       );
@@ -486,7 +503,7 @@ export class CatalogMediaService {
       });
     }
     const offer = describeOffer(
-      { iso: c.iso, type: c.type, cat: c.cat, manufacturer: c.manufacturer, fobCif: Number(c.fobCif), depotId: c.depotId, status: c.status },
+      unit,
       pricing,
       vis,
       {
@@ -535,8 +552,21 @@ export class CatalogMediaService {
     this.assertApprover(user);
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c || c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
-    const [pricing, vis, refs] = await Promise.all([this.loadPricing(), this.loadVisibility(), this.loadAcquisitionRefs()]);
-    const unit = { iso: c.iso, type: c.type, cat: c.cat, manufacturer: c.manufacturer, fobCif: Number(c.fobCif) };
+    const [pricing, vis, refs, dry] = await Promise.all([
+      this.loadPricing(),
+      this.loadVisibility(),
+      this.loadAcquisitionRefs(),
+      presentDryReferential(this.prisma),
+    ]);
+    const unit = {
+      iso: c.iso,
+      type: c.type,
+      cat: c.cat,
+      manufacturer: c.manufacturer,
+      fobCif: Number(c.fobCif),
+      costSource: c.costSource,
+      dryReferential: dry.effective,
+    };
     const computed = computeListPrices(unit, pricing, refs);
     let priceList = computed.priceList;
     let priceMin = computed.priceMin;

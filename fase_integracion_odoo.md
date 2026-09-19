@@ -85,20 +85,25 @@ Ambiente de las capturas = test. Producción es otra URL/BD (superadmin).
 
 ## Fase 6 — Operación continua
 
-- Botón “Buscar diferencias”: lotes nuevos + deltas en campos vacíos.
-- Si deja de estar a la mano en Odoo: aviso, no borrar ni mover patio.
-- Auditoría de quién asimiló y qué se regularizó.
+**Absorbida por el plan conjunto J2 + J6** (`docs/fases_conjunto/`). No implementar un cron ciego aquí.
+
+- J2: Odoo empuja eventos DRY; ZDRY no compara todos los módulos cada minuto.
+- J6: aviso “ya no a la mano”, recálculo de referencial, E2E.
+
+El botón “Buscar en Odoo” queda como **forzar**, no como camino diario.
 
 ---
 
-## Orden de trabajo
+## Orden de trabajo (lectura F0–F5)
 
 | Fase | Estado |
 |---|---|
-| 0 Conexión | En esta entrega |
-| 1 Bandeja candidatos | En esta entrega |
-| 2 Asimilar + regularizar en Recepción | En esta entrega |
-| 3 Ficha + fotos + write-back | En esta entrega |
-| 4 OC / factura | En esta entrega |
-| 5 Evaluación + watermark | En esta entrega |
-| 6 Delta continuo | Pendiente (sync manual ya cubre el primer delta) |
+| 0 Conexión | Hecha |
+| 1 Bandeja candidatos | Hecha |
+| 2 Asimilar + regularizar en Recepción | Hecha |
+| 3 Ficha + fotos + write-back | Hecha |
+| 4 OC / factura | Hecha |
+| 5 Evaluación + watermark | Hecha |
+| 6 Delta continuo | **Superseded** → [docs/fases_conjunto](docs/fases_conjunto/README.md) J2/J6 |
+
+**Siguiente desarrollo:** J1 origen + precio referencial.
