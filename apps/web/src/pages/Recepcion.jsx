@@ -168,6 +168,7 @@ export default function Recepcion() {
   const [pendingQ, setPendingQ] = useState("");
   const [pendingPage, setPendingPage] = useState(1);
   const [odooPhotos, setOdooPhotos] = useState([]);
+  const [odooNotes, setOdooNotes] = useState([]);
   const [pickedAtt, setPickedAtt] = useState(null);
   const [assigning, setAssigning] = useState(false);
   const [visits, setVisits] = useState([]);
@@ -210,6 +211,7 @@ export default function Recepcion() {
     if (!inspectIso) {
       setUnit(null);
       setOdooPhotos([]);
+      setOdooNotes([]);
       setPickedAtt(null);
       return;
     }
@@ -236,11 +238,15 @@ export default function Recepcion() {
   useEffect(() => {
     if (!canCoord || !(unit?.odooLotId || unit?.hasOdooChatter)) {
       setOdooPhotos([]);
+      setOdooNotes([]);
       return;
     }
     api(`/warehouse/units/${unit.iso}/odoo-photos`)
       .then(setOdooPhotos)
       .catch(() => setOdooPhotos([]));
+    api(`/warehouse/units/${unit.iso}/odoo-notes`)
+      .then(setOdooNotes)
+      .catch(() => setOdooNotes([]));
   }, [canCoord, unit?.iso, unit?.odooLotId, unit?.hasOdooChatter]);
 
   useEffect(() => {
@@ -1223,6 +1229,23 @@ export default function Recepcion() {
         </div>
         {canCoord && (unit.intakeOrigin === "odoo" || unit.hasOdooChatter) ? (
           <div className="panel odoo-web-photos">
+            <h3>Notas de Odoo</h3>
+            <p className="section-sub">Chatter del lote. Informativo; no se edita en ZDRY.</p>
+            {!odooNotes.length ? (
+              <p className="section-sub">Este lote no tiene notas en Odoo, o el chatter no las devolvió.</p>
+            ) : (
+              <ul className="odoo-note-list">
+                {odooNotes.map((n) => (
+                  <li key={n.id} className="odoo-note">
+                    <div className="odoo-note-meta">
+                      {n.author || "Odoo"}
+                      {n.date ? ` · ${new Date(n.date.includes("T") ? n.date : `${n.date.replace(" ", "T")}Z`).toLocaleString("es-PE")}` : ""}
+                    </div>
+                    <div className="odoo-note-body">{n.body}</div>
+                  </li>
+                ))}
+              </ul>
+            )}
             <h3>Fotos de Odoo (catálogo web)</h3>
             <p className="section-sub">
               Elige una foto y asígnala a una casilla, o toma otra con la cámara. Estas imágenes quedan para la venta en la web.

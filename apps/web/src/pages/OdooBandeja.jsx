@@ -131,7 +131,8 @@ export default function OdooBandeja() {
     <>
       <h2 className="section-title">Odoo — regularizar DRY</h2>
       <p className="section-sub">
-        «Buscar en Odoo» baja lotes DRY a la mano y clasifica si entraron por <b>ajuste</b>, <b>OC/IN</b> o <b>fabricación (MO)</b>.
+        El puente J2 aplica cambios de Odoo solos (tara, IN, OC). «Buscar en Odoo» es un <b>forzar</b> completo.
+        Clasifica si entraron por <b>ajuste</b>, <b>OC/IN</b> o <b>fabricación (MO)</b>.
         Un ajuste o una MO no inventa factura; usa el precio referencial
         {referential?.effective != null ? ` (USD ${Number(referential.effective).toLocaleString("en-US")})` : ""}.
       </p>
@@ -157,6 +158,14 @@ export default function OdooBandeja() {
           onClick={() => run("Buscando en Odoo", () => api("/odoo-import/sync", { method: "POST" }))}
         >
           Buscar en Odoo
+        </button>
+        <button
+          className="btn-ghost"
+          type="button"
+          disabled={!!busy}
+          onClick={() => run("Leyendo eventos", () => api("/odoo-import/events/poll", { method: "POST" }))}
+        >
+          Leer eventos
         </button>
         <button className="btn-ghost" type="button" disabled={!!busy || !pickable.length} onClick={toggleSelectAll}>
           {allPickableSelected ? "Quitar selección" : `Seleccionar todo (${pickable.length}, excepto por revisar)`}

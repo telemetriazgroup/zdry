@@ -61,6 +61,7 @@ services:
       ODOO_DB: ${ODOO_DB:-}
       ODOO_USER: ${ODOO_USER:-}
       ODOO_API_KEY: ${ODOO_API_KEY:-}
+      ODOO_ZDRY_WEBHOOK_SECRET: ${ODOO_ZDRY_WEBHOOK_SECRET:-}
       API_PORT: "3003"
       COOKIE_PATH: /zdry
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:28080}

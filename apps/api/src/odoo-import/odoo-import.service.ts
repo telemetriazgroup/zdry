@@ -21,8 +21,11 @@ import {
   readLotAttrs,
   titleFromLocation,
   coerceOdooWriteValue,
+  odooWriteKeys,
+  matchOdooSelect,
+  ODOO_LOT_SELECT_FALLBACK,
 } from "../domain/odoo-lot-map";
-import { listOdooLotPhotos, openOdooLotPhoto } from "../odoo/odoo-lot-photos";
+import { listOdooLotChatter, listOdooLotNotes, openOdooLotPhoto } from "../odoo/odoo-lot-photos";
 import { applySerialTextRefs, assignRefsBySharedMove, purchaseRefFromOrder, type OdooPurchaseRef } from "../domain/odoo-purchase";
 import {
   assimilateCostPlan,
@@ -32,8 +35,12 @@ import {
   type LotMoveFact,
 } from "../domain/odoo-origin";
 import { presentDryReferential } from "./dry-referential.store";
+import { ExpedienteStore } from "../odoo-events/expediente.store";
 
 const DRY_DOMAIN = [["name", "ilike", "contenedor dry"]];
+const ODOO_LOT_SELECTS_KEY = "odoo_lot_selects";
+
+type LotSelects = { color: Array<[string, string]>; year: Array<[string, string]>; fetchedAt?: string };
 
 @Injectable()
 export class OdooImportService {
@@ -41,7 +48,11 @@ export class OdooImportService {
     private readonly prisma: PrismaService,
     private readonly odoo: OdooClient,
     private readonly audit: AuditService,
-  ) {}
+  ) {
+    this.expediente = new ExpedienteStore(prisma);
+  }
+
+  private readonly expediente: ExpedienteStore;
 
   probe() {
     return this.odoo.probe();
@@ -49,6 +60,34 @@ export class OdooImportService {
 
   referential() {
     return presentDryReferential(this.prisma);
+  }
+
+  async lotSelects(opts: { refresh?: boolean } = {}): Promise<LotSelects> {
+    if (!opts.refresh) {
+      const row = await this.prisma.appSetting.findUnique({ where: { key: ODOO_LOT_SELECTS_KEY } });
+      const cached = row?.value && typeof row.value === "object" && !Array.isArray(row.value) ? (row.value as LotSelects) : null;
+      if (cached?.color?.length && cached?.year?.length) return cached;
+    }
+    try {
+      const fields = await this.odoo.fieldsGet("stock.lot");
+      const color = (fields.color?.selection || []).map(([k, l]) => [String(k), String(l)] as [string, string]);
+      const year = (fields.building_year?.selection || []).map(([k, l]) => [String(k), String(l)] as [string, string]);
+      const out: LotSelects = { color, year, fetchedAt: new Date().toISOString() };
+      if (color.length && year.length) {
+        await this.prisma.appSetting.upsert({
+          where: { key: ODOO_LOT_SELECTS_KEY },
+          create: { key: ODOO_LOT_SELECTS_KEY, value: out as Prisma.InputJsonValue },
+          update: { value: out as Prisma.InputJsonValue },
+        });
+        return out;
+      }
+    } catch {
+      /* cache or fallback */
+    }
+    const row = await this.prisma.appSetting.findUnique({ where: { key: ODOO_LOT_SELECTS_KEY } });
+    const cached = row?.value && typeof row.value === "object" && !Array.isArray(row.value) ? (row.value as LotSelects) : null;
+    if (cached?.color?.length && cached?.year?.length) return cached;
+    return { ...ODOO_LOT_SELECT_FALLBACK };
   }
 
   async list(status?: string) {
@@ -65,6 +104,7 @@ export class OdooImportService {
   async sync(user: AuthUser, ip?: string) {
     const probe = await this.odoo.probe();
     if (!probe.ok) throw new BadRequestException(probe.message);
+    await this.lotSelects({ refresh: true }).catch(() => undefined);
 
     const rawProducts = await this.odoo.searchRead("product.product", DRY_DOMAIN, ["id", "name", "default_code", "categ_id"], {
       limit: 400,
@@ -193,6 +233,26 @@ export class OdooImportService {
       ip,
     });
 
+    const toBackfill = await this.prisma.odooLotCandidate.findMany({
+      where: { odooLotId: { in: [...seen] } },
+      select: {
+        id: true,
+        isoNormalized: true,
+        containerIso: true,
+        odooPoId: true,
+        odooPoName: true,
+        odooVendorName: true,
+        odooBillName: true,
+        odooUnitPrice: true,
+        odooPickingName: true,
+        odooMoName: true,
+        odooIntakeKind: true,
+        odooSourceProductCode: true,
+        odooSourceLotId: true,
+      },
+    });
+    for (const cand of toBackfill) await this.expediente.backfillCandidate(cand);
+
     const isoReview = await this.prisma.odooLotCandidate.count({ where: { status: "pending", iso6346Ok: false } });
     const message = [
       `Listo. ${seen.size} lotes a la mano (existencias internas) cargados en ZDRY.`,
@@ -236,6 +296,48 @@ export class OdooImportService {
       out.push(await this.assimilateOne(cand, user, ip));
     }
     return { ok: true, items: out };
+  }
+
+  async expedienteOf(id: string) {
+    const cand = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
+    if (!cand) throw new NotFoundException("Candidato no encontrado.");
+    await this.expediente.backfillCandidate(cand);
+    await this.pullOdooNotes(cand).catch(() => undefined);
+    return this.expediente.present(cand.isoNormalized);
+  }
+
+  async addExpedienteNote(id: string, body: string, user: AuthUser) {
+    const cand = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
+    if (!cand) throw new NotFoundException("Candidato no encontrado.");
+    const note = await this.expediente.addZdryNote(cand.isoNormalized, body, user.name, {
+      candidateId: cand.id,
+      containerIso: cand.containerIso,
+    });
+    if (!note) throw new BadRequestException("Escribe una nota.");
+    return this.expediente.present(cand.isoNormalized);
+  }
+
+  async refreshByKeys(input: { isos?: string[]; lotIds?: number[] }) {
+    const lotIds = [...new Set((input.lotIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0))];
+    const isos = [
+      ...new Set((input.isos || []).map((s) => inspectOdooIso(String(s)).isoNormalized).filter(Boolean)),
+    ];
+    if (!lotIds.length && !isos.length) return { refreshed: 0 };
+    const cands = await this.prisma.odooLotCandidate.findMany({
+      where: {
+        OR: [
+          ...(lotIds.length ? [{ odooLotId: { in: lotIds } }] : []),
+          ...(isos.length ? [{ isoNormalized: { in: isos } }] : []),
+        ],
+      },
+      select: { odooLotId: true },
+    });
+    const ids = [...new Set(cands.map((c) => c.odooLotId))];
+    if (!ids.length) return { refreshed: 0 };
+    await this.attachPurchaseRefs(ids);
+    await this.attachIntakeOrigins(ids);
+    await this.attachFabricationLineage(ids);
+    return { refreshed: ids.length };
   }
 
   private async assimilateOne(
@@ -303,6 +405,7 @@ export class OdooImportService {
         },
       });
       await this.fillEmptyFromOdoo(iso, { ...cand, ...plan });
+      await this.pullOdooNotes({ ...cand, containerIso: existing.iso }).catch(() => undefined);
       return { iso, created: false, isoReview: !isoInfo.iso6346Ok || existing.isoException };
     }
 
@@ -392,6 +495,7 @@ export class OdooImportService {
       });
     });
 
+    await this.pullOdooNotes({ ...cand, containerIso: iso }).catch(() => undefined);
     await this.audit.log({
       user,
       action: "odoo_assimilate",
@@ -407,7 +511,10 @@ export class OdooImportService {
     if (opts.refresh) await this.refreshCandidateFromOdoo(id);
     const row = await this.prisma.odooLotCandidate.findUnique({
       where: { id },
-      include: { writebacks: { orderBy: { createdAt: "desc" }, take: 20 } },
+      include: {
+        writebacks: { orderBy: { createdAt: "desc" }, take: 20 },
+        conflicts: { where: { status: "pending" }, orderBy: { createdAt: "desc" }, take: 20 },
+      },
     });
     if (!row) throw new NotFoundException("Candidato no encontrado.");
     const [types, cats] = await Promise.all([
@@ -421,14 +528,21 @@ export class OdooImportService {
       }),
     );
     const dryReferential = await presentDryReferential(this.prisma);
+    const lotSelects = await this.lotSelects().catch(() => ({ ...ODOO_LOT_SELECT_FALLBACK }));
+    const odooNotes = await this.pullOdooNotes(row).catch(() => []);
     return {
       ...row,
+      color: matchOdooSelect(row.color, lotSelects.color) || row.color,
+      year: matchOdooSelect(row.year, lotSelects.year) || row.year,
+      lotSelects,
+      odooNotes,
       dryReferential,
       fieldStatus,
       odooFields: ODOO_OWNED_FIELDS.map((key) => ({
         key,
         label: ODOO_OWNED_LABELS[key],
-        value: row[key],
+        value: key === "color" ? (matchOdooSelect(row.color, lotSelects.color) || row.color) : key === "year" ? (matchOdooSelect(row.year, lotSelects.year) || row.year) : row[key],
+        options: key === "color" ? lotSelects.color : key === "year" ? lotSelects.year : undefined,
         sync: fieldStatus[key],
       })),
       types: types.map((t) => ({ code: t.code, label: t.label })),
@@ -475,6 +589,26 @@ export class OdooImportService {
     }
 
     await this.prisma.odooLotCandidate.update({ where: { id }, data });
+
+    if (changedOwned.length) {
+      const after = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
+      const iso = after?.isoNormalized || row.isoNormalized;
+      for (const field of changedOwned) {
+        await this.prisma.unitTimeline.create({
+          data: {
+            isoNormalized: iso,
+            candidateId: id,
+            containerIso: after?.containerIso || row.containerIso,
+            field,
+            before: row[field as "color"] == null ? null : String(row[field as "color"]),
+            after: after?.[field as "color"] == null ? null : String(after[field as "color"]),
+            source: "zdry",
+            event: "ficha_save",
+            applied: true,
+          },
+        });
+      }
+    }
 
     for (const field of changedOwned) {
       const value = (await this.prisma.odooLotCandidate.findUnique({ where: { id } }))?.[field as "color"];
@@ -556,23 +690,25 @@ export class OdooImportService {
       const values: Record<string, unknown> = {};
       for (const job of jobs) {
         if (!isOdooOwnedField(job.field)) continue;
-        const odooKey = storedMap[job.field]?.find((k) => k && !/^enable_/i.test(k)) || pickFieldByLabel(fields, ODOO_OWNED_NEEDLES[job.field]);
-        if (!odooKey) {
+        const keys = odooWriteKeys(job.field, storedMap[job.field], fields);
+        if (!keys.length) {
           await this.prisma.odooFieldWriteback.update({
             where: { id: job.id },
             data: { status: "error", lastError: `Odoo no tiene campo ${job.field}`, attempts: { increment: 1 } },
           });
           continue;
         }
-        const meta = fields[odooKey] || {};
-        values[odooKey] = coerceOdooWriteValue(meta.type, job.value, meta.selection);
+        for (const odooKey of keys) {
+          const meta = fields[odooKey] || {};
+          values[odooKey] = coerceOdooWriteValue(meta.type, job.value, meta.selection);
+        }
       }
       try {
         if (Object.keys(values).length) {
-          await this.odoo.write("stock.lot", [cand.odooLotId], values);
+          await this.odoo.write("stock.lot", [cand.odooLotId], values, { context: { zdry_sync: true } });
         }
         for (const job of jobs) {
-          if (!isOdooOwnedField(job.field) || !pickFieldByLabel(fields, ODOO_OWNED_NEEDLES[job.field])) continue;
+          if (!isOdooOwnedField(job.field) || !odooWriteKeys(job.field, storedMap[job.field], fields).length) continue;
           await this.prisma.odooFieldWriteback.update({
             where: { id: job.id },
             data: { status: "sent", sentAt: new Date(), lastError: null, attempts: { increment: 1 } },
@@ -604,7 +740,26 @@ export class OdooImportService {
   async listPhotos(id: string) {
     const row = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
     if (!row) throw new NotFoundException("Candidato no encontrado.");
-    return listOdooLotPhotos(this.odoo, row.odooLotId);
+    const chatter = await listOdooLotChatter(this.odoo, row.odooLotId);
+    await this.expediente.importOdooNotes(row.isoNormalized, chatter.notes, {
+      candidateId: row.id,
+      containerIso: row.containerIso,
+    });
+    return chatter.photos;
+  }
+
+  private async pullOdooNotes(cand: {
+    id: string;
+    isoNormalized: string;
+    containerIso?: string | null;
+    odooLotId: number;
+  }) {
+    const notes = await listOdooLotNotes(this.odoo, cand.odooLotId);
+    await this.expediente.importOdooNotes(cand.isoNormalized, notes, {
+      candidateId: cand.id,
+      containerIso: cand.containerIso,
+    });
+    return notes;
   }
 
   async openPhoto(id: string, attId: string) {

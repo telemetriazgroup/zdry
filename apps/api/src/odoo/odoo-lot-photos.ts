@@ -8,7 +8,51 @@ export type OdooLotPhotoMeta = {
   size: number;
 };
 
-export async function listOdooLotPhotos(odoo: OdooClient, lotId: number): Promise<OdooLotPhotoMeta[]> {
+export type OdooLotNote = {
+  id: number;
+  body: string;
+  author: string | null;
+  date: string | null;
+};
+
+export function stripOdooHtml(html: unknown): string {
+  return String(html || "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export function notesFromMailRecords(rows: Record<string, unknown>[]): OdooLotNote[] {
+  const out: OdooLotNote[] = [];
+  for (const m of rows || []) {
+    const body = stripOdooHtml(m.body);
+    if (!body) continue;
+    const author = Array.isArray(m.author_id) ? String(m.author_id[1] || "").trim() : "";
+    out.push({
+      id: Number(m.id),
+      body: body.slice(0, 4000),
+      author: author || null,
+      date: m.date ? String(m.date) : null,
+    });
+  }
+  return out;
+}
+
+export async function listOdooLotChatter(
+  odoo: OdooClient,
+  lotId: number,
+): Promise<{ photos: OdooLotPhotoMeta[]; notes: OdooLotNote[] }> {
   try {
     const attached = await odoo.searchRead(
       "ir.attachment",
@@ -22,8 +66,8 @@ export async function listOdooLotPhotos(odoo: OdooClient, lotId: number): Promis
         ["model", "=", "stock.lot"],
         ["res_id", "=", lotId],
       ],
-      ["id", "attachment_ids", "date", "author_id", "body"],
-      { limit: 30 },
+      ["id", "attachment_ids", "date", "author_id", "body", "message_type"],
+      { limit: 80, order: "date desc" },
     );
     const extraIds = messages.flatMap((m) => (Array.isArray(m.attachment_ids) ? (m.attachment_ids as number[]) : []));
     const extra = extraIds.length
@@ -32,7 +76,7 @@ export async function listOdooLotPhotos(odoo: OdooClient, lotId: number): Promis
         })
       : [];
     const seen = new Set<number>();
-    return [...attached, ...extra]
+    const photos = [...attached, ...extra]
       .filter((a) => {
         const n = Number(a.id);
         if (seen.has(n)) return false;
@@ -46,9 +90,18 @@ export async function listOdooLotPhotos(odoo: OdooClient, lotId: number): Promis
         mimetype: String(a.mimetype || "image/jpeg"),
         size: Number(a.file_size) || 0,
       }));
+    return { photos, notes: notesFromMailRecords(messages) };
   } catch {
-    return [];
+    return { photos: [], notes: [] };
   }
+}
+
+export async function listOdooLotPhotos(odoo: OdooClient, lotId: number): Promise<OdooLotPhotoMeta[]> {
+  return (await listOdooLotChatter(odoo, lotId)).photos;
+}
+
+export async function listOdooLotNotes(odoo: OdooClient, lotId: number): Promise<OdooLotNote[]> {
+  return (await listOdooLotChatter(odoo, lotId)).notes;
 }
 
 export async function openOdooLotPhoto(odoo: OdooClient, lotId: number, attId: string) {

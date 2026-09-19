@@ -133,7 +133,14 @@ export function pickAllFieldsByLabel(
     }
   }
   const uniq = [...new Set([...exact, ...partial])];
-  return uniq.sort((a, b) => score(a) - score(b));
+  const specificity = (key: string) => {
+    const label = fold(fields[key]?.string || "");
+    const tech = fold(key);
+    let s = score(key) * 10;
+    if (wanted.some((n) => n.includes("kg")) && (label.includes("kg") || tech.includes("kg"))) s += 8;
+    return s;
+  };
+  return uniq.sort((a, b) => specificity(b) - specificity(a));
 }
 
 export function pickFieldByLabel(
@@ -182,6 +189,18 @@ export const ODOO_OWNED_NEEDLES: Record<OdooOwnedField, string[]> = {
   originCountry: ["procedencia", "procedence"],
   material: ["tipo material", "material"],
 };
+
+/** Claves Odoo a escribir: todos los aliases no-enable. Peso: `weight_kg` primero y también `weight`. */
+export function odooWriteKeys(field: OdooOwnedField, mapped: string[] | undefined, fields?: Record<string, { string?: string }>): string[] {
+  const raw = (mapped || []).filter((k) => k && !/^enable_/i.test(k));
+  const fallback = fields ? pickAllFieldsByLabel(fields, ODOO_OWNED_NEEDLES[field]) : [];
+  const keys = [...new Set([...raw, ...fallback])];
+  if (field === "mgwKg") {
+    const kg = keys.filter((k) => /_kg$|weight_kg|peso_kg/i.test(k) || fold(k).includes("kg"));
+    return [...new Set([...kg, ...keys])];
+  }
+  return keys;
+}
 
 export const ODOO_OWNED_LABELS: Record<OdooOwnedField, string> = {
   color: "Color",
@@ -274,6 +293,57 @@ export function readLotAttrs(lot: Record<string, unknown> | undefined, fields: R
   };
 }
 
+export const ODOO_LOT_SELECT_FALLBACK: { color: Array<[string, string]>; year: Array<[string, string]> } = {
+  color: [
+    ["BLANCO", "BLANCO"],
+    ["CREMA", "CREMA"],
+    ["BEIGE", "BEIGE"],
+    ["ARENA", "ARENA"],
+    ["CANELA", "CANELA"],
+    ["TABACO", "TABACO"],
+    ["AMARRILLO", "AMARRILLO"],
+    ["ORO", "ORO"],
+    ["NARANJA", "NARANJA"],
+    ["MARRON", "MARRON"],
+    ["ROSADO", "ROSADO"],
+    ["MELON", "MELON"],
+    ["PETALO", "PETALO"],
+    ["FRESA", "FRESA"],
+    ["FUCSIA", "FUCSIA"],
+    ["ROJO", "ROJO"],
+    ["GUINDA", "GUINDA"],
+    ["VINO", "VINO"],
+    ["LILA", "LILA"],
+    ["VIOLETA", "VIOLETA"],
+    ["ANARANJADO", "ANARANJADO"],
+    ["NEGRO", "NEGRO"],
+    ["BLANCO/AZUL", "BLANCO/AZUL"],
+    ["BLANCO/ROJO", "BLANCO/ROJO"],
+    ["BLANCO/NEGRO", "BLANCO/NEGRO"],
+    ["BLANCO/GRIS", "BLANCO/GRIS"],
+    ["PLOMO", "PLOMO"],
+    ["ROJO OXIDO", "ROJO OXIDO"],
+    ["VERDE", "VERDE"],
+    ["AZUL", "AZUL"],
+    ["CELESTE", "CELESTE"],
+    ["NO DEFINIDO", "NO DEFINIDO"],
+  ],
+  year: [
+    ...Array.from({ length: 67 }, (_, i) => {
+      const y = String(1960 + i);
+      return [y, y] as [string, string];
+    }).filter(([y]) => y !== "1961"),
+    ["NO DEFINE", "NO DEFINE"],
+  ],
+};
+
+export function matchOdooSelect(raw: unknown, options: Array<[string, string]> | undefined): string {
+  const t = String(raw ?? "").trim();
+  if (!t || !options?.length) return "";
+  const hit = options.find(([k, lab]) => k === t || lab === t || fold(k) === fold(t) || fold(lab) === fold(t));
+  return hit ? hit[0] : "";
+}
+
 export function coerceOdooWriteValue(
   type: string | undefined,
   value: unknown,
@@ -298,7 +368,12 @@ export function coerceOdooWriteValue(
     const raw = String(value).trim();
     if (selection?.length) {
       const hit = selection.find(
-        ([k, lab]) => k === raw || lab === raw || k === String(Number(raw)) || fold(lab) === fold(raw),
+        ([k, lab]) =>
+          k === raw ||
+          lab === raw ||
+          k === String(Number(raw)) ||
+          fold(k) === fold(raw) ||
+          fold(lab) === fold(raw),
       );
       if (hit) return hit[0];
     }

@@ -1,9 +1,12 @@
 import {
   coerceOdooWriteValue,
+  matchOdooSelect,
+  ODOO_LOT_SELECT_FALLBACK,
   guessColor,
   inspectOdooIso,
   inferTypeFromProduct,
   mergeFieldCatalog,
+  odooWriteKeys,
   pickFieldByLabel,
   readLotAttrs,
   titleFromLocation,
@@ -73,6 +76,16 @@ describe("odoo-lot-map", () => {
     expect(attrs.material).toBe("ACERO");
     expect(attrs.year).toBeNull();
     expect(attrs.manufacturer).toBeNull();
+  });
+
+  it("al escribir peso usa Peso (Kg) y también Peso", () => {
+    const fields = {
+      weight: { string: "Peso" },
+      weight_kg: { string: "Peso (Kg)" },
+      enable_weight: { string: "Peso" },
+    };
+    expect(pickFieldByLabel(fields, ["peso kg", "peso"])).toBe("weight_kg");
+    expect(odooWriteKeys("mgwKg", ["weight", "weight_kg"], fields)).toEqual(["weight_kg", "weight"]);
   });
 
   it("descubre campos Studio desde ir.model.fields aunque fields_get venga incompleto", () => {
@@ -154,5 +167,10 @@ describe("odoo-lot-map", () => {
     expect(coerceOdooWriteValue("selection", 2011, sel)).toBe("2011");
     expect(coerceOdooWriteValue("char", 2100)).toBe("2100");
     expect(coerceOdooWriteValue("selection", "CREMA", [["CREMA", "CREMA"], ["BEIGE", "BEIGE"]])).toBe("CREMA");
+    expect(coerceOdooWriteValue("selection", "blanco", [["BLANCO", "BLANCO"], ["CREMA", "CREMA"]])).toBe("BLANCO");
+    expect(matchOdooSelect("blanco", [["BLANCO", "BLANCO"], ["CREMA", "CREMA"]])).toBe("BLANCO");
+    expect(matchOdooSelect(2021, [["2021", "2021"], ["NO DEFINE", "NO DEFINE"]])).toBe("2021");
+    expect(matchOdooSelect("CREMA", ODOO_LOT_SELECT_FALLBACK.color)).toBe("CREMA");
+    expect(matchOdooSelect(2021, ODOO_LOT_SELECT_FALLBACK.year)).toBe("2021");
   });
 });

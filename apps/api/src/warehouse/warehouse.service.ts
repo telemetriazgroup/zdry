@@ -58,7 +58,8 @@ import {
 } from "../domain/yard";
 import { PHOTO_STATUS_ACTIVE, PHOTO_STATUS_REJECTED } from "../domain/catalog-media";
 import { OdooClient } from "../odoo/odoo.client";
-import { limaDayRange, listOdooLotPhotos, openOdooLotPhoto } from "../odoo/odoo-lot-photos";
+import { limaDayRange, listOdooLotChatter, listOdooLotNotes, openOdooLotPhoto } from "../odoo/odoo-lot-photos";
+import { ExpedienteStore } from "../odoo-events/expediente.store";
 
 const CAMPO_ODOO_LOCKED = [
   "tareKg",
@@ -110,7 +111,11 @@ export class WarehouseService {
     private readonly locks: YardLockService,
     private readonly odoo: OdooClient,
     private readonly evaluation: EvaluationService,
-  ) {}
+  ) {
+    this.expediente = new ExpedienteStore(prisma);
+  }
+
+  private readonly expediente: ExpedienteStore;
 
   async getLayoutRules(): Promise<LayoutRules> {
     const row = await this.prisma.appSetting.findUnique({ where: { key: LAYOUT_RULES_KEY } });
@@ -540,7 +545,17 @@ export class WarehouseService {
   async listOdooPhotos(iso: string) {
     const c = await this.loadUnit(iso);
     if (!c.odooLotId) return [];
-    return listOdooLotPhotos(this.odoo, c.odooLotId);
+    const chatter = await listOdooLotChatter(this.odoo, c.odooLotId);
+    await this.expediente.importOdooNotes(c.iso, chatter.notes, { containerIso: c.iso });
+    return chatter.photos;
+  }
+
+  async listOdooNotes(iso: string) {
+    const c = await this.loadUnit(iso);
+    if (!c.odooLotId) return [];
+    const notes = await listOdooLotNotes(this.odoo, c.odooLotId);
+    await this.expediente.importOdooNotes(c.iso, notes, { containerIso: c.iso });
+    return notes;
   }
 
   async openOdooPhoto(iso: string, attId: string) {

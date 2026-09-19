@@ -7,5 +7,6 @@ import { OdooImportService } from "./odoo-import.service";
   imports: [OdooModule],
   controllers: [OdooImportController],
   providers: [OdooImportService],
+  exports: [OdooImportService],
 })
 export class OdooImportModule {}

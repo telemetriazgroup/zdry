@@ -582,6 +582,7 @@ model OdooLotCandidate {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   writebacks     OdooFieldWriteback[]
+  conflicts      OdooFieldConflict[]
 
   @@index([isoNormalized])
   @@index([status])
@@ -601,6 +602,92 @@ model OdooFieldWriteback {
   sentAt      DateTime?
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
+
+  @@index([candidateId, status])
+  @@index([status])
+}
+
+model OdooBridgeEvent {
+  id              String    @id @default(uuid())
+  odooEventId     Int?      @unique
+  model           String    @default("")
+  resId           Int       @default(0)
+  iso             String?
+  event           String
+  origin          String    @default("odoo")
+  payload         Json?
+  sourceWriteDate DateTime?
+  action          String
+  reason          String?
+  createdAt       DateTime  @default(now())
+
+  @@index([event, createdAt])
+  @@index([iso])
+}
+
+model UnitTimeline {
+  id             String   @id @default(uuid())
+  isoNormalized  String
+  candidateId    String?
+  containerIso   String?
+  field          String
+  before         String?
+  after          String?
+  source         String
+  event          String?
+  odooEventId    Int?
+  applied        Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  @@index([isoNormalized, createdAt])
+  @@index([candidateId])
+}
+
+model OdooDocSnapshot {
+  id              String   @id @default(uuid())
+  isoNormalized   String
+  candidateId     String?
+  containerIso    String?
+  kind            String
+  odooModel       String
+  odooId          Int      @default(0)
+  version         Int      @default(1)
+  name            String
+  summary         String   @default("")
+  data            Json
+  sourceWriteDate DateTime?
+  createdAt       DateTime @default(now())
+
+  @@unique([isoNormalized, kind, odooId, version])
+  @@index([isoNormalized, kind])
+}
+
+model UnitNote {
+  id             String    @id @default(uuid())
+  isoNormalized  String
+  candidateId    String?
+  containerIso   String?
+  source         String
+  odooMessageId  Int?
+  author         String?
+  body           String
+  occurredAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([isoNormalized, createdAt])
+  @@unique([isoNormalized, odooMessageId])
+}
+
+model OdooFieldConflict {
+  id          String           @id @default(uuid())
+  candidateId String
+  candidate   OdooLotCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  field       String
+  localValue  String?
+  odooValue   String?
+  odooEventId Int?
+  status      String           @default("pending")
+  createdAt   DateTime         @default(now())
 
   @@index([candidateId, status])
   @@index([status])

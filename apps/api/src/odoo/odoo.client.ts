@@ -92,10 +92,16 @@ export class OdooClient {
     return (await this.executeKw(cfg, uid, model, "search_read", [domain], kwargs)) as Record<string, unknown>[];
   }
 
-  async write(model: string, ids: number[], values: Record<string, unknown>) {
+  async write(
+    model: string,
+    ids: number[],
+    values: Record<string, unknown>,
+    extras: { context?: Record<string, unknown> } = {},
+  ) {
     const cfg = await this.readConfig();
     const uid = await this.authenticate(cfg);
-    return this.executeKw(cfg, uid, model, "write", [ids, values]);
+    const kwargs = extras.context ? { context: extras.context } : {};
+    return this.executeKw(cfg, uid, model, "write", [ids, values], kwargs);
   }
 
   async read(model: string, ids: number[], fields: string[]) {

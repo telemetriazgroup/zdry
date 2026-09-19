@@ -279,6 +279,12 @@ export class WarehouseController {
     return this.warehouse.listOdooPhotos(iso);
   }
 
+  @Get("units/:iso/odoo-notes")
+  @Roles("admin", "coordinador")
+  listOdooNotes(@Param("iso") iso: string) {
+    return this.warehouse.listOdooNotes(iso);
+  }
+
   @Get("units/:iso/odoo-photos/:attId")
   @Roles("admin", "coordinador")
   async openOdooPhoto(@Param("iso") iso: string, @Param("attId") attId: string) {

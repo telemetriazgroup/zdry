@@ -13,6 +13,172 @@ function SyncIcon({ status, compact }) {
   );
 }
 
+function foldKey(v) {
+  return String(v ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase();
+}
+
+function matchSelectValue(raw, options) {
+  const t = String(raw ?? "").trim();
+  if (!t || !options?.length) return t;
+  const hit = options.find(([k, lab]) => k === t || lab === t || foldKey(k) === foldKey(t) || foldKey(lab) === foldKey(t));
+  return hit ? hit[0] : t;
+}
+
+function OdooOwnedInput({ field, value, onChange }) {
+  const options = field.options || [];
+  if (options.length) {
+    const current = matchSelectValue(value, options);
+    const known = options.some(([k]) => k === current);
+    return (
+      <select value={known ? current : current || ""} onChange={(e) => onChange(e.target.value)}>
+        <option value="">—</option>
+        {!known && current ? <option value={current}>{current}</option> : null}
+        {options.map(([k, lab]) => (
+          <option key={k} value={k}>{lab}</option>
+        ))}
+      </select>
+    );
+  }
+  return (
+    <input
+      type={field.key === "tareKg" || field.key === "mgwKg" ? "number" : "text"}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  );
+}
+
+const DOC_KIND = {
+  purchase: "Orden de compra",
+  bill: "Factura proveedor",
+  picking_in: "Entrada (IN)",
+  picking_out: "Salida (OUT)",
+  mo: "Fabricación (MO)",
+  sale: "Pedido de venta",
+};
+
+function ExpedientePanel({ id }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  function load() {
+    api(`/odoo-import/candidates/${id}/expediente`)
+      .then(setData)
+      .catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    setError("");
+    load();
+  }, [id]);
+
+  async function saveNote() {
+    setBusy(true);
+    setError("");
+    try {
+      const out = await api(`/odoo-import/candidates/${id}/notes`, { method: "POST", body: { body: note } });
+      setData(out);
+      setNote("");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!data) return <p className="section-sub">{error || "Cargando expediente…"}</p>;
+
+  const evo = data.evolution || [];
+
+  return (
+    <div>
+      {error ? <div className="err">{error}</div> : null}
+      <h4>Evolución de la ficha <small>Odoo es la fuente principal: si cambia allá, pisa ZDRY y queda el rastro. Puedes volver a editar en Ficha.</small></h4>
+      {!evo.length ? <p className="section-sub">Aún no hay historial. Se arma al guardar aquí o al llegar un cambio de Odoo.</p> : null}
+      {evo.map((row) => (
+        <div key={row.field} className="evo-field">
+          <div className="evo-head">
+            <b>{row.label}</b>
+            <span className="section-sub">ahora: {row.current || "—"}</span>
+          </div>
+          <div className="evo-track">
+            {row.steps.map((s, i) => (
+              <span key={`${row.field}-${i}`} className="evo-step-wrap">
+                {i ? <span className="evo-arrow" aria-hidden>→</span> : null}
+                <span className={`evo-chip src-${s.source === "odoo" ? "odoo" : s.source === "zdry" ? "zdry" : "prev"}${s.applied === false ? " not-applied" : ""}`}>
+                  <em>{s.value || "—"}</em>
+                  <small>{s.source === "odoo" ? "Odoo" : s.source === "zdry" ? "ZDRY" : "antes"}{s.applied === false ? " · no aplicado" : ""} · {new Date(s.at).toLocaleString("es-PE")}</small>
+                </span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      <h4>Detalle cronológico</h4>
+      {!data.timeline?.length ? null : (
+      <div className="tablewrap">
+        <table className="data">
+          <thead>
+            <tr><th>Cuándo</th><th>Campo</th><th>Antes</th><th>Después</th><th>Origen</th></tr>
+          </thead>
+          <tbody>
+            {(data.timeline || []).map((t) => (
+              <tr key={t.id}>
+                <td>{new Date(t.createdAt).toLocaleString("es-PE")}</td>
+                <td>{t.field}</td>
+                <td>{t.before || "—"}</td>
+                <td>{t.after || "—"}</td>
+                <td>{t.source}{t.event ? ` · ${t.event}` : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      )}
+
+      <h4>Documentos Odoo <small>copia informativa versionada. No hay que abrir Odoo para ver OC / IN / factura / MO.</small></h4>
+      {!data.documents?.length ? <p className="section-sub">Sin documentos aún. «Buscar en Odoo» rellena OC/MO ya clasificados.</p> : null}
+      {(data.documents || []).map((g) => (
+        <div key={g.current.id} className="odoo-sheet" style={{ marginBottom: 10, padding: 10 }}>
+          <b>{DOC_KIND[g.current.kind] || g.current.kind}</b> · {g.current.name}
+          <div className="section-sub">{g.current.summary || "—"} · v{g.current.version}</div>
+          <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, margin: "8px 0 0" }}>{JSON.stringify(g.current.data, null, 2)}</pre>
+          {g.versions.length > 1 ? (
+            <p className="section-sub">{g.versions.length} versiones. La de arriba es la última.</p>
+          ) : null}
+        </div>
+      ))}
+
+      <h4>Notas de la serie</h4>
+      <p className="section-sub">Las de Odoo son informativas. Aquí solo se agregan notas ZDRY.</p>
+      <div className="odoo-form">
+        <label className="odoo-span2">
+          <span>Nueva nota ZDRY</span>
+          <textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} />
+        </label>
+      </div>
+      <button className="btn-ghost" type="button" disabled={busy || !note.trim()} onClick={saveNote}>Agregar nota</button>
+      <ul>
+        {(data.notes || []).map((n) => (
+          <li key={n.id}>
+            <b>{n.source === "odoo" ? "Odoo" : "ZDRY"}</b>
+            {n.author ? ` · ${n.author}` : ""}
+            {n.occurredAt || n.createdAt ? ` · ${new Date(n.occurredAt || n.createdAt).toLocaleString("es-PE")}` : ""}
+            <div>{n.body}</div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved }) {
   const [row, setRow] = useState(null);
   const [photos, setPhotos] = useState([]);
@@ -20,6 +186,7 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [saving, setSaving] = useState(false);
+  const [tab, setTab] = useState("ficha");
 
   async function load() {
     const d = await api(`/odoo-import/candidates/${id}`);
@@ -59,7 +226,7 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
         ...form,
         tareKg: form.tareKg === "" ? null : Number(form.tareKg),
         mgwKg: form.mgwKg === "" ? null : Number(form.mgwKg),
-        year: form.year === "" ? null : Number(form.year),
+        year: form.year === "" || form.year === "NO DEFINE" ? null : Number(form.year),
       };
       const d = await api(`/odoo-import/candidates/${id}`, { method: "PATCH", body });
       setRow(d);
@@ -160,16 +327,27 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
             </div>
           </div>
 
-          <h4>Datos Odoo <small>si los cambias aquí se guardan en ZDRY y luego se escriben en Odoo (no bloquea)</small></h4>
+          <div className="action-row" style={{ margin: "10px 0 14px" }}>
+            <button className={tab === "ficha" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setTab("ficha")}>Ficha</button>
+            <button className={tab === "expediente" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setTab("expediente")}>Expediente</button>
+          </div>
+
+          {tab === "expediente" ? <ExpedientePanel id={id} /> : null}
+
+          {tab === "ficha" ? (
+            <p className="section-sub" style={{ marginBottom: 12 }}>
+              Odoo es la fuente principal. Si Odoo cambia un campo, pisa el valor de ZDRY (el historial queda en Expediente). Aquí puedes volver a editar y se escribe en Odoo.
+            </p>
+          ) : null}
+
+          {tab === "ficha" ? (
+          <>
+          <h4>Datos Odoo <small>guardar escribe en Odoo (zdry_sync, sin eco). Un cambio posterior en Odoo vuelve a prevalecer.</small></h4>
           <div className="odoo-form">
             {(row.odooFields || []).map((f) => (
               <label key={f.key}>
                 <span>{f.label} <SyncIcon status={f.sync} compact /></span>
-                <input
-                  type={f.key === "tareKg" || f.key === "mgwKg" || f.key === "year" ? "number" : "text"}
-                  value={form[f.key] ?? ""}
-                  onChange={(e) => set(f.key, e.target.value)}
-                />
+                <OdooOwnedInput field={f} value={form[f.key] ?? ""} onChange={(v) => set(f.key, v)} />
               </label>
             ))}
           </div>
@@ -302,10 +480,26 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
               <span className="section-sub">Ya asimilado. Los cambios de Odoo se reenvían en segundo plano.</span>
             )}
           </div>
+          </>
+          ) : null}
         </div>
 
         <aside className="odoo-chatter">
-          <h4>Chatter / fotos Odoo</h4>
+          <h4>Notas Odoo</h4>
+          <p className="section-sub">Mensajes y notas del chatter. Solo lectura; no se editan en ZDRY.</p>
+          {!(row.odooNotes || []).length ? <p className="section-sub">Este lote no tiene notas en Odoo, o aún no se pudieron traer.</p> : null}
+          <ul className="odoo-note-list">
+            {(row.odooNotes || []).map((n) => (
+              <li key={n.id} className="odoo-note">
+                <div className="odoo-note-meta">
+                  {n.author || "Odoo"}
+                  {n.date ? ` · ${new Date(n.date.includes("T") ? n.date : `${n.date.replace(" ", "T")}Z`).toLocaleString("es-PE")}` : ""}
+                </div>
+                <div className="odoo-note-body">{n.body}</div>
+              </li>
+            ))}
+          </ul>
+          <h4>Fotos Odoo</h4>
           <p className="section-sub">Adjuntos del lote. No sustituyen las 9 casillas de inspección.</p>
           {!photos.length ? <p className="section-sub">Sin fotos en este lote, o Odoo no las devolvió.</p> : null}
           <div className="odoo-thumbs">

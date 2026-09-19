@@ -310,10 +310,26 @@ tr.iso-review-row:hover { background: #ffe3e3; }
 .odoo-sheet-meta { font-size: 13px; text-align: right; }
 .odoo-sheet h4, .odoo-chatter h4 { margin: 16px 0 8px; font-size: 14px; color: var(--navy); }
 .odoo-sheet h4 small, .odoo-chatter h4 + .section-sub { font-weight: 500; color: var(--text-3); }
+.evo-field { margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #f8f9fb; }
+.evo-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin-bottom: 8px; font-size: 13px; color: var(--navy); }
+.evo-track { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.evo-step-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.evo-arrow { color: var(--text-3); font-weight: 800; }
+.evo-chip { display: inline-flex; flex-direction: column; min-width: 72px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: #fff; }
+.evo-chip em { font-style: normal; font-weight: 800; font-size: 14px; color: var(--navy); }
+.evo-chip small { font-size: 10px; color: var(--text-3); font-weight: 600; }
+.evo-chip.src-odoo { border-color: #1971c2; background: #eef5ff; }
+.evo-chip.src-zdry { border-color: #e85d04; background: #fff4ec; }
+.evo-chip.src-prev { background: #f1f3f5; }
+.evo-chip.not-applied { opacity: .55; border-style: dashed; }
 .odoo-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
 .odoo-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; font-weight: 700; color: var(--text-2); }
 .odoo-form input, .odoo-form select, .odoo-form textarea { font: inherit; font-weight: 500; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; }
 .odoo-span2 { grid-column: 1 / -1; }
+.odoo-note-list { list-style: none; padding: 0; margin: 0 0 16px; display: flex; flex-direction: column; gap: 10px; }
+.odoo-note { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: #f8f9fb; }
+.odoo-note-meta { font-size: 11px; font-weight: 700; color: var(--text-3); margin-bottom: 6px; }
+.odoo-note-body { font-size: 13px; font-weight: 500; color: var(--text); white-space: pre-wrap; }
 .odoo-thumbs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .odoo-thumbs a { display: block; text-decoration: none; color: var(--text-2); font-size: 11px; }
 .odoo-thumbs img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); background: #f1f3f5; }

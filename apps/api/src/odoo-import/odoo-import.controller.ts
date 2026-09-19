@@ -22,6 +22,11 @@ export class OdooImportController {
     return this.svc.referential();
   }
 
+  @Get("lot-selects")
+  lotSelects(@Query("refresh") refresh?: string) {
+    return this.svc.lotSelects({ refresh: refresh === "1" || refresh === "true" });
+  }
+
   @Get("candidates")
   candidates(@Query("status") status?: string) {
     return this.svc.list(status);
@@ -30,6 +35,16 @@ export class OdooImportController {
   @Get("candidates/:id")
   getOne(@Param("id") id: string, @Query("refresh") refresh?: string) {
     return this.svc.getOne(id, { refresh: refresh === "1" || refresh === "true" });
+  }
+
+  @Get("candidates/:id/expediente")
+  expediente(@Param("id") id: string) {
+    return this.svc.expedienteOf(id);
+  }
+
+  @Post("candidates/:id/notes")
+  addNote(@Param("id") id: string, @Body() body: { body?: string }, @CurrentUser() user: AuthUser) {
+    return this.svc.addExpedienteNote(id, body.body || "", user);
   }
 
   @Get("candidates/:id/photos")
