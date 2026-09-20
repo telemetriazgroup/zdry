@@ -46,3 +46,5 @@ La oportunidad nace en ZDRY (quote + voucher). La **orden, factura SUNAT y GRE**
 ## Fuera de J5
 
 Pasarela de cobro, alquiler `sale_subscription`, GRE automática desde ZDRY, detracción en el voucher.
+
+Sustento de **venta** (patrón de este worker): SO `100202628772` IMEXCAL, dos DRY 20 DC con precio USD + lote, un OUT, sin IN. Sustento de **alquiler** (fuera de J5): SO `100202616899` Pichari. Proceso: [cotizacion_dry.md](../cotizacion_dry.md). No copiar el patrón de alquiler (servicio + línea a 0 + suscripción) en `sale_close`.

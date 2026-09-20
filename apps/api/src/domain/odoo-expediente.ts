@@ -254,6 +254,7 @@ export const FICHA_FIELD_LABELS: Record<string, string> = {
   dua: "DUA",
   originCountry: "Procedencia",
   material: "Material",
+  description: "Descripción",
   qtyOnHand: "Cantidad",
 };
 

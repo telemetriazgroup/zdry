@@ -101,6 +101,9 @@ const LABEL_HINTS = [
   "fabricacion",
   "zgroup",
   "codigo zgroup",
+  "descripcion",
+  "description",
+  "nota",
 ];
 
 export function pickAllFieldsByLabel(
@@ -175,6 +178,7 @@ export const ODOO_OWNED_FIELDS = [
   "dua",
   "originCountry",
   "material",
+  "description",
 ] as const;
 
 export type OdooOwnedField = (typeof ODOO_OWNED_FIELDS)[number];
@@ -188,6 +192,7 @@ export const ODOO_OWNED_NEEDLES: Record<OdooOwnedField, string[]> = {
   dua: ["n dua", "no dua", "nro dua", "dua"],
   originCountry: ["procedencia", "procedence"],
   material: ["tipo material", "material"],
+  description: ["descripcion", "description", "nota interna", "note"],
 };
 
 /** Claves Odoo a escribir: todos los aliases no-enable. Peso: `weight_kg` primero y también `weight`. */
@@ -211,6 +216,7 @@ export const ODOO_OWNED_LABELS: Record<OdooOwnedField, string> = {
   dua: "Nº DUA",
   originCountry: "Procedencia",
   material: "Tipo material",
+  description: "Descripción",
 };
 
 export function isOdooOwnedField(key: string): key is OdooOwnedField {
@@ -243,6 +249,7 @@ export type OdooLotAttrs = {
   originCountry: string | null;
   material: string | null;
   zgroupCode: string | null;
+  description: string | null;
 };
 
 function scalar(v: unknown): string | null {
@@ -290,7 +297,36 @@ export function readLotAttrs(lot: Record<string, unknown> | undefined, fields: R
     originCountry: scalar(get(["procedencia"])),
     material: scalar(get(["tipo material", "material"])),
     zgroupCode: scalar(get(["codigo zgroup"])),
+    description: scalar(get(["descripcion", "description", "nota interna", "note"])),
   };
+}
+
+export function ownedStorageKey(field: OdooOwnedField): "odooDescription" | Exclude<OdooOwnedField, "description"> {
+  return field === "description" ? "odooDescription" : field;
+}
+
+export function receptionOwnedPatch(body: {
+  tareKg?: unknown;
+  mgwKg?: unknown;
+  color?: unknown;
+  year?: unknown;
+  manufacturer?: unknown;
+  odooDua?: unknown;
+  originCountry?: unknown;
+  material?: unknown;
+  odooDescription?: unknown;
+}): Partial<Record<OdooOwnedField, string | number | null>> {
+  const out: Partial<Record<OdooOwnedField, string | number | null>> = {};
+  if (body.tareKg !== undefined) out.tareKg = Math.max(0, Math.round(Number(body.tareKg) || 0));
+  if (body.mgwKg !== undefined) out.mgwKg = Math.max(0, Math.round(Number(body.mgwKg) || 0));
+  if (body.color !== undefined) out.color = body.color == null || body.color === "" ? null : String(body.color);
+  if (body.year !== undefined) out.year = body.year == null || body.year === "" ? null : Number(body.year);
+  if (body.manufacturer !== undefined) out.manufacturer = body.manufacturer == null || body.manufacturer === "" ? null : String(body.manufacturer);
+  if (body.odooDua !== undefined) out.dua = String(body.odooDua || "").trim() || null;
+  if (body.originCountry !== undefined) out.originCountry = String(body.originCountry || "").trim() || null;
+  if (body.material !== undefined) out.material = String(body.material || "").trim() || null;
+  if (body.odooDescription !== undefined) out.description = String(body.odooDescription || "");
+  return out;
 }
 
 export const ODOO_LOT_SELECT_FALLBACK: { color: Array<[string, string]>; year: Array<[string, string]> } = {
@@ -402,6 +438,7 @@ export type OdooSourceSnapshot = {
   originCountry?: string | null;
   material?: string | null;
   zgroupCode?: string | null;
+  description?: string | null;
 };
 
 export function buildOdooSource(input: OdooSourceSnapshot): OdooSourceSnapshot {
@@ -419,5 +456,6 @@ export function buildOdooSource(input: OdooSourceSnapshot): OdooSourceSnapshot {
     originCountry: input.originCountry || null,
     material: input.material || null,
     zgroupCode: input.zgroupCode || null,
+    description: input.description || null,
   };
 }

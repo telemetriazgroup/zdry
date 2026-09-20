@@ -115,6 +115,7 @@ export class WarehouseController {
       odooDua?: string;
       originCountry?: string;
       material?: string;
+      odooDescription?: string;
       conditionFloor?: string | null;
       conditionRoof?: string | null;
       conditionDoors?: string | null;
@@ -305,6 +306,17 @@ export class WarehouseController {
     @Req() req: Request,
   ) {
     return this.warehouse.assignOdooPhoto(iso, attId, String(body.slot ?? ""), user, req.ip);
+  }
+
+  @Post("units/:iso/odoo-ref")
+  @Roles("admin", "coordinador")
+  setOdooRef(
+    @Param("iso") iso: string,
+    @Body() body: { slot?: string | number },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.setOdooRef(iso, body.slot ?? "", user, req.ip);
   }
 
   @Post("units/:iso/regularize")

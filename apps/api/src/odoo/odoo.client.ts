@@ -104,6 +104,36 @@ export class OdooClient {
     return this.executeKw(cfg, uid, model, "write", [ids, values], kwargs);
   }
 
+  async create(
+    model: string,
+    values: Record<string, unknown>,
+    extras: { context?: Record<string, unknown> } = {},
+  ) {
+    const cfg = await this.readConfig();
+    const uid = await this.authenticate(cfg);
+    const kwargs = extras.context ? { context: extras.context } : {};
+    return this.executeKw(cfg, uid, model, "create", [values], kwargs);
+  }
+
+  async callKw(
+    model: string,
+    method: string,
+    args: unknown[] = [],
+    kwargs: Record<string, unknown> = {},
+  ) {
+    const cfg = await this.readConfig();
+    const uid = await this.authenticate(cfg);
+    return this.executeKw(cfg, uid, model, method, args, kwargs);
+  }
+
+  async unlink(model: string, ids: number[], extras: { context?: Record<string, unknown> } = {}) {
+    if (!ids.length) return true;
+    const cfg = await this.readConfig();
+    const uid = await this.authenticate(cfg);
+    const kwargs = extras.context ? { context: extras.context } : {};
+    return this.executeKw(cfg, uid, model, "unlink", [ids], kwargs);
+  }
+
   async read(model: string, ids: number[], fields: string[]) {
     const cfg = await this.readConfig();
     const uid = await this.authenticate(cfg);

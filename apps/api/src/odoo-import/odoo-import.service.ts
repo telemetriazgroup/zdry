@@ -15,6 +15,7 @@ import {
   mappedOdooKeys,
   mergeFieldCatalog,
   ODOO_OWNED_FIELDS,
+  type OdooOwnedField,
   ODOO_OWNED_LABELS,
   ODOO_OWNED_NEEDLES,
   pickFieldByLabel,
@@ -24,6 +25,7 @@ import {
   odooWriteKeys,
   matchOdooSelect,
   ODOO_LOT_SELECT_FALLBACK,
+  ownedStorageKey,
 } from "../domain/odoo-lot-map";
 import { listOdooLotChatter, listOdooLotNotes, openOdooLotPhoto } from "../odoo/odoo-lot-photos";
 import { applySerialTextRefs, assignRefsBySharedMove, purchaseRefFromOrder, type OdooPurchaseRef } from "../domain/odoo-purchase";
@@ -329,6 +331,7 @@ export class OdooImportService {
         originCountry: attrs.originCountry,
         material: attrs.material,
         zgroupCode: attrs.zgroupCode,
+        odooDescription: attrs.description || "",
         payload: {
           lot,
           quantLocation: q.location_id,
@@ -957,6 +960,7 @@ export class OdooImportService {
     }
     return {
       ...row,
+      description: row.odooDescription,
       color: matchOdooSelect(row.color, lotSelects.color) || row.color,
       year: matchOdooSelect(row.year, lotSelects.year) || row.year,
       lotSelects,
@@ -967,7 +971,7 @@ export class OdooImportService {
       odooFields: ODOO_OWNED_FIELDS.map((key) => ({
         key,
         label: ODOO_OWNED_LABELS[key],
-        value: key === "color" ? (matchOdooSelect(row.color, lotSelects.color) || row.color) : key === "year" ? (matchOdooSelect(row.year, lotSelects.year) || row.year) : row[key],
+        value: key === "color" ? (matchOdooSelect(row.color, lotSelects.color) || row.color) : key === "year" ? (matchOdooSelect(row.year, lotSelects.year) || row.year) : key === "description" ? row.odooDescription : row[key],
         options: key === "color" ? lotSelects.color : key === "year" ? lotSelects.year : undefined,
         sync: fieldStatus[key],
       })),
@@ -988,7 +992,7 @@ export class OdooImportService {
     const row = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
     if (!row) throw new NotFoundException("Candidato no encontrado.");
     const data: Prisma.OdooLotCandidateUpdateInput = {};
-    const changedOwned: string[] = [];
+    const changedOwned: OdooOwnedField[] = [];
 
     if (body.color !== undefined) data.color = this.str(body.color);
     if (body.tareKg !== undefined) data.tareKg = this.num(body.tareKg);
@@ -998,14 +1002,16 @@ export class OdooImportService {
     if (body.dua !== undefined) data.dua = this.str(body.dua);
     if (body.originCountry !== undefined) data.originCountry = this.str(body.originCountry);
     if (body.material !== undefined) data.material = this.str(body.material);
+    if (body.description !== undefined) data.odooDescription = String(body.description || "");
     if (body.zdryType !== undefined) data.zdryType = this.str(body.zdryType);
     if (body.zdryCat !== undefined) data.zdryCat = this.str(body.zdryCat);
     if (body.zdryNotes !== undefined) data.zdryNotes = String(body.zdryNotes || "");
 
     for (const key of ODOO_OWNED_FIELDS) {
-      if (body[key] !== undefined && String(row[key] ?? "") !== String(data[key as keyof typeof data] ?? body[key] ?? "")) {
-        changedOwned.push(key);
-      }
+      if (body[key] === undefined) continue;
+      const col = ownedStorageKey(key);
+      const next = data[col as keyof typeof data] ?? body[key];
+      if (String(row[col as "color"] ?? "") !== String(next ?? "")) changedOwned.push(key);
     }
 
     if (changedOwned.length) {
@@ -1026,8 +1032,8 @@ export class OdooImportService {
             candidateId: id,
             containerIso: after?.containerIso || row.containerIso,
             field,
-            before: row[field as "color"] == null ? null : String(row[field as "color"]),
-            after: after?.[field as "color"] == null ? null : String(after[field as "color"]),
+            before: row[ownedStorageKey(field) as "color"] == null ? null : String(row[ownedStorageKey(field) as "color"]),
+            after: after?.[ownedStorageKey(field) as "color"] == null ? null : String(after[ownedStorageKey(field) as "color"]),
             source: "zdry",
             event: "ficha_save",
             applied: true,
@@ -1037,7 +1043,7 @@ export class OdooImportService {
     }
 
     for (const field of changedOwned) {
-      const value = (await this.prisma.odooLotCandidate.findUnique({ where: { id } }))?.[field as "color"];
+      const value = (await this.prisma.odooLotCandidate.findUnique({ where: { id } }))?.[ownedStorageKey(field) as "color"];
       await this.prisma.odooFieldWriteback.create({
         data: { candidateId: id, field, value: (value ?? "") as Prisma.InputJsonValue },
       });
@@ -1161,6 +1167,58 @@ export class OdooImportService {
       }
     }
     return { ok: true, flushed };
+  }
+
+  async writebackFromUnit(
+    iso: string,
+    changes: Partial<Record<(typeof ODOO_OWNED_FIELDS)[number], string | number | null>>,
+    event = "recepcion_save",
+  ) {
+    const c = await this.prisma.container.findUnique({ where: { iso } });
+    if (!c?.odooLotId) return { ok: true, flushed: 0, skipped: true as const };
+    const cand = await this.prisma.odooLotCandidate.findUnique({ where: { odooLotId: c.odooLotId } });
+    if (!cand) return { ok: false, flushed: 0, message: "Esta unidad no tiene ficha Odoo asimilada." };
+
+    const data: Prisma.OdooLotCandidateUpdateInput = {};
+    const changed: Array<(typeof ODOO_OWNED_FIELDS)[number]> = [];
+    for (const field of ODOO_OWNED_FIELDS) {
+      if (changes[field] === undefined) continue;
+      const col = ownedStorageKey(field);
+      const next = changes[field];
+      const prev = cand[col as "color"];
+      if (String(prev ?? "") === String(next ?? "")) continue;
+      if (field === "description") data.odooDescription = next == null ? "" : String(next);
+      else if (field === "tareKg" || field === "mgwKg" || field === "year") data[field] = next == null ? null : Number(next);
+      else (data as Record<string, unknown>)[field] = next == null ? null : String(next);
+      changed.push(field);
+    }
+    if (!changed.length) return { ok: true, flushed: 0 };
+
+    data.localTouched = true;
+    data.odooSyncStatus = "deferred";
+    data.odooSyncError = null;
+    await this.prisma.odooLotCandidate.update({ where: { id: cand.id }, data });
+    const after = await this.prisma.odooLotCandidate.findUnique({ where: { id: cand.id } });
+    for (const field of changed) {
+      const col = ownedStorageKey(field);
+      await this.prisma.unitTimeline.create({
+        data: {
+          isoNormalized: cand.isoNormalized,
+          candidateId: cand.id,
+          containerIso: cand.containerIso || iso,
+          field,
+          before: cand[col as "color"] == null ? null : String(cand[col as "color"]),
+          after: after?.[col as "color"] == null ? null : String(after[col as "color"]),
+          source: "zdry",
+          event,
+          applied: true,
+        },
+      });
+      await this.prisma.odooFieldWriteback.create({
+        data: { candidateId: cand.id, field, value: (after?.[col as "color"] ?? "") as Prisma.InputJsonValue },
+      });
+    }
+    return this.flushWritebacks(cand.id);
   }
 
   async listPhotos(id: string) {
@@ -2389,6 +2447,7 @@ export class OdooImportService {
       payload?: unknown;
       zdryType?: string | null;
       zdryCat?: string | null;
+      odooDescription?: string | null;
     },
   ) {
     const c = await this.prisma.container.findUnique({ where: { iso } });
@@ -2405,6 +2464,7 @@ export class OdooImportService {
         manufacturer: mapped.manufacturer,
         odooDua: cand.dua,
         originCountry: cand.originCountry,
+        odooDescription: cand.odooDescription ?? undefined,
         odooSource: this.sourceFromCandidate(cand) as Prisma.InputJsonValue,
         type: cand.zdryType && (await this.prisma.containerType.findUnique({ where: { code: cand.zdryType } })) ? cand.zdryType : c.type,
         cat: cand.zdryCat && (await this.prisma.category.findUnique({ where: { code: cand.zdryCat } })) ? cand.zdryCat : c.cat,
@@ -2513,6 +2573,7 @@ export class OdooImportService {
           originCountry: attrs.originCountry ?? cand.originCountry,
           material: attrs.material ?? cand.material,
           zgroupCode: attrs.zgroupCode ?? cand.zgroupCode,
+          odooDescription: attrs.description ?? cand.odooDescription,
           payload: {
             ...((cand.payload && typeof cand.payload === "object" ? cand.payload : {}) as object),
             lot,
@@ -2540,10 +2601,11 @@ export class OdooImportService {
     originCountry?: string | null;
     material?: string | null;
     zgroupCode?: string | null;
+    odooDescription?: string | null;
     payload?: unknown;
   }) {
     const extra = (cand.payload && typeof cand.payload === "object" ? cand.payload : {}) as {
-      attrs?: { material?: string | null; zgroupCode?: string | null };
+      attrs?: { material?: string | null; zgroupCode?: string | null; description?: string | null };
     };
     return buildOdooSource({
       serialRaw: cand.serialRaw,
@@ -2559,6 +2621,7 @@ export class OdooImportService {
       originCountry: cand.originCountry,
       material: cand.material ?? extra.attrs?.material ?? null,
       zgroupCode: cand.zgroupCode ?? extra.attrs?.zgroupCode ?? null,
+      description: cand.odooDescription ?? extra.attrs?.description ?? null,
     });
   }
 
@@ -2615,6 +2678,7 @@ export class OdooImportService {
       productCode?: string;
       material?: string | null;
       zgroupCode?: string | null;
+      odooDescription?: string | null;
       payload?: unknown;
       odooIntakeKind?: string | null;
       odooPickingName?: string | null;
@@ -2666,6 +2730,7 @@ export class OdooImportService {
     if (!c.year && mapped.year) data.year = mapped.year;
     if ((!c.manufacturer || c.manufacturer === "—") && mapped.manufacturer !== "—") data.manufacturer = mapped.manufacturer;
     if (!c.inspectionNotes && mapped.notes) data.inspectionNotes = mapped.notes;
+    if (!c.odooDescription && cand.odooDescription) data.odooDescription = cand.odooDescription;
     await this.prisma.container.update({ where: { iso }, data });
   }
 

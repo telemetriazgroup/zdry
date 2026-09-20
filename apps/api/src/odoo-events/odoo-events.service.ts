@@ -144,6 +144,7 @@ export class OdooEventsService implements OnModuleInit, OnModuleDestroy {
             dua: cand.dua,
             originCountry: cand.originCountry,
             material: cand.material,
+            description: cand.odooDescription,
             qtyOnHand: cand.qtyOnHand,
           }
         : undefined,
@@ -159,6 +160,27 @@ export class OdooEventsService implements OnModuleInit, OnModuleDestroy {
       this.assignOwned(data, decision.updates);
       if (decision.qtyOnHand != null) data.qtyOnHand = decision.qtyOnHand;
       await this.prisma.odooLotCandidate.update({ where: { id: cand.id }, data });
+      if (cand.containerIso) {
+        const cdata: Prisma.ContainerUpdateInput = {};
+        const u = decision.updates;
+        if (u.tareKg !== undefined) cdata.tareKg = u.tareKg == null ? 0 : Number(u.tareKg);
+        if (u.mgwKg !== undefined) cdata.mgwKg = u.mgwKg == null ? 0 : Number(u.mgwKg);
+        if (u.tareKg !== undefined || u.mgwKg !== undefined) {
+          const tare = u.tareKg != null ? Number(u.tareKg) : cand.tareKg || 0;
+          const mgw = u.mgwKg != null ? Number(u.mgwKg) : cand.mgwKg || 0;
+          cdata.payloadKg = Math.max(0, mgw - tare);
+        }
+        if (u.color !== undefined) cdata.color = u.color == null ? "—" : String(u.color);
+        if (u.year !== undefined) cdata.year = u.year == null ? null : Number(u.year);
+        if (u.manufacturer !== undefined) cdata.manufacturer = u.manufacturer == null ? "—" : String(u.manufacturer);
+        if (u.dua !== undefined) cdata.odooDua = u.dua == null ? null : String(u.dua);
+        if (u.originCountry !== undefined) cdata.originCountry = u.originCountry == null ? null : String(u.originCountry);
+        if (u.material !== undefined) cdata.material = u.material == null ? null : String(u.material);
+        if (u.description !== undefined) cdata.odooDescription = u.description == null ? "" : String(u.description);
+        if (Object.keys(cdata).length) {
+          await this.prisma.container.update({ where: { iso: cand.containerIso }, data: cdata }).catch(() => undefined);
+        }
+      }
       const overwrittenFields = Object.keys(decision.updates);
       if (overwrittenFields.length) {
         await this.prisma.odooFieldWriteback.updateMany({
@@ -193,6 +215,7 @@ export class OdooEventsService implements OnModuleInit, OnModuleDestroy {
             dua: cand.dua,
             originCountry: cand.originCountry,
             material: cand.material,
+            description: cand.odooDescription,
           }
         : undefined,
       applied: decision.action === "apply" || decision.action === "conflict" ? decision.updates : {},
@@ -231,6 +254,7 @@ export class OdooEventsService implements OnModuleInit, OnModuleDestroy {
     if (updates.dua !== undefined) data.dua = updates.dua == null ? null : String(updates.dua);
     if (updates.originCountry !== undefined) data.originCountry = updates.originCountry == null ? null : String(updates.originCountry);
     if (updates.material !== undefined) data.material = updates.material == null ? null : String(updates.material);
+    if (updates.description !== undefined) data.odooDescription = updates.description == null ? "" : String(updates.description);
   }
 
   private async findCandidate(resId: number, iso: string | null, isoNormalized: string | null, model: string) {

@@ -22,6 +22,7 @@ import { OdooImportModule } from "./odoo-import/odoo-import.module";
 import { OdooEventsModule } from "./odoo-events/odoo-events.module";
 import { EvaluationModule } from "./evaluation/evaluation.module";
 import { GateVisitsModule } from "./gate-visits/gate-visits.module";
+import { DryStatsModule } from "./dry-stats/dry-stats.module";
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { GateVisitsModule } from "./gate-visits/gate-visits.module";
     OdooImportModule,
     OdooEventsModule,
     GateVisitsModule,
+    DryStatsModule,
   ],
   controllers: [HealthController],
   providers: [SeedService],

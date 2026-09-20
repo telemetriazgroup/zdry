@@ -178,6 +178,7 @@ export default function Recepcion() {
   const [pickVisitId, setPickVisitId] = useState("");
   const [docRows, setDocRows] = useState([newDocRow()]);
   const [capNote, setCapNote] = useState("");
+  const [pushingRef, setPushingRef] = useState(null);
 
   async function loadPending() {
     const rows = await api("/warehouse/pending");
@@ -247,7 +248,7 @@ export default function Recepcion() {
     api(`/warehouse/units/${unit.iso}/odoo-notes`)
       .then(setOdooNotes)
       .catch(() => setOdooNotes([]));
-  }, [canCoord, unit?.iso, unit?.odooLotId, unit?.hasOdooChatter]);
+  }, [canCoord, unit?.iso, unit?.odooLotId, unit?.hasOdooChatter, unit?.odooRefPushedAt]);
 
   useEffect(() => {
     const raw = form.iso.trim();
@@ -363,6 +364,7 @@ export default function Recepcion() {
     try {
       const next = await api(`/warehouse/units/${inspectIso}`, { method: "PATCH", body: { [field]: value } });
       setUnit(next);
+      if (next.saveMessage) setMsg(next.saveMessage);
       if (field === "year") setYearErr("");
     } catch (e) {
       if (field === "year") setYearErr(e.message);
@@ -626,6 +628,21 @@ export default function Recepcion() {
       setBust(Date.now());
     } catch (e) {
       setError(e.message);
+    }
+  }
+
+  async function pushOdooRef(slot) {
+    if (!inspectIso) return;
+    setPushingRef(slot);
+    setError("");
+    try {
+      const next = await api(`/warehouse/units/${inspectIso}/odoo-ref`, { method: "POST", body: { slot } });
+      setUnit(next);
+      setMsg(`Cara Odoo actualizada: casilla ${Number(slot) + 1}. Las otras 8 se quedan en ZDRY.`);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setPushingRef(null);
     }
   }
 
@@ -953,6 +970,11 @@ export default function Recepcion() {
                     + Foto o video del coordinador
                     <input type="file" accept="image/*,video/*" hidden onChange={(e) => { uploadCoordCapture(e.target.files?.[0]); e.target.value = ""; }} />
                   </label>
+                  {unit.canPushOdooRef ? (
+                    <p className="section-sub">
+                      Una sola foto va a Odoo como cara del lote. Las demás se quedan en ZDRY. No se reenvían las que bajaron del chatter.
+                    </p>
+                  ) : null}
                 </div>
                 <div className="checklist recv-checklist">
                   {labels.map((lab, i) => {
@@ -993,8 +1015,11 @@ export default function Recepcion() {
                       </>
                     );
                     if (done) {
+                      const origin = i < 9 ? (unit.photoOrigins?.[i] || "zdry") : null;
+                      const isRef = i < 9 && unit.odooRefSlot === i;
+                      const canRef = i < 9 && unit.canPushOdooRef && origin !== "odoo";
                       return (
-                        <div key={lab} className="check-item done">
+                        <div key={lab} className={`check-item done${isRef ? " is-odoo-ref" : ""}`}>
                           <button
                             type="button"
                             className="check-open"
@@ -1008,6 +1033,19 @@ export default function Recepcion() {
                             {fileInput}
                             {copy}
                           </label>
+                          {canRef ? (
+                            <button
+                              type="button"
+                              className={`odoo-ref-btn${isRef ? " on" : ""}`}
+                              disabled={pushingRef != null}
+                              onClick={() => pushOdooRef(i)}
+                            >
+                              {pushingRef === i ? "Subiendo…" : isRef ? "Cara Odoo ✓" : "Usar como referencia Odoo"}
+                            </button>
+                          ) : null}
+                          {i < 9 && origin === "odoo" && unit.canPushOdooRef ? (
+                            <span className="odoo-ref-hint">Vino de Odoo</span>
+                          ) : null}
                         </div>
                       );
                     }
@@ -1143,8 +1181,21 @@ export default function Recepcion() {
               <p style={{ fontSize: 11, color: "#2f9e44", marginTop: 6, fontWeight: 700 }}>✓ Ficha con año y fabricante</p>
             )}
             <div className="cost-line" style={{ marginTop: 12 }}><span>Depósito y posición actual</span><b>{unit.depotName} — {unit.posLabel}</b></div>
+            {unit.hasOdooChatter || unit.odooLotId ? (
+              <div style={{ marginTop: 10 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-2)", textTransform: "uppercase" }}>Descripción (Odoo)</label>
+                <p className="section-sub">Comentarios del lote. Se escriben en Odoo al salir del campo.</p>
+                <textarea
+                  rows={3}
+                  style={{ width: "100%", marginTop: 6, padding: "9px 10px", border: "1px solid var(--line)", borderRadius: 7, fontFamily: "inherit" }}
+                  defaultValue={unit.odooDescription || ""}
+                  key={`odesc-${unit.odooDescription || ""}`}
+                  onBlur={(e) => patchField("odooDescription", e.target.value)}
+                />
+              </div>
+            ) : null}
             <div style={{ marginTop: 10 }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-2)", textTransform: "uppercase" }}>Notas</label>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-2)", textTransform: "uppercase" }}>Notas de patio</label>
               <textarea
                 rows={3}
                 style={{ width: "100%", marginTop: 6, padding: "9px 10px", border: "1px solid var(--line)", borderRadius: 7, fontFamily: "inherit" }}
@@ -1279,7 +1330,7 @@ export default function Recepcion() {
                         className="thumb-pick"
                         onClick={() => setPickedAtt(pickedAtt === p.id ? null : p.id)}
                       >
-                        {p.name} · Elegir
+                        {p.kind === "zdry_ref" ? "Cara ZDRY · " : ""}{p.name} · Elegir
                       </button>
                     </div>
                   ))}

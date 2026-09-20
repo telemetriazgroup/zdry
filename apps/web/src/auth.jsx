@@ -15,7 +15,7 @@ export const ROLE_LABELS = {
 };
 
 export const ROLE_DESC = {
-  superadmin: "Integraciones, textos del catálogo, respaldos internos y vaciado del sistema.",
+  superadmin: "Integraciones, estadística DRY de Odoo (venta/alquiler), textos del catálogo, respaldos y vaciado.",
   admin: "Ve inventario con costo real, personas, maestros, configuración, regularización Odoo y publicación del catálogo.",
   gerente: "Define reglas de precio y visibilidad. No ve FOB ni C_T.",
   vendedor: "Cotiza, valida comprobantes y confirma asignación. Nunca ve el costo real.",
@@ -29,6 +29,7 @@ export const ROLE_NAV = {
   superadmin: [
     { to: "/app", label: "Inicio", end: true },
     { to: "/app/integraciones", label: "Integración Odoo" },
+    { to: "/app/estadistica-dry", label: "Estadística DRY" },
     { to: "/app/almacen/odoo", label: "Odoo — regularizar" },
     { to: "/app/catalogo-textos", label: "Textos del catálogo" },
     { to: "/app/respaldo", label: "Respaldo y recuperación" },

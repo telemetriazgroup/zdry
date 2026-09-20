@@ -153,6 +153,10 @@ model Container {
   odooSource              Json?
   fieldRegularizedAt      DateTime?
   fieldRegularizedByName  String?
+  odooDescription         String    @default("")
+  odooRefAttachmentId     Int?
+  odooRefSlot             Int?
+  odooRefPushedAt         DateTime?
   createdAt               DateTime            @default(now())
   updatedAt               DateTime            @updatedAt
   history                 ContainerHistory[]
@@ -320,6 +324,7 @@ model InspectionPhoto {
   rejectedById   String?
   rejectedByName String?
   rejectNote     String?
+  source         String    @default("zdry")
   createdAt      DateTime  @default(now())
 
   @@index([iso, status])
@@ -571,6 +576,7 @@ model OdooLotCandidate {
   zdryType       String?
   zdryCat        String?
   zdryNotes      String    @default("")
+  odooDescription String   @default("")
   localTouched   Boolean   @default(false)
   odooSyncStatus String    @default("live")
   odooSyncError  String?
@@ -944,4 +950,135 @@ model OdooAssimilateLog {
   @@index([runId, createdAt])
   @@index([runId, level])
   @@index([iso])
+}
+
+model OdooDryDeal {
+  id              String   @id @default(uuid())
+  odooId          Int      @unique
+  name            String
+  kind            String
+  year            Int
+  month           String
+  dateOrder       DateTime
+  partnerName     String
+  vendorName      String
+  amountTotal     Decimal  @db.Decimal(14, 2)
+  amountUntaxed   Decimal  @db.Decimal(14, 2)
+  currency        String
+  state           String
+  invoiceStatus   String
+  isSubscription  Boolean  @default(false)
+  pipeline        String
+  asunto          String   @db.Text
+  otherReason     String   @default("")
+  partnerVat      String   @default("")
+  paymentTerm     String   @default("")
+  warehouse       String   @default("")
+  validityDate    DateTime?
+  opportunityName String   @default("")
+  clientRef       String   @default("")
+  amountTax       Decimal  @default(0) @db.Decimal(14, 2)
+  paymentState    String   @default("")
+  note            String   @default("") @db.Text
+  dossierStatus   String   @default("pending")
+  dossierAt       DateTime?
+  dossierError    String   @default("")
+  outCount        Int      @default(0)
+  inCount         Int      @default(0)
+  invoiceCount    Int      @default(0)
+  noteCount       Int      @default(0)
+  fileCount       Int      @default(0)
+  importedAt      DateTime @default(now())
+  lines           OdooDryDealLine[]
+  docs            OdooDryDealDoc[]
+  notes           OdooDryDealNote[]
+  files           OdooDryDealFile[]
+
+  @@index([year, kind])
+  @@index([vendorName])
+  @@index([pipeline])
+  @@index([month])
+  @@index([dossierStatus])
+}
+
+model OdooDryDealLine {
+  id            String      @id @default(uuid())
+  dealId        String
+  deal          OdooDryDeal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  odooId        Int
+  productCode   String      @default("")
+  productName   String      @default("")
+  description   String      @db.Text
+  qty           Decimal     @db.Decimal(12, 2)
+  qtyDelivered  Decimal     @db.Decimal(12, 2)
+  qtyInvoiced   Decimal     @db.Decimal(12, 2)
+  priceUnit     Decimal     @db.Decimal(14, 2)
+  priceSubtotal Decimal     @db.Decimal(14, 2)
+  discount      Decimal     @db.Decimal(8, 2)
+  tax           String      @default("")
+  lotName       String      @default("")
+  studioTipo    String      @default("")
+  studioEquipo  String      @default("")
+  displayType   String      @default("")
+
+  @@index([dealId])
+}
+
+model OdooDryDealDoc {
+  id            String      @id @default(uuid())
+  dealId        String
+  deal          OdooDryDeal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  kind          String
+  odooModel     String
+  odooId        Int
+  name          String
+  state         String      @default("")
+  date          DateTime?
+  amount        Decimal     @default(0) @db.Decimal(14, 2)
+  currency      String      @default("")
+  paymentState  String      @default("")
+  isos          String      @default("")
+  summary       String      @default("") @db.Text
+
+  @@index([dealId, kind])
+}
+
+model OdooDryDealNote {
+  id          String      @id @default(uuid())
+  dealId      String
+  deal        OdooDryDeal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  odooMsgId   Int
+  body        String      @db.Text
+  author      String      @default("")
+  date        DateTime?
+  messageType String      @default("comment")
+
+  @@unique([dealId, odooMsgId])
+  @@index([dealId, date])
+}
+
+model OdooDryDealFile {
+  id          String      @id @default(uuid())
+  dealId      String
+  deal        OdooDryDeal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  odooAttId   Int
+  name        String
+  mimetype    String      @default("")
+  size        Int         @default(0)
+  kind        String
+  source      String      @default("so")
+  storageKey  String      @default("")
+
+  @@unique([dealId, odooAttId])
+  @@index([dealId, kind])
+}
+
+model OdooDryStatsMeta {
+  id        String   @id @default("current")
+  fetchedAt DateTime?
+  fetchedBy String?
+  excluded  Json?
+  baseline  Json?
+  hydrate   Json?
+  updatedAt DateTime @updatedAt
 }

@@ -22,11 +22,13 @@ import Profile from "./Profile.jsx";
 import OdooIntegrations from "./OdooIntegrations.jsx";
 import OdooBandeja from "./OdooBandeja.jsx";
 import SystemBackup from "./SystemBackup.jsx";
+import DryStats from "./DryStats.jsx";
 
 const SIDEBAR_KEY = "zdry.sidebarCollapsed";
 
 function allowed(nav, pathname, role) {
   if ((role === "admin" || role === "compras") && pathname.startsWith("/app/compras")) return true;
+  if (role === "superadmin" && pathname.startsWith("/app/estadistica-dry")) return true;
   if ((role === "admin" || role === "superadmin") && pathname.startsWith("/app/almacen/odoo")) return true;
   if ((role === "admin" || role === "coordinador") && pathname.startsWith("/app/almacen/recepcion")) return true;
   if ((role === "admin" || role === "coordinador") && pathname.startsWith("/app/almacen/visitas")) return true;
@@ -175,6 +177,7 @@ export default function Shell() {
             <Route path="catalogo-textos" element={<Gate nav={nav} role={user.role} path="/app/catalogo-textos"><CatalogCopy /></Gate>} />
             <Route path="catalogo-media" element={<Gate nav={nav} role={user.role} path="/app/catalogo-media"><CatalogMedia /></Gate>} />
             <Route path="integraciones" element={<Gate nav={nav} role={user.role} path="/app/integraciones"><OdooIntegrations /></Gate>} />
+            <Route path="estadistica-dry" element={<Gate nav={nav} role={user.role} path="/app/estadistica-dry"><DryStats /></Gate>} />
             <Route path="respaldo" element={<Gate nav={nav} role={user.role} path="/app/respaldo"><SystemBackup /></Gate>} />
             <Route path="*" element={<Navigate to="/app" replace />} />
           </Routes>

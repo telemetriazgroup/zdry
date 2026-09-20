@@ -74,6 +74,7 @@ export default function OdooIntegrations() {
           Probar conexión
         </button>
         <Link className="btn-primary" to="/app/almacen/odoo">Bandeja DRY a la mano</Link>
+        <Link className="btn-ghost" to="/app/estadistica-dry">Estadística venta / alquiler</Link>
       </div>
       {probe?.ok ? <div className="ok-msg">Conectado{probe.user?.name ? ` · ${probe.user.name}` : ""}.</div> : null}
       {probe && !probe.ok ? <div className="err">{probe.message}</div> : null}

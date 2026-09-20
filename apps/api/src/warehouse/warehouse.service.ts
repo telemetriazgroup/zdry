@@ -60,6 +60,21 @@ import { PHOTO_STATUS_ACTIVE, PHOTO_STATUS_REJECTED } from "../domain/catalog-me
 import { OdooClient } from "../odoo/odoo.client";
 import { limaDayRange, listOdooLotChatter, listOdooLotNotes, openOdooLotPhoto } from "../odoo/odoo-lot-photos";
 import { ExpedienteStore } from "../odoo-events/expediente.store";
+import { receptionOwnedPatch } from "../domain/odoo-lot-map";
+import { OdooImportService } from "../odoo-import/odoo-import.service";
+import { toOdooRefJpeg } from "../domain/odoo-ref-jpeg";
+import {
+  ZDRY_REF_DESC,
+  ZDRY_SYNC_CONTEXT,
+  canPublishOdooRef,
+  isZdryRefNoteBody,
+  pickZdryRefIdsToUnlink,
+  plainChatterBody,
+  zdryRefAttachmentName,
+  zdryRefMessageBody,
+  zdryRefMessagePostKw,
+  zdryRefSearchDomain,
+} from "../domain/odoo-ref-photo";
 
 const CAMPO_ODOO_LOCKED = [
   "tareKg",
@@ -70,6 +85,7 @@ const CAMPO_ODOO_LOCKED = [
   "odooDua",
   "originCountry",
   "material",
+  "odooDescription",
 ] as const;
 
 const LAYOUT_RULES_KEY = "layout_rules";
@@ -111,6 +127,7 @@ export class WarehouseService {
     private readonly locks: YardLockService,
     private readonly odoo: OdooClient,
     private readonly evaluation: EvaluationService,
+    private readonly odooImport: OdooImportService,
   ) {
     this.expediente = new ExpedienteStore(prisma);
   }
@@ -391,6 +408,7 @@ export class WarehouseService {
       odooDua?: string;
       originCountry?: string;
       material?: string;
+      odooDescription?: string;
       conditionFloor?: string | null;
       conditionRoof?: string | null;
       conditionDoors?: string | null;
@@ -432,6 +450,7 @@ export class WarehouseService {
     if (body.odooDua !== undefined) data.odooDua = String(body.odooDua || "").trim() || null;
     if (body.originCountry !== undefined) data.originCountry = String(body.originCountry || "").trim() || null;
     if (body.material !== undefined) data.material = String(body.material || "").trim() || null;
+    if (body.odooDescription !== undefined) data.odooDescription = String(body.odooDescription || "");
     for (const key of ["conditionFloor", "conditionRoof", "conditionDoors", "conditionPaint", "conditionWalls"] as const) {
       if (body[key] !== undefined) data[key] = parseCondition(body[key]) || null;
     }
@@ -458,7 +477,24 @@ export class WarehouseService {
       after: data as object,
       ip,
     });
-    return this.presentFor(c.iso, user);
+    const owned = receptionOwnedPatch(body);
+    let writeback: { ok: boolean; flushed?: number; skipped?: boolean; message?: string } | null = null;
+    if (c.odooLotId && Object.keys(owned).length) {
+      writeback = await this.odooImport.writebackFromUnit(c.iso, owned, "recepcion_save");
+    }
+    const unit = await this.presentFor(c.iso, user);
+    return {
+      ...unit,
+      writeback,
+      saveMessage:
+        !c.odooLotId || !Object.keys(owned).length
+          ? undefined
+          : writeback?.skipped
+            ? undefined
+            : writeback?.ok
+              ? "Guardado en ZDRY y actualizado en Odoo."
+              : `Guardado en ZDRY. Odoo no aceptó el cambio: ${writeback?.message || "error"}`,
+    };
   }
 
   async acceptIsoReview(iso: string, note: string, user: AuthUser, ip?: string) {
@@ -553,6 +589,7 @@ export class WarehouseService {
   async listOdooNotes(iso: string) {
     const c = await this.loadUnit(iso);
     if (!c.odooLotId) return [];
+    await this.scrubZdryRefNotes(c.odooLotId);
     const notes = await listOdooLotNotes(this.odoo, c.odooLotId);
     await this.expediente.importOdooNotes(c.iso, notes, { containerIso: c.iso });
     return notes;
@@ -583,8 +620,100 @@ export class WarehouseService {
       user,
       ip,
       "Reemplazada por foto de Odoo",
+      "odoo",
     );
-    return this.getUnit(c.iso);
+    return this.presentFor(c.iso, user);
+  }
+
+  async setOdooRef(iso: string, slotRaw: string | number, user: AuthUser, ip?: string) {
+    const c = await this.loadUnit(iso);
+    if (!c.odooLotId) {
+      throw new BadRequestException("Esta unidad no está amarrada a un lote Odoo.");
+    }
+    const slot = Number(slotRaw);
+    if (!Number.isInteger(slot) || slot < 0 || slot > 8) {
+      throw new BadRequestException("Slot de foto inválido (0–8).");
+    }
+    const photo = c.photos.find((p) => p.slot === slot && p.status === PHOTO_STATUS_ACTIVE);
+    const gate = canPublishOdooRef(photo);
+    if (!gate.ok) throw new BadRequestException(gate.message);
+    const raw = await this.storage.getBuffer(photo!.storageKey);
+    const jpeg = await toOdooRefJpeg(raw.buffer);
+    const existing = await this.odoo.searchRead(
+      "ir.attachment",
+      zdryRefSearchDomain(c.odooLotId, c.iso),
+      ["id", "name", "description"],
+      { limit: 20 },
+    );
+    const created = await this.odoo.create(
+      "ir.attachment",
+      {
+        name: zdryRefAttachmentName(c.iso),
+        description: ZDRY_REF_DESC,
+        res_model: "stock.lot",
+        res_id: c.odooLotId,
+        type: "binary",
+        mimetype: "image/jpeg",
+        datas: jpeg.toString("base64"),
+      },
+      { context: { ...ZDRY_SYNC_CONTEXT } },
+    );
+    const newId = Number(created);
+    if (!newId) throw new BadRequestException("Odoo no devolvió el adjunto de referencia.");
+    const stored = await this.odoo.read("ir.attachment", [newId], ["file_size", "mimetype", "name"]);
+    if (!Number(stored?.[0]?.file_size)) {
+      throw new BadRequestException("Odoo guardó el adjunto vacío. Revisa permisos de ir.attachment del usuario API.");
+    }
+    const label = PHOTO_LABELS[slot] || `Casilla ${slot + 1}`;
+    await this.odoo.callKw(
+      "stock.lot",
+      "message_post",
+      [[c.odooLotId]],
+      {
+        ...zdryRefMessagePostKw(zdryRefMessageBody(c.iso, slot, label), newId),
+        context: { ...ZDRY_SYNC_CONTEXT },
+      },
+    );
+    const stale = pickZdryRefIdsToUnlink(
+      existing.map((a) => ({ id: Number(a.id), name: String(a.name || ""), description: String(a.description || "") })),
+      newId,
+    );
+    if (stale.length) {
+      await this.odoo.unlink("ir.attachment", stale, { context: { ...ZDRY_SYNC_CONTEXT } });
+    }
+    await this.scrubZdryRefNotes(c.odooLotId);
+    await this.prisma.container.update({
+      where: { iso: c.iso },
+      data: { odooRefAttachmentId: newId, odooRefSlot: slot, odooRefPushedAt: new Date() },
+    });
+    await this.audit.log({
+      user,
+      action: "update",
+      entity: "OdooRefPhoto",
+      entityId: c.iso,
+      after: { slot, odooRefAttachmentId: newId, unlinked: stale },
+      ip,
+    });
+    return this.presentFor(c.iso, user);
+  }
+
+  private async scrubZdryRefNotes(lotId: number) {
+    const rows = await this.odoo.searchRead(
+      "mail.message",
+      [
+        ["model", "=", "stock.lot"],
+        ["res_id", "=", lotId],
+      ],
+      ["id", "body"],
+      { limit: 40, order: "id desc" },
+    );
+    for (const row of rows) {
+      const raw = String(row.body || "");
+      if (!isZdryRefNoteBody(raw) || !/<\/?p|&lt;\/?p/i.test(raw)) continue;
+      const plain = plainChatterBody(raw);
+      if (!plain) continue;
+      await this.odoo.write("mail.message", [Number(row.id)], { body: plain }, { context: { ...ZDRY_SYNC_CONTEXT } });
+    }
   }
 
   async campoQueue(q = "") {
@@ -1642,6 +1771,7 @@ export class WarehouseService {
     user: AuthUser,
     ip: string | undefined,
     replaceNote: string,
+    source = "zdry",
   ) {
     if (sizeBytes > MAX_INSPECTION_PHOTO_BYTES) {
       throw new BadRequestException("La foto supera el máximo de 8 MB.");
@@ -1675,6 +1805,7 @@ export class WarehouseService {
         originalName,
         sizeBytes,
         status: PHOTO_STATUS_ACTIVE,
+        source,
       },
     });
     await this.audit.log({
@@ -1735,6 +1866,10 @@ export class WarehouseService {
       ownerCustomer: c.ownerCustomer,
       storageDiscountPct: Number(c.storageDiscountPct),
       photos: photoSlots,
+      photoOrigins: Array.from({ length: 9 }, (_, i) => {
+        const p = c.photos.find((x) => x.slot === i && x.status !== PHOTO_STATUS_REJECTED);
+        return p ? p.source || "zdry" : null;
+      }),
       hasVideo: !!c.video360Key,
       mediaStatus: c.mediaStatus,
       mediaReviewNote: c.mediaReviewNote,
@@ -1745,10 +1880,15 @@ export class WarehouseService {
       campoEnabledAt: c.campoEnabledAt,
       campoEnabledByName: c.campoEnabledByName,
       material: hideOdoo ? null : c.material,
+      odooDescription: hideOdoo ? "" : c.odooDescription,
       conditionWalls: c.conditionWalls,
       roofHole: c.roofHole,
       odooLotId: hideOdooIds ? null : c.odooLotId,
       hasOdooChatter: !!c.odooLotId,
+      canPushOdooRef: !!c.odooLotId,
+      odooRefSlot: c.odooRefSlot,
+      odooRefPushedAt: c.odooRefPushedAt,
+      odooRefAttachmentId: hideOdooIds ? null : c.odooRefAttachmentId,
       odooLocation: hideOdooIds ? null : c.odooLocation,
       odooDua: hideOdoo ? null : c.odooDua,
       originCountry: hideOdoo ? null : c.originCountry,

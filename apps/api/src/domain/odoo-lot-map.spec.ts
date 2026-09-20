@@ -9,6 +9,7 @@ import {
   odooWriteKeys,
   pickFieldByLabel,
   readLotAttrs,
+  receptionOwnedPatch,
   titleFromLocation,
 } from "./odoo-lot-map";
 
@@ -172,5 +173,28 @@ describe("odoo-lot-map", () => {
     expect(matchOdooSelect(2021, [["2021", "2021"], ["NO DEFINE", "NO DEFINE"]])).toBe("2021");
     expect(matchOdooSelect("CREMA", ODOO_LOT_SELECT_FALLBACK.color)).toBe("CREMA");
     expect(matchOdooSelect(2021, ODOO_LOT_SELECT_FALLBACK.year)).toBe("2021");
+  });
+
+  it("Recepción mapea tara/peso/descripción a campos Odoo owned", () => {
+    expect(
+      receptionOwnedPatch({
+        tareKg: "3860",
+        mgwKg: "30480",
+        odooDescription: "Golpe en esquina derecha",
+      }),
+    ).toEqual({
+      tareKg: 3860,
+      mgwKg: 30480,
+      description: "Golpe en esquina derecha",
+    });
+  });
+
+  it("lee la descripción del lote (note / Descripción)", () => {
+    expect(
+      readLotAttrs(
+        { name: "APHU678930-9", note: "Comentario de patio" },
+        { note: { string: "Descripción" } },
+      ).description,
+    ).toBe("Comentario de patio");
   });
 });

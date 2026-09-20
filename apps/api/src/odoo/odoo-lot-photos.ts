@@ -1,4 +1,5 @@
 import { NotFoundException } from "@nestjs/common";
+import { isZdryRefAttachment } from "../domain/odoo-ref-photo";
 import { OdooClient } from "./odoo.client";
 
 export type OdooLotPhotoMeta = {
@@ -6,6 +7,7 @@ export type OdooLotPhotoMeta = {
   name: string;
   mimetype: string;
   size: number;
+  kind: "zdry_ref" | "inbox";
 };
 
 export type OdooLotNote = {
@@ -57,7 +59,7 @@ export async function listOdooLotChatter(
     const attached = await odoo.searchRead(
       "ir.attachment",
       ["&", ["res_model", "=", "stock.lot"], ["res_id", "=", lotId]],
-      ["id", "name", "mimetype", "file_size", "checksum"],
+      ["id", "name", "mimetype", "file_size", "checksum", "description"],
       { limit: 24 },
     );
     const messages = await odoo.searchRead(
@@ -71,7 +73,7 @@ export async function listOdooLotChatter(
     );
     const extraIds = messages.flatMap((m) => (Array.isArray(m.attachment_ids) ? (m.attachment_ids as number[]) : []));
     const extra = extraIds.length
-      ? await odoo.searchRead("ir.attachment", [["id", "in", extraIds]], ["id", "name", "mimetype", "file_size", "checksum"], {
+      ? await odoo.searchRead("ir.attachment", [["id", "in", extraIds]], ["id", "name", "mimetype", "file_size", "checksum", "description"], {
           limit: 24,
         })
       : [];
@@ -89,6 +91,7 @@ export async function listOdooLotChatter(
         name: String(a.name || "foto"),
         mimetype: String(a.mimetype || "image/jpeg"),
         size: Number(a.file_size) || 0,
+        kind: (isZdryRefAttachment(a) ? "zdry_ref" : "inbox") as OdooLotPhotoMeta["kind"],
       }));
     return { photos, notes: notesFromMailRecords(messages) };
   } catch {

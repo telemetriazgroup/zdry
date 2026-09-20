@@ -80,6 +80,9 @@ const ODOO_KEY_TO_OWNED: Record<string, OdooOwnedField> = {
   manufacturer: "manufacturer",
   material: "material",
   tipo_material: "material",
+  note: "description",
+  description: "description",
+  descripcion: "description",
 };
 
 function asRecord(v: unknown): Record<string, unknown> {

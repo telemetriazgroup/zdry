@@ -242,6 +242,10 @@ Reutilizar idea de `zg_costo_producto_transformado` (serie origen + OC operativa
 
 ---
 
+Cierre 20-sep-2026: diario de asimilación, costo MO valorizado, extras y líneas editables en ZDRY. J3 queda cerrado.
+
+---
+
 ## 9. Fuera de este reto
 
-Crear OC o validar picking desde ZDRY. Subir todas las fotos a Odoo (J4). Crear `sale.order` (J5). SUNAT, GRE, asientos, conciliación bancaria.
+Crear OC o validar picking desde ZDRY. Foto única de referencia a Odoo ([J4](J4-foto-unica.md)). Crear `sale.order` (J5). SUNAT, GRE, asientos, conciliación bancaria.

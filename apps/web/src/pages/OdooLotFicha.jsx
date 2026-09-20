@@ -28,8 +28,35 @@ function matchSelectValue(raw, options) {
   return hit ? hit[0] : t;
 }
 
+function fichaForm(d) {
+  return {
+    color: d.color || "",
+    tareKg: d.tareKg ?? "",
+    mgwKg: d.mgwKg ?? "",
+    year: d.year ?? "",
+    manufacturer: d.manufacturer || "",
+    dua: d.dua || "",
+    originCountry: d.originCountry || "",
+    material: d.material || "",
+    description: d.description || d.odooDescription || "",
+    zdryType: d.zdryType || "",
+    zdryCat: d.zdryCat || "",
+    zdryNotes: d.zdryNotes || "",
+  };
+}
+
+function eventLabel(ev) {
+  if (ev === "recepcion_save") return "Recepción";
+  if (ev === "ficha_save") return "Ficha";
+  if (ev === "lot_write") return "evento Odoo";
+  return ev || "";
+}
+
 function OdooOwnedInput({ field, value, onChange }) {
   const options = field.options || [];
+  if (field.key === "description") {
+    return <textarea rows={3} value={value} onChange={(e) => onChange(e.target.value)} />;
+  }
   if (options.length) {
     const current = matchSelectValue(value, options);
     const known = options.some(([k]) => k === current);
@@ -349,7 +376,7 @@ function ExpedientePanel({ id }) {
                     {i ? <span className="evo-arrow" aria-hidden>→</span> : null}
                     <span className={`evo-chip src-${s.source === "odoo" ? "odoo" : s.source === "zdry" ? "zdry" : "prev"}${s.applied === false ? " not-applied" : ""}`}>
                       <em>{s.value || "—"}</em>
-                      <small>{s.source === "odoo" ? "Odoo" : s.source === "zdry" ? "ZDRY" : "antes"}{s.applied === false ? " · no aplicado" : ""} · {new Date(s.at).toLocaleString("es-PE")}</small>
+                      <small>{s.source === "odoo" ? "Odoo" : s.source === "zdry" ? "ZDRY" : "antes"}{s.event ? ` · ${eventLabel(s.event)}` : ""}{s.applied === false ? " · no aplicado" : ""} · {new Date(s.at).toLocaleString("es-PE")}</small>
                     </span>
                   </span>
                 ))}
@@ -374,19 +401,7 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
   async function load() {
     const d = await api(`/odoo-import/candidates/${id}`);
     setRow(d);
-    setForm({
-      color: d.color || "",
-      tareKg: d.tareKg ?? "",
-      mgwKg: d.mgwKg ?? "",
-      year: d.year ?? "",
-      manufacturer: d.manufacturer || "",
-      dua: d.dua || "",
-      originCountry: d.originCountry || "",
-      material: d.material || "",
-      zdryType: d.zdryType || "",
-      zdryCat: d.zdryCat || "",
-      zdryNotes: d.zdryNotes || "",
-    });
+    setForm(fichaForm(d));
     api(`/odoo-import/candidates/${id}/photos`).then(setPhotos).catch(() => setPhotos([]));
   }
 
@@ -413,19 +428,7 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
       };
       const d = await api(`/odoo-import/candidates/${id}`, { method: "PATCH", body });
       setRow(d);
-      setForm({
-        color: d.color || "",
-        tareKg: d.tareKg ?? "",
-        mgwKg: d.mgwKg ?? "",
-        year: d.year ?? "",
-        manufacturer: d.manufacturer || "",
-        dua: d.dua || "",
-        originCountry: d.originCountry || "",
-        material: d.material || "",
-        zdryType: d.zdryType || "",
-        zdryCat: d.zdryCat || "",
-        zdryNotes: d.zdryNotes || "",
-      });
+      setForm(fichaForm(d));
       setMsg(d.saveMessage || "Guardado.");
       if (d.odooSyncStatus === "error" && d.odooSyncError) setError(d.odooSyncError);
       onSaved?.();
@@ -462,19 +465,7 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
             api(`/odoo-import/candidates/${id}?refresh=1`)
               .then((d) => {
                 setRow(d);
-                setForm({
-                  color: d.color || "",
-                  tareKg: d.tareKg ?? "",
-                  mgwKg: d.mgwKg ?? "",
-                  year: d.year ?? "",
-                  manufacturer: d.manufacturer || "",
-                  dua: d.dua || "",
-                  originCountry: d.originCountry || "",
-                  material: d.material || "",
-                  zdryType: d.zdryType || "",
-                  zdryCat: d.zdryCat || "",
-                  zdryNotes: d.zdryNotes || "",
-                });
+                setForm(fichaForm(d));
                 setMsg("Ficha actualizada desde Odoo.");
               })
               .catch((e) => setError(e.message))
@@ -528,7 +519,7 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
           <h4>Datos Odoo <small>guardar escribe en Odoo (zdry_sync, sin eco). Un cambio posterior en Odoo vuelve a prevalecer.</small></h4>
           <div className="odoo-form">
             {(row.odooFields || []).map((f) => (
-              <label key={f.key}>
+              <label key={f.key} className={f.key === "description" ? "odoo-span2" : undefined}>
                 <span>{f.label} <SyncIcon status={f.sync} compact /></span>
                 <OdooOwnedInput field={f} value={form[f.key] ?? ""} onChange={(v) => set(f.key, v)} />
               </label>

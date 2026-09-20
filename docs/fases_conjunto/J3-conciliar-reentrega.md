@@ -44,6 +44,8 @@ Validación local 19-sep-2026: reentrega `BMOU433548-9` → auto ISO `ZGROU/IN/0
 
 Ampliación (ficha OC/IN/MO, asimilación de una vez, costo MO, factura pendiente): [j3_reto.md](j3_reto.md).
 
+**Cierre 20-sep-2026:** reto A–E en local. Diario de asimilación (últimas 5 + Ver más, cancelar al reset, CSV por fechas). Costo MO con `standard_price` PEN→USD + extras referenciales editables en ZDRY + línea sin costo Odoo con valor ZDRY. No se abre más alcance J3.
+
 ## Fuera de J3
 
 Crear la OC desde ZDRY. Validar el picking desde ZDRY.
