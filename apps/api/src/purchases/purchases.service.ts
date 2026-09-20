@@ -31,6 +31,10 @@ import {
 } from "../domain/purchase-docs";
 import { StorageService } from "../storage/storage.service";
 import { randomUUID } from "crypto";
+import { inspectOdooIso } from "../domain/odoo-lot-map";
+import { assertConfirmMatch, proposeMatch, reconcileContainerPatch } from "../domain/odoo-reconcile";
+import { ACQUISITION_REFS_KEY, computeListPrices, DEFAULT_PRICING_RULES, normalizeAcquisitionRefs } from "../domain/pricing";
+import { presentDryReferential } from "../odoo-import/dry-referential.store";
 
 export type InvoiceLineInput = {
   iso: string;
@@ -77,7 +81,7 @@ export class PurchasesService {
       ? { status: "pending" }
       : { status: "pending", invoice: { demo: false } };
     const live = await this.prisma.liveContainers();
-    const [extras, dam, odoo] = await Promise.all([
+    const [extras, dam, odoo, reconcile] = await Promise.all([
       this.prisma.pendingExtraCost.count({ where: extrasWhere }),
       this.prisma.container.count({
         where: { intakeType: { in: ["compra", "pendiente_factura"] }, damNumber: null, ...live },
@@ -85,8 +89,17 @@ export class PurchasesService {
       this.prisma.container.count({
         where: { intakeOrigin: "odoo", invoicePending: true, status: { not: "Vendido" }, ...live },
       }),
+      this.prisma.container.count({
+        where: {
+          odooPoId: null,
+          status: { not: "Vendido" },
+          OR: [{ invoicePending: true }, { intakeType: "pendiente_factura" }],
+          NOT: { intakeType: { in: ["ajuste_odoo", "fabricacion_odoo", "almacenaje_cliente"] } },
+          ...live,
+        },
+      }),
     ]);
-    return { extras, dam, odoo };
+    return { extras, dam, odoo, reconcile };
   }
 
   async listInvoices() {
@@ -297,6 +310,230 @@ export class PurchasesService {
       purchaseInvoiceId: c.purchaseInvoiceId,
       purchaseInvoiceNumber: c.purchaseInvoice?.number || null,
     }));
+  }
+
+  async listReconcile() {
+    const live = await this.prisma.liveContainers();
+    const leftRows = await this.prisma.container.findMany({
+      where: {
+        odooPoId: null,
+        status: { not: "Vendido" },
+        OR: [{ invoicePending: true }, { intakeType: "pendiente_factura" }],
+        NOT: { intakeType: { in: ["ajuste_odoo", "fabricacion_odoo", "almacenaje_cliente"] } },
+        ...live,
+      },
+      include: { depot: { select: { name: true } } },
+      orderBy: { iso: "asc" },
+    });
+    const cands = await this.prisma.odooLotCandidate.findMany({
+      where: { odooIntakeKind: "purchase", status: { not: "ignored" } },
+      orderBy: { isoNormalized: "asc" },
+    });
+    const groups = new Map<
+      string,
+      {
+        id: string;
+        candidateId: string;
+        lotIsos: string[];
+        lineTexts: string[];
+        pickingState: string;
+        pickingName: string | null;
+        odooPoId: number | null;
+        odooPoName: string | null;
+        odooVendorName: string | null;
+        odooBillName: string | null;
+        odooUnitPrice: number | null;
+        odooLotId: number;
+        serialRaw: string;
+        productName: string;
+      }
+    >();
+    for (const c of cands) {
+      const id = c.odooPickingName || (c.odooPoId ? `po:${c.odooPoId}` : c.id);
+      const cur = groups.get(id);
+      const texts = [c.serialRaw, c.productName, c.odooPoName].filter(Boolean) as string[];
+      if (!cur) {
+        groups.set(id, {
+          id,
+          candidateId: c.id,
+          lotIsos: [c.isoNormalized || c.serialRaw],
+          lineTexts: texts,
+          pickingState: c.odooPickingName ? "done" : "draft",
+          pickingName: c.odooPickingName,
+          odooPoId: c.odooPoId,
+          odooPoName: c.odooPoName,
+          odooVendorName: c.odooVendorName,
+          odooBillName: c.odooBillName,
+          odooUnitPrice: c.odooUnitPrice != null ? Number(c.odooUnitPrice) : null,
+          odooLotId: c.odooLotId,
+          serialRaw: c.serialRaw,
+          productName: c.productName,
+        });
+        continue;
+      }
+      cur.lotIsos.push(c.isoNormalized || c.serialRaw);
+      cur.lineTexts.push(...texts);
+      if (!cur.odooUnitPrice && c.odooUnitPrice != null) cur.odooUnitPrice = Number(c.odooUnitPrice);
+    }
+    const right = [...groups.values()];
+    const left = leftRows.map((c) => ({
+      iso: c.iso,
+      type: c.type,
+      cat: c.cat,
+      depotName: c.depot.name,
+      intakeType: c.intakeType,
+      invoicePending: c.invoicePending,
+      campoEnabled: !!c.campoEnabledAt,
+    }));
+    const proposals = [];
+    for (const L of left) {
+      for (const R of right) {
+        const m = proposeMatch({ iso: L.iso }, { lotIsos: R.lotIsos, lineTexts: R.lineTexts, pickingState: R.pickingState });
+        if (m.mode === "auto" || m.mode === "proposal") {
+          proposals.push({
+            iso: L.iso,
+            rightId: R.id,
+            candidateId: R.candidateId,
+            mode: m.mode,
+            reason: m.reason,
+            pickingName: R.pickingName,
+            odooPoName: R.odooPoName,
+            odooUnitPrice: R.odooUnitPrice,
+          });
+        }
+      }
+    }
+    return { left, right, proposals };
+  }
+
+  async confirmReconcile(
+    input: { iso?: string; candidateId?: string; rightId?: string },
+    user: AuthUser,
+    ip?: string,
+  ) {
+    const iso = inspectOdooIso(input.iso || "").isoNormalized;
+    if (!iso) throw new BadRequestException("Indica la serie de la reentrega.");
+    const container = await this.prisma.container.findUnique({ where: { iso } });
+    if (!container) throw new NotFoundException("Reentrega no encontrada.");
+    if (["ajuste_odoo", "fabricacion_odoo", "almacenaje_cliente"].includes(container.intakeType)) {
+      throw new BadRequestException("Esta unidad no es una reentrega por conciliar.");
+    }
+    const gate = assertConfirmMatch({ alreadyPoId: container.odooPoId, pickingState: "done" });
+    if (!gate.ok) {
+      if (gate.status === 409) throw new ConflictException(gate.message);
+      throw new BadRequestException(gate.message);
+    }
+
+    const cands = await this.prisma.odooLotCandidate.findMany({
+      where: { odooIntakeKind: "purchase", status: { not: "ignored" } },
+    });
+    const cand =
+      (input.candidateId ? cands.find((c) => c.id === input.candidateId) : null) ||
+      (input.rightId
+        ? cands.find((c) => c.id === input.rightId || c.odooPickingName === input.rightId || `po:${c.odooPoId}` === input.rightId)
+        : null) ||
+      cands.find((c) => inspectOdooIso(c.isoNormalized || c.serialRaw).isoNormalized === iso);
+    if (!cand) throw new NotFoundException("No hay un IN/OC de Odoo para esa serie.");
+
+    const pickingState = cand.odooPickingName ? "done" : "draft";
+    const proposed = proposeMatch(
+      { iso },
+      {
+        lotIsos: cands
+          .filter((c) => (cand.odooPickingName ? c.odooPickingName === cand.odooPickingName : c.id === cand.id))
+          .map((c) => c.isoNormalized || c.serialRaw),
+        lineTexts: [cand.serialRaw, cand.productName, cand.odooPoName || ""],
+        pickingState,
+      },
+    );
+    const blocked = assertConfirmMatch({ alreadyPoId: container.odooPoId, pickingState });
+    if (!blocked.ok) {
+      if (blocked.status === 409) throw new ConflictException(blocked.message);
+      throw new BadRequestException(blocked.message);
+    }
+    if (proposed.mode === "none") {
+      throw new BadRequestException(
+        proposed.reason === "draft" ? "El IN está en borrador. Solo se concilia un incoming done." : "Ese IN no incluye esta serie.",
+      );
+    }
+
+    const patch = reconcileContainerPatch({
+      odooPoId: cand.odooPoId,
+      odooPoName: cand.odooPoName,
+      odooPickingName: cand.odooPickingName,
+      odooVendorName: cand.odooVendorName,
+      odooBillName: cand.odooBillName,
+      odooUnitPrice: cand.odooUnitPrice != null ? Number(cand.odooUnitPrice) : null,
+      odooLotId: cand.odooLotId,
+    });
+    if (!patch.odooPoId) throw new BadRequestException("El candidato Odoo no tiene OC.");
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.container.update({
+        where: { iso },
+        data: {
+          ...patch,
+          odooLocation: container.odooLocation || cand.locationName,
+        },
+      });
+      await tx.odooLotCandidate.update({
+        where: { id: cand.id },
+        data: { status: "assimilated", containerIso: iso, assimilatedAt: cand.assimilatedAt || new Date() },
+      });
+      await tx.containerHistory.create({
+        data: {
+          iso,
+          type: "Conciliación Odoo",
+          detail: `Reentrega conciliada con ${cand.odooPickingName || "IN"} · ${cand.odooPoName || "OC"} @ USD ${patch.fobCif || "—"} por ${user.name}. Costo OC; ya no usa referencial.`,
+        },
+      });
+    });
+    await this.refreshAcquisitionPrices(iso);
+    await this.audit.log({
+      user,
+      action: "odoo_reconcile",
+      entity: "Container",
+      entityId: iso,
+      after: { odooPoId: patch.odooPoId, odooPickingName: patch.odooPickingName, fobCif: patch.fobCif, costSource: "oc" },
+      ip,
+    });
+    return { ok: true, iso, ...patch };
+  }
+
+  private async refreshAcquisitionPrices(iso: string) {
+    const c = await this.prisma.container.findUnique({ where: { iso } });
+    if (!c || c.priceSource === "manual") return;
+    const [rules, refsRow, dry] = await Promise.all([
+      this.prisma.pricingRule.findMany(),
+      this.prisma.appSetting.findUnique({ where: { key: ACQUISITION_REFS_KEY } }),
+      presentDryReferential(this.prisma),
+    ]);
+    const pricing = rules.length
+      ? rules.map((r) => ({
+          id: r.id,
+          scope: r.scope,
+          target: r.target,
+          marginPct: Number(r.marginPct),
+          maxDiscountPct: Number(r.maxDiscountPct),
+        }))
+      : DEFAULT_PRICING_RULES;
+    const computed = computeListPrices(
+      {
+        iso: c.iso,
+        type: c.type,
+        cat: c.cat,
+        manufacturer: c.manufacturer,
+        fobCif: Number(c.fobCif),
+        costSource: c.costSource,
+        dryReferential: dry.effective,
+      },
+      pricing,
+      normalizeAcquisitionRefs(refsRow?.value),
+    );
+    await this.prisma.container.update({
+      where: { iso },
+      data: { priceList: computed.priceList, priceMin: computed.priceMin, priceSource: "rule" },
+    });
   }
 
   async linkOdooDebt(

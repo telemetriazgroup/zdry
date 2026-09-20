@@ -869,7 +869,12 @@ export class OdooImportService {
       });
       if (cand?.containerIso) {
         await this.prisma.container.updateMany({
-          where: { iso: cand.containerIso, purchaseInvoiceId: null },
+          where: {
+            iso: cand.containerIso,
+            purchaseInvoiceId: null,
+            intakeOrigin: "odoo",
+            NOT: [{ invoicePending: true, odooPoId: null, intakeType: "pendiente_factura" }],
+          },
           data: {
             odooPoName: ref.odooPoName,
             odooPoId: ref.odooPoId,
@@ -1630,14 +1635,15 @@ export class OdooImportService {
     if (!c) return;
     const mapped = this.mappedFromCandidate(cand);
     const source = this.sourceFromCandidate(cand);
+    const awaitingReconcile = !c.odooPoId && (c.invoicePending || c.intakeType === "pendiente_factura");
     const data: Prisma.ContainerUpdateInput = {
       odooSource: source as Prisma.InputJsonValue,
       odooLotId: c.odooLotId || cand.odooLotId || undefined,
-      intakeOrigin: c.intakeOrigin === "manual" ? "odoo" : c.intakeOrigin,
+      intakeOrigin: awaitingReconcile ? c.intakeOrigin : c.intakeOrigin === "manual" ? "odoo" : c.intakeOrigin,
     };
-    if (!c.odooIntakeKind && cand.odooIntakeKind) data.odooIntakeKind = cand.odooIntakeKind;
-    if (!c.odooPickingName && cand.odooPickingName) data.odooPickingName = cand.odooPickingName;
-    if (!c.costSource && cand.costSource) data.costSource = cand.costSource;
+    if (!awaitingReconcile && !c.odooIntakeKind && cand.odooIntakeKind) data.odooIntakeKind = cand.odooIntakeKind;
+    if (!awaitingReconcile && !c.odooPickingName && cand.odooPickingName) data.odooPickingName = cand.odooPickingName;
+    if (!awaitingReconcile && !c.costSource && cand.costSource) data.costSource = cand.costSource;
     if (!c.odooMoName && cand.odooMoName) data.odooMoName = cand.odooMoName;
     if (!c.odooSourceLotId && cand.odooSourceLotId) data.odooSourceLotId = cand.odooSourceLotId;
     if (!c.odooSourceProductCode && cand.odooSourceProductCode) data.odooSourceProductCode = cand.odooSourceProductCode;
@@ -1645,8 +1651,8 @@ export class OdooImportService {
     if (!c.odooSourceIntakeKind && cand.odooSourceIntakeKind) data.odooSourceIntakeKind = cand.odooSourceIntakeKind;
     if (!c.odooSourcePoName && cand.odooSourcePoName) data.odooSourcePoName = cand.odooSourcePoName;
     if (c.odooSourceUnitPrice == null && cand.odooSourceUnitPrice != null) data.odooSourceUnitPrice = cand.odooSourceUnitPrice;
-    if ((!c.fobCif || Number(c.fobCif) === 0) && cand.fobCif && cand.fobCif > 0) data.fobCif = cand.fobCif;
-    if (c.intakeType === "pendiente_factura" && cand.intakeType && cand.intakeType !== "pendiente_factura") {
+    if (!awaitingReconcile && (!c.fobCif || Number(c.fobCif) === 0) && cand.fobCif && cand.fobCif > 0) data.fobCif = cand.fobCif;
+    if (!awaitingReconcile && c.intakeType === "pendiente_factura" && cand.intakeType && cand.intakeType !== "pendiente_factura") {
       data.intakeType = cand.intakeType;
       if (cand.invoicePending !== undefined) data.invoicePending = cand.invoicePending;
     }

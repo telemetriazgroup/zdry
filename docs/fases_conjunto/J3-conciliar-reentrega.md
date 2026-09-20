@@ -36,9 +36,11 @@ No permitir que ZDRY llame `button_validate` del incoming.
 
 ## Hecho cuando
 
-- [ ] Una reentrega sin papeles existe y no bloquea fotos de campo.
-- [ ] Al validar el IN en Odoo, Compras ve la propuesta (vía J2 o Buscar).
-- [ ] Confirmado el match, el marketplace usa 1 325 (ejemplo) no el promedio de ajustes.
+- [x] Una reentrega sin papeles existe y no bloquea fotos de campo.
+- [x] Al validar el IN en Odoo, Compras ve la propuesta (vía J2 o Buscar).
+- [x] Confirmado el match, el marketplace usa 1 325 (ejemplo) no el promedio de ajustes.
+
+Validación local 19-sep-2026: reentrega `BMOU433548-9` → auto ISO `ZGROU/IN/06302` @ 1325; segundo confirm 409. Bandeja: **Compras → Conciliar**.
 
 ## Fuera de J3
 

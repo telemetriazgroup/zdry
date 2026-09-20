@@ -162,6 +162,7 @@ export default function Shell() {
             <Route path="seguimiento" element={<Gate nav={nav} role={user.role} path="/app/seguimiento"><QuotesHub /></Gate>} />
             <Route path="alquileres" element={<Gate nav={nav} role={user.role} path="/app/alquileres"><ComingSoon title="Contratos de alquiler" sprint="5" /></Gate>} />
             <Route path="compras/facturas" element={<Gate nav={nav} role={user.role} path="/app/compras/facturas"><Compras /></Gate>} />
+            <Route path="compras/conciliar" element={<Gate nav={nav} role={user.role} path="/app/compras/conciliar"><Compras /></Gate>} />
             <Route path="compras/odoo" element={<Gate nav={nav} role={user.role} path="/app/compras/odoo"><Compras /></Gate>} />
             <Route path="compras/extras" element={<Gate nav={nav} role={user.role} path="/app/compras/extras"><Compras /></Gate>} />
             <Route path="compras/dam" element={<Gate nav={nav} role={user.role} path="/app/compras/dam"><Compras /></Gate>} />

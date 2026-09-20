@@ -19,7 +19,7 @@ export const ROLE_DESC = {
   admin: "Ve inventario con costo real, personas, maestros, configuración, regularización Odoo y publicación del catálogo.",
   gerente: "Define reglas de precio y visibilidad. No ve FOB ni C_T.",
   vendedor: "Cotiza, valida comprobantes y confirma asignación. Nunca ve el costo real.",
-  compras: "Facturas de compra, deuda Odoo, extras y DAM. Ve costos de adquisición.",
+  compras: "Facturas de compra, conciliar reentrega con OC/IN, deuda Odoo, extras y DAM. Ve costos de adquisición.",
   coordinador: "Alta de reentrega, visitas de puerta, ficha, imágenes, costos sin monto y varios documentos por unidad. No publica el catálogo ni ve tarifas ni Odoo.",
   almacen: "Patio de campo: lista de visitas y DRY, fotos, video, diagnóstico y registro de emergencia si el contenedor no está. No ve Odoo ni precios.",
   cliente: "Reserva, negocia descuento con tu comercial y sube el comprobante de pago.",
@@ -68,6 +68,7 @@ export const ROLE_NAV = {
   compras: [
     { to: "/app", label: "Inicio", end: true },
     { to: "/app/compras/facturas", label: "Facturas de compra" },
+    { to: "/app/compras/conciliar", label: "Conciliar reentrega" },
     { to: "/app/compras/odoo", label: "Deuda Odoo" },
     { to: "/app/compras/extras", label: "Costos adicionales" },
     { to: "/app/compras/dam", label: "Nacionalización (DAM)" },

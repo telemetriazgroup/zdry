@@ -55,10 +55,12 @@ export default function Compras() {
     ? "extras"
     : loc.pathname.includes("/dam")
       ? "dam"
-      : loc.pathname.includes("/odoo")
-        ? "odoo"
-        : "facturas";
-  const [badges, setBadges] = useState({ extras: 0, dam: 0, odoo: 0 });
+      : loc.pathname.includes("/conciliar")
+        ? "conciliar"
+        : loc.pathname.includes("/odoo")
+          ? "odoo"
+          : "facturas";
+  const [badges, setBadges] = useState({ extras: 0, dam: 0, odoo: 0, reconcile: 0 });
 
   const refreshBadges = useCallback(() => {
     api("/purchases/badges").then(setBadges).catch(() => {});
@@ -72,6 +74,9 @@ export default function Compras() {
       <p className="section-sub">Facturas de importación, cola de extras reglada por la logística y DAM antes de despachar.</p>
       <div className="subtab-row">
         <NavLink to="/app/compras/facturas" className={`subtab ${tab === "facturas" ? "active" : ""}`}>Facturas de compra</NavLink>
+        <NavLink to="/app/compras/conciliar" className={`subtab ${tab === "conciliar" ? "active" : ""}`}>
+          Conciliar <AmberBadge n={badges.reconcile} />
+        </NavLink>
         <NavLink to="/app/compras/odoo" className={`subtab ${tab === "odoo" ? "active" : ""}`}>
           Deuda Odoo <AmberBadge n={badges.odoo} />
         </NavLink>
@@ -83,10 +88,130 @@ export default function Compras() {
         </NavLink>
       </div>
       {tab === "facturas" ? <PurchaseTab onChanged={refreshBadges} /> : null}
+      {tab === "conciliar" ? <ReconcileTab onChanged={refreshBadges} /> : null}
       {tab === "odoo" ? <OdooDebtTab onChanged={refreshBadges} /> : null}
       {tab === "extras" ? <ExtrasTab /> : null}
       {tab === "dam" ? <DamTab onChanged={refreshBadges} /> : null}
     </>
+  );
+}
+
+function ReconcileTab({ onChanged }) {
+  const [data, setData] = useState({ left: [], right: [], proposals: [] });
+  const [picked, setPicked] = useState({ iso: "", rightId: "" });
+  const [error, setError] = useState("");
+  const [ok, setOk] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setData(await api("/purchases/reconcile"));
+  }
+
+  useEffect(() => {
+    load().catch((e) => setError(e.message));
+  }, []);
+
+  const forLeft = (data.proposals || []).filter((p) => p.iso === picked.iso);
+  const selected = (data.proposals || []).find(
+    (p) => p.iso === picked.iso && p.rightId === picked.rightId,
+  ) || forLeft.find((p) => p.mode === "auto") || forLeft[0];
+
+  async function confirm() {
+    if (!picked.iso || !selected) {
+      setError("Elige una reentrega y un IN/OC.");
+      setOk("");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setOk("");
+    try {
+      const res = await api("/purchases/reconcile", {
+        method: "POST",
+        body: { iso: picked.iso, candidateId: selected.candidateId, rightId: selected.rightId },
+      });
+      setOk(`${res.iso} conciliada · ${res.odooPoName || res.odooPickingName} · USD ${res.fobCif || "—"}`);
+      setPicked({ iso: "", rightId: "" });
+      await load();
+      onChanged?.();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="panel">
+      <h3>Conciliar reentrega ↔ OC/IN Odoo</h3>
+      <p className="section-sub">
+        La reentrega entra a patio sin papeles. Cuando el IN está <b>done</b> en Odoo, se propone el match.
+        ISO igual = automático. Serial solo en el texto de la línea OC = propuesta. El IN en borrador no concilia.
+      </p>
+      {error ? <div className="err">{error}</div> : null}
+      {ok ? <div className="ok-msg">{ok}</div> : null}
+      <div className="reconcile-grid">
+        <div>
+          <h4>Reentregas sin OC</h4>
+          {!(data.left || []).length ? <p className="section-sub">No hay reentregas pendientes de conciliar.</p> : null}
+          {(data.left || []).map((r) => {
+            const hits = (data.proposals || []).filter((p) => p.iso === r.iso);
+            return (
+              <button
+                key={r.iso}
+                type="button"
+                className={`reconcile-card ${picked.iso === r.iso ? "on" : ""} ${hits.some((h) => h.mode === "auto") ? "auto" : ""}`}
+                onClick={() => setPicked({ iso: r.iso, rightId: hits.find((h) => h.mode === "auto")?.rightId || hits[0]?.rightId || "" })}
+              >
+                <b>{r.iso}</b>
+                <span>{r.type} · {r.cat} · {r.depotName}</span>
+                <small>
+                  {r.campoEnabled ? "En campo · " : ""}
+                  {hits.length ? hits.map((h) => (h.mode === "auto" ? "ISO" : "texto OC")).join(", ") : "sin propuesta aún"}
+                </small>
+              </button>
+            );
+          })}
+        </div>
+        <div>
+          <h4>IN / OC Odoo</h4>
+          {!(data.right || []).length ? <p className="section-sub">No hay IN de compra en la bandeja Odoo. Pulsa Buscar en Odoo o espera el evento J2.</p> : null}
+          {(data.right || []).map((r) => {
+            const hit = (data.proposals || []).find((p) => p.iso === picked.iso && p.rightId === r.id);
+            const dim = picked.iso && !hit;
+            return (
+              <button
+                key={r.id}
+                type="button"
+                disabled={r.pickingState !== "done"}
+                className={`reconcile-card ${picked.rightId === r.id ? "on" : ""} ${hit?.mode === "auto" ? "auto" : hit ? "proposal" : ""}`}
+                style={dim ? { opacity: 0.45 } : undefined}
+                onClick={() => setPicked((p) => ({ ...p, rightId: r.id }))}
+              >
+                <b>{r.pickingName || "Sin IN (borrador)"}</b>
+                <span>{r.odooPoName || "—"} · {r.odooVendorName || "—"}</span>
+                <small>
+                  {r.pickingState === "done" ? "IN done" : "IN borrador — no concilia"}
+                  {r.odooUnitPrice ? ` · USD ${r.odooUnitPrice}` : ""}
+                  {hit ? ` · ${hit.mode === "auto" ? "ISO coincidente" : "mencionado en línea OC"}` : ""}
+                </small>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="action-row" style={{ marginTop: 14 }}>
+        <button className="btn-primary" type="button" disabled={busy || !selected} onClick={confirm}>
+          Confirmar match
+        </button>
+        {selected ? (
+          <span className="section-sub">
+            {selected.iso} ↔ {selected.pickingName || selected.odooPoName} ({selected.mode === "auto" ? "ISO" : "propuesta por texto"})
+            {selected.odooUnitPrice ? ` · marketplace usará USD ${selected.odooUnitPrice}` : ""}
+          </span>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

@@ -50,6 +50,20 @@ export class PurchasesController {
     return this.purchases.listOdooDebt();
   }
 
+  @Get("reconcile")
+  reconcile() {
+    return this.purchases.listReconcile();
+  }
+
+  @Post("reconcile")
+  confirmReconcile(
+    @Body() body: { iso?: string; candidateId?: string; rightId?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.purchases.confirmReconcile(body, user, req.ip);
+  }
+
   @Post("odoo-link")
   linkOdoo(
     @Body() body: { isos?: string[]; invoiceId?: string },
