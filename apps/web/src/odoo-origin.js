@@ -21,6 +21,10 @@ export function costLabel(r, referential) {
   if (kind === "purchase" && r.odooUnitPrice != null && r.odooUnitPrice !== "") {
     return `USD ${Number(r.odooUnitPrice).toLocaleString("en-US")}`;
   }
+  if (kind === "fabrication" && r.moUnitCost != null && Number(r.moUnitCost) > 0) {
+    const n = Number(r.moUnitCost);
+    return `MO USD ${n.toLocaleString("en-US")}${r.odooSourcePoName ? ` · precursor ${r.odooSourcePoName}` : ""}`;
+  }
   if (kind === "adjustment" || kind === "fabrication") {
     const ref = referential?.effective ? `Ref. USD ${Number(referential.effective).toLocaleString("en-US")}` : "Referencial";
     if (kind === "fabrication" && r.odooSourcePoName) return `${ref} · precursor ${r.odooSourcePoName}`;

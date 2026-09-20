@@ -36,6 +36,16 @@ import {
 } from "../domain/odoo-origin";
 import { presentDryReferential } from "./dry-referential.store";
 import { ExpedienteStore } from "../odoo-events/expediente.store";
+import { AssimilateLogStore } from "./assimilate-log.store";
+import { errorDetail } from "../domain/odoo-assimilate-log";
+import {
+  idleAssimilateProgress,
+  normalizeAssimilateProgress,
+  ODOO_ASSIMILATE_PROGRESS_KEY,
+  type AssimilateProgress,
+} from "../domain/odoo-assimilate-progress";
+import { applyZdryLineCosts, buildMoOverhead, inferMoOverheadPlan, moCostBreakdown, moLineKey, penToUsd, pickComponentUnitCost, type MoOverheadPlan } from "../domain/odoo-mo-cost";
+import { billDossierDraft, moDossierDraft, pickingDossierDraft, purchaseDossierDraft } from "../domain/odoo-dossier";
 
 const DRY_DOMAIN = [["name", "ilike", "contenedor dry"]];
 const ODOO_LOT_SELECTS_KEY = "odoo_lot_selects";
@@ -50,9 +60,27 @@ export class OdooImportService {
     private readonly audit: AuditService,
   ) {
     this.expediente = new ExpedienteStore(prisma);
+    this.logs = new AssimilateLogStore(prisma);
   }
 
   private readonly expediente: ExpedienteStore;
+  private readonly logs: AssimilateLogStore;
+  private runId: string | null = null;
+  private readonly aborted = new Set<string>();
+  private abortFlag = false;
+
+  private isAborted(runId?: string | null) {
+    return this.abortFlag || Boolean(runId && this.aborted.has(runId));
+  }
+
+  private async abortActive(reason: string) {
+    this.abortFlag = true;
+    if (this.runId) this.aborted.add(this.runId);
+    const cancelled = await this.logs.cancelRunning(reason);
+    for (const id of cancelled) this.aborted.add(id);
+    this.runId = null;
+    await this.writeProgress({ status: "idle", step: "", current: 0, total: 0, iso: "", message: reason });
+  }
 
   probe() {
     return this.odoo.probe();
@@ -60,6 +88,81 @@ export class OdooImportService {
 
   referential() {
     return presentDryReferential(this.prisma);
+  }
+
+  async progress(): Promise<AssimilateProgress & { runId?: string }> {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: ODOO_ASSIMILATE_PROGRESS_KEY } });
+    const p = normalizeAssimilateProgress(row?.value);
+    const running = await this.logs.currentRunning();
+    return { ...p, runId: running?.id || this.runId || undefined };
+  }
+
+  async assimilateLog(opts: { runId?: string; level?: string; take?: number; from?: string; to?: string } = {}) {
+    return this.logs.present(opts);
+  }
+
+  async exportAssimilateLog(opts: { runId?: string; level?: string; from?: string; to?: string } = {}) {
+    return this.logs.exportCsv(opts);
+  }
+
+  private moOverheadKey(moName: string) {
+    return `odoo_mo_overhead:${moName}`;
+  }
+
+  private async readMoOverheadOverride(moName: string): Promise<Partial<MoOverheadPlan> | null> {
+    if (!moName) return null;
+    const row = await this.prisma.appSetting.findUnique({ where: { key: this.moOverheadKey(moName) } });
+    const v = row?.value;
+    if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+    return v as Partial<MoOverheadPlan>;
+  }
+
+  private async saveMoOverheadOverride(moName: string, plan: MoOverheadPlan) {
+    await this.prisma.appSetting.upsert({
+      where: { key: this.moOverheadKey(moName) },
+      create: { key: this.moOverheadKey(moName), value: plan as unknown as Prisma.InputJsonValue },
+      update: { value: plan as unknown as Prisma.InputJsonValue },
+    });
+  }
+
+  private moLinesKey(moName: string) {
+    return `odoo_mo_lines:${moName}`;
+  }
+
+  private async readMoLineOverrides(moName: string): Promise<Record<string, number>> {
+    if (!moName) return {};
+    const row = await this.prisma.appSetting.findUnique({ where: { key: this.moLinesKey(moName) } });
+    const v = row?.value;
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    return Object.fromEntries(
+      Object.entries(v as Record<string, unknown>)
+        .map(([k, n]) => [k, Number(n)])
+        .filter(([, n]) => Number.isFinite(n) && (n as number) > 0),
+    ) as Record<string, number>;
+  }
+
+  private async saveMoLineOverrides(moName: string, lines: Record<string, number>) {
+    await this.prisma.appSetting.upsert({
+      where: { key: this.moLinesKey(moName) },
+      create: { key: this.moLinesKey(moName), value: lines as unknown as Prisma.InputJsonValue },
+      update: { value: lines as unknown as Prisma.InputJsonValue },
+    });
+  }
+
+  private async writeProgress(patch: Partial<AssimilateProgress>) {
+    const prev = await this.progress();
+    const next: AssimilateProgress = {
+      ...idleAssimilateProgress(),
+      ...prev,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    await this.prisma.appSetting.upsert({
+      where: { key: ODOO_ASSIMILATE_PROGRESS_KEY },
+      create: { key: ODOO_ASSIMILATE_PROGRESS_KEY, value: next as Prisma.InputJsonValue },
+      update: { value: next as Prisma.InputJsonValue },
+    });
+    return next;
   }
 
   async lotSelects(opts: { refresh?: boolean } = {}): Promise<LotSelects> {
@@ -104,15 +207,62 @@ export class OdooImportService {
   async sync(user: AuthUser, ip?: string) {
     const probe = await this.odoo.probe();
     if (!probe.ok) throw new BadRequestException(probe.message);
+    const existing = await this.logs.currentRunning();
+    const live = await this.progress();
+    const liveAge = live.updatedAt ? Date.now() - new Date(live.updatedAt).getTime() : 0;
+    const liveStuck = live.status === "running" && liveAge > 15 * 60 * 1000;
+    const orphan = (existing || live.status === "running") && !this.runId;
+    if (orphan || liveStuck) {
+      await this.abortActive(
+        orphan
+          ? "La pasada anterior se cortó (reinicio del servicio). Se inicia una nueva."
+          : "La pasada anterior se cortó. Se inicia una nueva.",
+      );
+    } else if (existing || live.status === "running") {
+      return {
+        ok: true,
+        running: true,
+        runId: existing?.id,
+        message: "Ya hay una pasada en curso. El diario se actualiza abajo.",
+      };
+    }
+    const run = await this.logs.start("sync", user.name);
+    this.abortFlag = false;
+    this.aborted.delete(run.id);
+    this.runId = run.id;
+    await this.writeProgress({ status: "running", step: "lotes", current: 0, total: 5, iso: "", message: "Leyendo existencias DRY…" });
+    await this.logs.add(run.id, { level: "info", step: "lotes", message: `Pasada iniciada por ${user.name || "admin"}.` });
+    void this.runSync(run.id, user, ip).finally(() => {
+      if (this.runId === run.id) this.runId = null;
+    });
+    return {
+      ok: true,
+      running: true,
+      runId: run.id,
+      message: "Pasada iniciada en segundo plano. Abre el diario para ver cada serie y los errores.",
+    };
+  }
+
+  private async runSync(runId: string, user: AuthUser, ip?: string) {
+    this.runId = runId;
+    try {
+      if (this.abortFlag && this.aborted.has(runId)) return;
+      if (this.isAborted(runId)) return;
     await this.lotSelects({ refresh: true }).catch(() => undefined);
+    if (this.isAborted(runId)) return;
 
     const rawProducts = await this.odoo.searchRead("product.product", DRY_DOMAIN, ["id", "name", "default_code", "categ_id"], {
       limit: 400,
     });
+    if (this.isAborted(runId)) return;
     const products = rawProducts.filter((p) => isDryContainerProduct(String(p.name || ""), String(p.default_code || "")));
     const productIds = products.map((p) => Number(p.id));
     if (!productIds.length) {
-      return { ok: true, products: 0, quants: 0, upserted: 0, message: "Odoo no devolvió productos DRY." };
+      const empty = "Odoo no devolvió productos DRY.";
+      await this.logs.add(runId, { level: "warn", step: "lotes", message: empty });
+      await this.logs.finish(runId, empty);
+      await this.writeProgress({ status: "done", step: "listo", current: 5, total: 5, message: empty });
+      return;
     }
     const productMap = new Map(products.map((p) => [Number(p.id), p]));
 
@@ -127,6 +277,7 @@ export class OdooImportService {
       ["id", "lot_id", "location_id", "quantity", "product_id"],
       { limit: 2000 },
     );
+    if (this.isAborted(runId)) return;
 
     const lotIds = [...new Set(quants.map((q) => this.relId(q.lot_id)).filter((n): n is number => n > 0))];
     const lotMeta = await this.lotMeta();
@@ -139,6 +290,7 @@ export class OdooImportService {
     let upserted = 0;
 
     for (const q of quants) {
+      if (this.isAborted(runId)) return;
       const lotId = this.relId(q.lot_id);
       if (!lotId || seen.has(lotId)) continue;
       seen.add(lotId);
@@ -147,8 +299,12 @@ export class OdooImportService {
       const attrs = readLotAttrs(lot, lotMeta.fields);
       const serialRaw = attrs.serialRaw || this.relName(q.lot_id);
       const iso = inspectOdooIso(serialRaw);
-      if (!iso.isoNormalized) continue;
+      if (!iso.isoNormalized) {
+        await this.logs.add(runId, { level: "warn", step: "lotes", serialRaw, odooLotId: lotId, message: "Sin serial normalizable; se omite." });
+        continue;
+      }
 
+      try {
       const qty = this.sumQty(quants, lotId);
       const locationName = this.relName(q.location_id);
       const productName = String(product?.name || this.relName(lot?.product_id) || "");
@@ -214,6 +370,35 @@ export class OdooImportService {
         });
       }
       upserted += 1;
+      await this.writeProgress({
+        status: "running",
+        step: "lotes",
+        current: 0,
+        total: 5,
+        iso: iso.isoNormalized,
+        message: `Lote ${upserted}/${lotIds.length} · ${serialRaw}`,
+      });
+      await this.logs.add(runId, {
+        level: "ok",
+        step: "lotes",
+        iso: iso.isoNormalized,
+        serialRaw,
+        odooLotId: lotId,
+        product: `${productCode ? `[${productCode}] ` : ""}${productName}`.trim(),
+        message: existing?.status === "assimilated" ? `Ya en ZDRY (${existing.containerIso}). Ficha actualizada.` : `Cargado · ${locationName || "sin almacén"} · qty ${qty}`,
+      });
+      } catch (e) {
+        const { message, detail } = errorDetail(e);
+        await this.logs.add(runId, {
+          level: "error",
+          step: "lotes",
+          iso: iso.isoNormalized,
+          serialRaw,
+          odooLotId: lotId,
+          message,
+          detail,
+        });
+      }
     }
 
     await this.prisma.odooLotCandidate.updateMany({
@@ -221,9 +406,26 @@ export class OdooImportService {
       data: { status: "off_hand" },
     });
 
-    const purchaseHits = await this.attachPurchaseRefs([...seen]);
-    const originHits = await this.attachIntakeOrigins([...seen]);
-    const fabricationHits = await this.attachFabricationLineage([...seen]);
+    if (this.isAborted(runId)) return;
+    await this.writeProgress({ status: "running", step: "origenes", current: 1, total: 5, message: "Clasificando OC / IN / MO…" });
+    let purchaseHits = 0;
+    let originHits = 0;
+    let fabricationHits = 0;
+    try {
+      purchaseHits = await this.attachPurchaseRefs([...seen]);
+      originHits = await this.attachIntakeOrigins([...seen]);
+      fabricationHits = await this.attachFabricationLineage([...seen]);
+      await this.logs.add(runId, { level: "ok", step: "origenes", message: `OC ${purchaseHits} · origen ${originHits} · MO ${fabricationHits}` });
+    } catch (e) {
+      const { message, detail } = errorDetail(e);
+      await this.logs.add(runId, { level: "error", step: "origenes", message, detail });
+    }
+    if (this.isAborted(runId)) return;
+    await this.writeProgress({ status: "running", step: "dossier", current: 2, total: 5, message: "Asimilando OC, INs y facturas…" });
+    await this.hydrateDossiers([...seen]);
+    if (this.isAborted(runId)) return;
+    await this.writeProgress({ status: "running", step: "mo_costo", current: 3, total: 5, message: "Costeando fabricaciones…" });
+    await this.hydrateMoCosts([...seen]);
 
     await this.audit.log({
       user,
@@ -251,7 +453,19 @@ export class OdooImportService {
         odooSourceLotId: true,
       },
     });
-    for (const cand of toBackfill) await this.expediente.backfillCandidate(cand);
+    for (const cand of toBackfill) {
+      try {
+        await this.expediente.backfillCandidate(cand);
+      } catch (e) {
+        const { message, detail } = errorDetail(e);
+        await this.logs.add(runId, { level: "error", step: "dossier", iso: cand.isoNormalized, message, detail });
+      }
+    }
+
+    if (this.isAborted(runId)) return;
+    await this.writeProgress({ status: "running", step: "notas", current: 4, total: 5, message: "Notas Odoo (solo si faltan)…" });
+    await this.pullMissingNotes([...seen]);
+    if (this.isAborted(runId)) return;
 
     const isoReview = await this.prisma.odooLotCandidate.count({ where: { status: "pending", iso6346Ok: false } });
     const message = [
@@ -265,26 +479,30 @@ export class OdooImportService {
     ]
       .filter(Boolean)
       .join(" ");
-    return {
-      ok: true,
-      products: products.length,
-      quants: quants.length,
-      lots: seen.size,
-      upserted,
-      incomplete,
-      isoReview,
-      originHits,
-      fabricationHits,
-      message,
-    };
+    if (this.isAborted(runId)) return;
+    await this.writeProgress({ status: "done", step: "listo", current: 5, total: 5, iso: "", message });
+    await this.logs.add(runId, { level: "info", step: "listo", message });
+    await this.logs.finish(runId, message);
+    } catch (e) {
+      if (this.isAborted(runId)) return;
+      await this.writeProgress({ status: "error", step: "error", message: (e as Error).message || "Error al asimilar" });
+      await this.logs.fail(runId, e, "sync");
+    }
   }
 
   async assimilate(ids: string[], user: AuthUser, ip?: string) {
     if (!ids?.length) throw new BadRequestException("Elige al menos un lote.");
+    const run = await this.logs.start("assimilate", user.name);
+    this.runId = run.id;
     const out: { iso: string; created: boolean; isoReview: boolean }[] = [];
+    try {
     for (const id of ids) {
       let cand = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
-      if (!cand) throw new NotFoundException("Candidato no encontrado.");
+      if (!cand) {
+        await this.logs.add(run.id, { level: "error", step: "assimilate", message: `Candidato ${id} no encontrado.` });
+        continue;
+      }
+      try {
       if (!cand.odooIntakeKind) {
         await this.attachIntakeOrigins([cand.odooLotId]);
         cand = (await this.prisma.odooLotCandidate.findUnique({ where: { id } })) || cand;
@@ -293,16 +511,49 @@ export class OdooImportService {
         await this.attachFabricationLineage([cand.odooLotId]);
         cand = (await this.prisma.odooLotCandidate.findUnique({ where: { id } })) || cand;
       }
-      out.push(await this.assimilateOne(cand, user, ip));
+      const item = await this.assimilateOne(cand, user, ip);
+      out.push(item);
+      await this.logs.add(run.id, {
+        level: "ok",
+        step: "assimilate",
+        iso: item.iso,
+        serialRaw: cand.serialRaw,
+        odooLotId: cand.odooLotId,
+        product: cand.productName,
+        message: item.created ? "Creado en Recepción." : `Ya existía ${item.iso}; ficha actualizada.`,
+      });
+      } catch (e) {
+        const { message, detail } = errorDetail(e);
+        await this.logs.add(run.id, {
+          level: "error",
+          step: "assimilate",
+          iso: cand.isoNormalized,
+          serialRaw: cand.serialRaw,
+          odooLotId: cand.odooLotId,
+          product: cand.productName,
+          message,
+          detail,
+        });
+      }
     }
-    return { ok: true, items: out };
+    const summary = `${out.length} unidad(es) asimilada(s). ${ids.length - out.length ? `${ids.length - out.length} con error.` : ""}`.trim();
+    await this.logs.finish(run.id, summary);
+    return { ok: true, items: out, runId: run.id, message: summary };
+    } catch (e) {
+      await this.logs.fail(run.id, e, "assimilate");
+      throw e;
+    } finally {
+      if (this.runId === run.id) this.runId = null;
+    }
   }
 
-  async expedienteOf(id: string) {
+  async expedienteOf(id: string, opts: { refresh?: boolean } = {}) {
     const cand = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
     if (!cand) throw new NotFoundException("Candidato no encontrado.");
     await this.expediente.backfillCandidate(cand);
-    await this.pullOdooNotes(cand).catch(() => undefined);
+    if (opts.refresh || !(await this.notesAlreadyFetched(cand))) {
+      await this.pullOdooNotes(cand).catch(() => undefined);
+    }
     return this.expediente.present(cand.isoNormalized);
   }
 
@@ -314,6 +565,163 @@ export class OdooImportService {
       containerIso: cand.containerIso,
     });
     if (!note) throw new BadRequestException("Escribe una nota.");
+    return this.expediente.present(cand.isoNormalized);
+  }
+
+  async patchMoOverhead(
+    id: string,
+    body: { days?: number; aguaPerDay?: number; herramientasPerDay?: number; adminPerDay?: number; maquinaria?: number; reset?: boolean },
+    user: AuthUser,
+    ip?: string,
+  ) {
+    const cand = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
+    if (!cand) throw new NotFoundException("Candidato no encontrado.");
+    const moName = cand.odooMoName || cand.odooPickingName;
+    if (!moName) throw new BadRequestException("Esta serie no tiene MO.");
+    const snap = await this.prisma.odooDocSnapshot.findFirst({
+      where: { isoNormalized: cand.isoNormalized, kind: "mo" },
+      orderBy: { version: "desc" },
+    });
+    const data = snap?.data && typeof snap.data === "object" && !Array.isArray(snap.data) ? (snap.data as Record<string, unknown>) : {};
+    const current = (data.overhead && typeof data.overhead === "object" ? data.overhead : {}) as Partial<MoOverheadPlan>;
+    const days = Number(body.days);
+    if (body.days != null && (!Number.isFinite(days) || days < 0.5 || days > 365)) {
+      throw new BadRequestException("Los días de fabricación deben estar entre 0.5 y 365.");
+    }
+    const next = inferMoOverheadPlan(
+      {
+        diasTrabajados: current.odooDays || 9,
+        costoAgua: (current.aguaPerDay || 4) * (current.odooDays || 9),
+        costoHerramientas: (current.herramientasPerDay || 20) * (current.odooDays || 9),
+        costoGastosAdmin: (current.adminPerDay || 20) * (current.odooDays || 9),
+        costoMaquinaria: current.maquinaria ?? 60,
+        costoEnergia: current.energia || 0,
+        otros: current.otros || 0,
+      },
+      body.reset
+        ? { days: current.odooDays || 9, daysSource: "odoo", aguaPerDay: current.aguaPerDay, herramientasPerDay: current.herramientasPerDay, adminPerDay: current.adminPerDay, maquinaria: current.maquinaria }
+        : {
+            days: body.days ?? current.days ?? 9,
+            daysSource: "zdry",
+            aguaPerDay: body.aguaPerDay ?? current.aguaPerDay,
+            herramientasPerDay: body.herramientasPerDay ?? current.herramientasPerDay,
+            adminPerDay: body.adminPerDay ?? current.adminPerDay,
+            maquinaria: body.maquinaria ?? current.maquinaria,
+          },
+    );
+    if (body.reset) {
+      next.days = next.odooDays;
+      next.daysSource = "odoo";
+    }
+    await this.saveMoOverheadOverride(moName, next);
+    return this.recomputeMoLocal(cand, moName, next, user, ip, "odoo_mo_overhead", {
+      days: next.days,
+      daysSource: next.daysSource,
+    });
+  }
+
+  async patchMoLine(id: string, body: { key?: string; unitCost?: number; clear?: boolean }, user: AuthUser, ip?: string) {
+    const cand = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
+    if (!cand) throw new NotFoundException("Candidato no encontrado.");
+    const moName = cand.odooMoName || cand.odooPickingName;
+    if (!moName) throw new BadRequestException("Esta serie no tiene MO.");
+    const key = moLineKey(body.key || "");
+    if (!key) throw new BadRequestException("Indica el componente.");
+    const lines = await this.readMoLineOverrides(moName);
+    if (body.clear) delete lines[key];
+    else {
+      const usd = Number(body.unitCost);
+      if (!Number.isFinite(usd) || usd <= 0 || usd > 1_000_000) {
+        throw new BadRequestException("El costo ZDRY debe ser un USD mayor a 0.");
+      }
+      lines[key] = Math.round(usd * 100) / 100;
+    }
+    await this.saveMoLineOverrides(moName, lines);
+    const snap = await this.prisma.odooDocSnapshot.findFirst({
+      where: { isoNormalized: cand.isoNormalized, kind: "mo" },
+      orderBy: { version: "desc" },
+    });
+    const data = snap?.data && typeof snap.data === "object" && !Array.isArray(snap.data) ? (snap.data as Record<string, unknown>) : {};
+    const plan = (data.overhead && typeof data.overhead === "object" ? data.overhead : null) as MoOverheadPlan | null;
+    return this.recomputeMoLocal(cand, moName, plan, user, ip, "odoo_mo_line", { key, unitCost: lines[key] || 0, clear: Boolean(body.clear) });
+  }
+
+  private async recomputeMoLocal(
+    cand: { id: string; isoNormalized: string; containerIso: string | null; productName: string; productCode: string },
+    moName: string,
+    overheadPlan: MoOverheadPlan | null,
+    user: AuthUser,
+    ip: string | undefined,
+    action: string,
+    after: Record<string, unknown>,
+  ) {
+    const snap = await this.prisma.odooDocSnapshot.findFirst({
+      where: { isoNormalized: cand.isoNormalized, kind: "mo" },
+      orderBy: { version: "desc" },
+    });
+    const data = snap?.data && typeof snap.data === "object" && !Array.isArray(snap.data) ? (snap.data as Record<string, unknown>) : {};
+    const next = overheadPlan || ((data.overhead && typeof data.overhead === "object" ? data.overhead : null) as MoOverheadPlan | null);
+    if (!next) throw new BadRequestException("Primero abre o refresca el expediente de la MO.");
+    const overrides = await this.readMoLineOverrides(moName);
+    const materials = applyZdryLineCosts(
+      (Array.isArray(data.components) ? data.components : [])
+        .filter((c) => {
+          const row = c && typeof c === "object" ? (c as Record<string, unknown>) : {};
+          return row.role !== "overhead" && row.origin !== "overhead" && !String(row.name || "").startsWith("OC operativa");
+        })
+        .map((c) => {
+          const row = c as Record<string, unknown>;
+          const origin = String(row.origin || "missing");
+          return {
+            name: String(row.name || "Insumo"),
+            qty: Number(row.qty) || 0,
+            unitCost: origin === "missing" || origin === "zdry" ? null : row.unitCost == null ? null : Number(row.unitCost),
+            costOrigin: (origin === "zdry" ? "missing" : origin) as "oc" | "valuation" | "standard" | "move" | "missing",
+            category: String(row.category || ""),
+            role: row.role === "precursor" ? ("precursor" as const) : ("component" as const),
+          };
+        }),
+      overrides,
+    );
+    const extras = (Array.isArray(data.components) ? data.components : [])
+      .filter((c) => String((c as { name?: string })?.name || "").startsWith("OC operativa"))
+      .map((c) => ({ name: String((c as { name?: string }).name), amountUsd: Number((c as { lineCost?: number }).lineCost) || 0 }));
+    const overhead = buildMoOverhead(next, extras);
+    const breakdown = moCostBreakdown({
+      components: materials,
+      overhead,
+      finishedQty: Number(data.finishedQty) || 1,
+      companyCurrency: String(data.companyCurrency || "PEN"),
+    });
+    const peers = await this.prisma.odooLotCandidate.findMany({
+      where: { OR: [{ odooMoName: moName }, { odooPickingName: moName }] },
+      select: { isoNormalized: true, containerIso: true, id: true },
+    });
+    await this.expediente.upsertShared(
+      peers.map((p) => p.isoNormalized),
+      moDossierDraft({
+        odooId: Number(snap?.odooId) || 0,
+        name: moName,
+        productFinished: String(data.productFinished || cand.productName || ""),
+        productCode: String(data.productCode || cand.productCode || ""),
+        sourceProduct: data.sourceProduct ? String(data.sourceProduct) : null,
+        date: data.date ? String(data.date) : null,
+        breakdown,
+        needs: Array.isArray(data.needs) ? data.needs.map(String) : [],
+        overhead: next,
+      }),
+      { candidateId: cand.id, containerIso: cand.containerIso },
+    );
+    if (breakdown.total > 0) {
+      for (const p of peers) {
+        if (!p.containerIso) continue;
+        await this.prisma.container.updateMany({
+          where: { iso: p.containerIso, OR: [{ odooIntakeKind: "fabrication" }, { intakeType: "fabricacion_odoo" }] },
+          data: { fobCif: breakdown.unitCost, costSource: "mo" },
+        });
+      }
+    }
+    await this.audit.log({ user, action, entity: "OdooLotCandidate", entityId: cand.id, after: { moName, unitCost: breakdown.unitCost, ...after }, ip });
     return this.expediente.present(cand.isoNormalized);
   }
 
@@ -337,6 +745,8 @@ export class OdooImportService {
     await this.attachPurchaseRefs(ids);
     await this.attachIntakeOrigins(ids);
     await this.attachFabricationLineage(ids);
+    await this.hydrateDossiers(ids);
+    await this.hydrateMoCosts(ids);
     return { refreshed: ids.length };
   }
 
@@ -384,11 +794,13 @@ export class OdooImportService {
     const iso = isoInfo.isoNormalized;
     if (!iso) throw new BadRequestException("Ese lote no tiene serial.");
 
+    const moUnitCost = cand.odooIntakeKind === "fabrication" ? await this.expediente.latestMoUnitCost(iso) : null;
     const plan = assimilateCostPlan({
       odooIntakeKind: cand.odooIntakeKind,
       odooUnitPrice: cand.odooUnitPrice != null ? Number(cand.odooUnitPrice) : null,
       odooBillName: cand.odooBillName,
       odooPoName: cand.odooPoName,
+      moUnitCost,
     });
 
     const existing = await this.prisma.container.findUnique({ where: { iso } });
@@ -508,7 +920,14 @@ export class OdooImportService {
   }
 
   async getOne(id: string, opts: { refresh?: boolean } = {}) {
-    if (opts.refresh) await this.refreshCandidateFromOdoo(id);
+    if (opts.refresh) {
+      await this.refreshCandidateFromOdoo(id);
+      const lot = await this.prisma.odooLotCandidate.findUnique({ where: { id }, select: { odooLotId: true } });
+      if (lot) {
+        await this.hydrateDossiers([lot.odooLotId]).catch(() => undefined);
+        await this.hydrateMoCosts([lot.odooLotId]).catch(() => undefined);
+      }
+    }
     const row = await this.prisma.odooLotCandidate.findUnique({
       where: { id },
       include: {
@@ -529,13 +948,20 @@ export class OdooImportService {
     );
     const dryReferential = await presentDryReferential(this.prisma);
     const lotSelects = await this.lotSelects().catch(() => ({ ...ODOO_LOT_SELECT_FALLBACK }));
-    const odooNotes = await this.pullOdooNotes(row).catch(() => []);
+    const moUnitCost = await this.expediente.latestMoUnitCost(row.isoNormalized);
+    let odooNotes: Array<{ id: number | string; body: string; author: string | null; date: string | null }> = [];
+    if (!opts.refresh && (await this.notesAlreadyFetched(row))) {
+      odooNotes = await this.localOdooNotes(row.isoNormalized);
+    } else {
+      odooNotes = await this.pullOdooNotes(row).catch(() => this.localOdooNotes(row.isoNormalized));
+    }
     return {
       ...row,
       color: matchOdooSelect(row.color, lotSelects.color) || row.color,
       year: matchOdooSelect(row.year, lotSelects.year) || row.year,
       lotSelects,
       odooNotes,
+      moUnitCost,
       dryReferential,
       fieldStatus,
       odooFields: ODOO_OWNED_FIELDS.map((key) => ({
@@ -748,17 +1174,93 @@ export class OdooImportService {
     return chatter.photos;
   }
 
+  private notesFetchedAt(payload: unknown): string | null {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+    const at = (payload as { notesFetchedAt?: unknown }).notesFetchedAt;
+    return at ? String(at) : null;
+  }
+
+  private async notesAlreadyFetched(cand: { payload?: unknown }) {
+    return Boolean(this.notesFetchedAt(cand.payload));
+  }
+
+  private async localOdooNotes(isoNormalized: string) {
+    const iso = inspectOdooIso(isoNormalized).isoNormalized || isoNormalized;
+    const rows = await this.prisma.unitNote.findMany({
+      where: { isoNormalized: iso, source: "odoo" },
+      orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }],
+      take: 200,
+    });
+    return rows.map((n) => ({
+      id: n.odooMessageId || n.id,
+      body: n.body,
+      author: n.author,
+      date: (n.occurredAt || n.createdAt).toISOString(),
+    }));
+  }
+
+  private async markNotesFetched(cand: { id: string; payload?: unknown }) {
+    const prev = cand.payload && typeof cand.payload === "object" && !Array.isArray(cand.payload) ? { ...(cand.payload as object) } : {};
+    await this.prisma.odooLotCandidate.update({
+      where: { id: cand.id },
+      data: { payload: { ...prev, notesFetchedAt: new Date().toISOString() } as Prisma.InputJsonValue },
+    });
+  }
+
+  private async pullMissingNotes(lotIds: number[]) {
+    const cands = await this.prisma.odooLotCandidate.findMany({
+      where: { odooLotId: { in: lotIds } },
+      select: { id: true, isoNormalized: true, containerIso: true, odooLotId: true, payload: true },
+    });
+    let i = 0;
+    for (const cand of cands) {
+      if (this.isAborted(this.runId)) return;
+      i += 1;
+      if (this.notesFetchedAt(cand.payload)) continue;
+      await this.writeProgress({
+        status: "running",
+        step: "notas",
+        current: 4,
+        total: 5,
+        iso: cand.isoNormalized,
+        message: `Notas ${i}/${cands.length} · ${cand.isoNormalized}`,
+      });
+      try {
+        const notes = await this.pullOdooNotes(cand);
+        await this.logs.add(this.runId, {
+          level: "ok",
+          step: "notas",
+          iso: cand.isoNormalized,
+          odooLotId: cand.odooLotId,
+          message: `${notes.length} nota(s) Odoo.`,
+        });
+      } catch (e) {
+        const { message, detail } = errorDetail(e);
+        await this.logs.add(this.runId, {
+          level: "error",
+          step: "notas",
+          iso: cand.isoNormalized,
+          odooLotId: cand.odooLotId,
+          message,
+          detail,
+        });
+      }
+    }
+  }
+
   private async pullOdooNotes(cand: {
     id: string;
     isoNormalized: string;
     containerIso?: string | null;
     odooLotId: number;
+    payload?: unknown;
   }) {
     const notes = await listOdooLotNotes(this.odoo, cand.odooLotId);
     await this.expediente.importOdooNotes(cand.isoNormalized, notes, {
       candidateId: cand.id,
       containerIso: cand.containerIso,
     });
+    await this.markNotesFetched(cand);
     return notes;
   }
 
@@ -772,6 +1274,7 @@ export class OdooImportService {
     if (String(confirm || "").trim().toUpperCase() !== "REINICIAR") {
       throw new BadRequestException("Escribe REINICIAR para vaciar el módulo de asimilación.");
     }
+    await this.abortActive("Reinicio: se canceló la búsqueda en Odoo.");
     const odooIsos = (
       await this.prisma.container.findMany({
         where: { intakeOrigin: "odoo", status: { not: "Vendido" } },
@@ -802,9 +1305,17 @@ export class OdooImportService {
       after: { removedContainers: odooIsos.length, depots: emptyOdooDepots.length },
       ip,
     });
+    const fresh = await this.logs.start("reset", user.name);
+    await this.logs.add(fresh.id, {
+      level: "info",
+      step: "reset",
+      message: `Módulo vaciado (${odooIsos.length} unidad(es) Odoo). Diario nuevo: pulsa Buscar en Odoo.`,
+    });
+    await this.logs.finish(fresh.id, "Módulo reiniciado. Listo para una búsqueda nueva.");
     return {
       ok: true,
-      message: "Módulo Odoo vaciado. Vuelve a pulsar Buscar en Odoo.",
+      runId: fresh.id,
+      message: "Búsqueda anterior cancelada. Módulo vaciado. El diario empieza de nuevo: pulsa Buscar en Odoo.",
       removedContainers: odooIsos.length,
       removedDepots: emptyOdooDepots.length,
     };
@@ -840,6 +1351,495 @@ export class OdooImportService {
         protected: false,
       },
     });
+  }
+
+  private async hydrateDossiers(lotIds: number[]) {
+    if (!lotIds.length) return 0;
+    const cands = await this.prisma.odooLotCandidate.findMany({
+      where: { odooLotId: { in: lotIds } },
+      select: {
+        id: true,
+        isoNormalized: true,
+        containerIso: true,
+        odooPoId: true,
+        odooPoName: true,
+        odooVendorName: true,
+        odooBillName: true,
+        odooUnitPrice: true,
+        odooPickingName: true,
+      },
+    });
+    const groups = new Map<string, typeof cands>();
+    for (const c of cands) {
+      if (!c.odooPoId && !c.odooPoName) continue;
+      const key = c.odooPoId ? `id:${c.odooPoId}` : `name:${c.odooPoName}`;
+      const list = groups.get(key) || [];
+      list.push(c);
+      groups.set(key, list);
+    }
+    let hits = 0;
+    for (const group of groups.values()) {
+      if (this.isAborted(this.runId)) return hits;
+      const sample = group[0];
+      try {
+        await this.hydratePurchaseGroup(group);
+        hits += 1;
+        await this.logs.add(this.runId, {
+          level: "ok",
+          step: "dossier",
+          iso: sample.isoNormalized,
+          message: `OC ${sample.odooPoName || sample.odooPoId} · ${group.length} serie(s)`,
+          detail: group.map((c) => c.isoNormalized).join(", "),
+        });
+      } catch (e) {
+        const { message, detail } = errorDetail(e);
+        await this.logs.add(this.runId, {
+          level: "error",
+          step: "dossier",
+          iso: sample.isoNormalized,
+          product: sample.odooPoName || "",
+          message: `Falló dossier ${sample.odooPoName || sample.odooPoId}: ${message}`,
+          detail,
+        });
+      }
+    }
+    return hits;
+  }
+
+  private async hydratePurchaseGroup(
+    group: Array<{
+      id: string;
+      isoNormalized: string;
+      containerIso: string | null;
+      odooPoId: number | null;
+      odooPoName: string | null;
+      odooVendorName: string | null;
+      odooBillName: string | null;
+      odooUnitPrice: Prisma.Decimal | number | null;
+      odooPickingName: string | null;
+    }>,
+  ) {
+    const sample = group[0];
+    const domain = sample.odooPoId ? [["id", "=", sample.odooPoId]] : [["name", "=", sample.odooPoName]];
+    const orders = await this.odoo.searchRead(
+      "purchase.order",
+      domain,
+      ["id", "name", "partner_id", "state", "currency_id", "amount_total", "date_order", "invoice_ids"],
+      { limit: 1 },
+    );
+    const order = orders[0];
+    const poId = order ? Number(order.id) : sample.odooPoId || 0;
+    const poName = order ? String(order.name || sample.odooPoName || "") : sample.odooPoName || "";
+    const partner = order ? this.relName(order.partner_id) : sample.odooVendorName;
+    const lines = poId
+      ? await this.odoo.searchRead(
+          "purchase.order.line",
+          [["order_id", "=", poId]],
+          ["name", "product_id", "product_qty", "qty_received", "price_unit", "display_type", "price_subtotal"],
+          { limit: 200 },
+        )
+      : [];
+    const lineViews = lines
+      .filter((l) => String(l.display_type || "") !== "line_section")
+      .map((l) => ({
+        label: String(l.name || this.relName(l.product_id) || "").trim(),
+        qty: l.product_qty != null ? String(l.product_qty) : undefined,
+        amount: l.price_subtotal != null ? String(l.price_subtotal) : l.price_unit != null ? String(l.price_unit) : undefined,
+      }))
+      .filter((l) => l.label);
+    const pickings = poId
+      ? await this.odoo.searchRead(
+          "stock.picking",
+          [
+            ["purchase_id", "=", poId],
+            ["state", "=", "done"],
+            ["picking_type_code", "=", "incoming"],
+          ],
+          ["id", "name", "origin", "date_done", "location_id", "location_dest_id"],
+          { limit: 80 },
+        )
+      : [];
+    const pickIds = pickings.map((p) => Number(p.id)).filter((n) => n > 0);
+    const moveLines = pickIds.length
+      ? await this.odoo.searchRead(
+          "stock.move.line",
+          [["picking_id", "in", pickIds]],
+          ["picking_id", "lot_id"],
+          { limit: 4000 },
+        )
+      : [];
+    const isosByPick = new Map<number, string[]>();
+    for (const ml of moveLines) {
+      const pid = this.relId(ml.picking_id);
+      const iso = inspectOdooIso(this.relName(ml.lot_id)).isoNormalized;
+      if (!pid || !iso) continue;
+      const list = isosByPick.get(pid) || [];
+      if (!list.includes(iso)) list.push(iso);
+      isosByPick.set(pid, list);
+    }
+    const pickingViews = pickings.map((p) => ({
+      name: String(p.name || ""),
+      date: p.date_done ? String(p.date_done) : null,
+      isos: isosByPick.get(Number(p.id)) || [],
+    }));
+    const allIsos = [...new Set([...group.map((c) => c.isoNormalized), ...pickingViews.flatMap((p) => p.isos)])];
+    const qtyReceived = lines.reduce((s, l) => s + (Number(l.qty_received) || 0), 0);
+    const unitPrice = sample.odooUnitPrice != null ? Number(sample.odooUnitPrice) : Number(lines.find((l) => Number(l.price_unit) > 0)?.price_unit) || null;
+    const purchaseDraft = purchaseDossierDraft({
+      odooId: poId,
+      name: poName,
+      partner,
+      state: order ? String(order.state || "") : null,
+      currency: order ? this.relName(order.currency_id) || "USD" : "USD",
+      amountTotal: order ? Number(order.amount_total) || null : null,
+      date: order?.date_order ? String(order.date_order) : null,
+      unitPrice,
+      qtyReceived: qtyReceived || null,
+      lines: lineViews,
+      pickings: pickingViews,
+    });
+    await this.expediente.upsertShared(allIsos, purchaseDraft, {
+      candidateId: sample.id,
+      containerIso: sample.containerIso,
+    });
+    for (const p of pickings) {
+      await this.expediente.upsertShared(allIsos, pickingDossierDraft({
+        odooId: Number(p.id),
+        name: String(p.name || ""),
+        origin: poName,
+        date: p.date_done ? String(p.date_done) : null,
+        locationSrc: this.relName(p.location_id),
+        locationDest: this.relName(p.location_dest_id),
+        isos: isosByPick.get(Number(p.id)) || [],
+      }), { candidateId: sample.id, containerIso: sample.containerIso });
+    }
+    const invoiceIds = order && Array.isArray(order.invoice_ids) ? (order.invoice_ids as number[]) : [];
+    await this.hydrateBill({
+      invoiceIds,
+      billName: sample.odooBillName,
+      poName,
+      poId,
+      isos: allIsos,
+      candidateId: sample.id,
+      containerIso: sample.containerIso,
+    });
+  }
+
+  private async hydrateBill(input: {
+    invoiceIds: number[];
+    billName: string | null;
+    poName: string;
+    poId: number;
+    isos: string[];
+    candidateId: string;
+    containerIso: string | null;
+  }) {
+    const fallbackName = input.billName || "";
+    if (!input.invoiceIds.length && !fallbackName) {
+      await this.expediente.upsertShared(input.isos, billDossierDraft({ name: "Factura", access: "pending", poNames: input.poName ? [input.poName] : [] }), {
+        candidateId: input.candidateId,
+        containerIso: input.containerIso,
+      });
+      return;
+    }
+    try {
+      const invoices = input.invoiceIds.length
+        ? await this.odoo.searchRead(
+            "account.move",
+            [
+              ["id", "in", input.invoiceIds],
+              ["move_type", "=", "in_invoice"],
+            ],
+            ["id", "name", "partner_id", "state", "amount_total", "invoice_date", "invoice_line_ids"],
+            { limit: 8 },
+          )
+        : [];
+      const inv = invoices[0];
+      if (!inv) {
+        await this.expediente.upsertShared(
+          input.isos,
+          billDossierDraft({
+            name: fallbackName || "Factura",
+            access: fallbackName ? "name_only" : "pending",
+            poNames: input.poName ? [input.poName] : [],
+          }),
+          { candidateId: input.candidateId, containerIso: input.containerIso },
+        );
+        return;
+      }
+      let lines: Array<{ label: string; qty?: string; amount?: string }> = [];
+      let access: "ok" | "name_only" = "name_only";
+      try {
+        const lineIds = Array.isArray(inv.invoice_line_ids) ? (inv.invoice_line_ids as number[]) : [];
+        const raw = lineIds.length
+          ? await this.odoo.searchRead(
+              "account.move.line",
+              [["id", "in", lineIds], ["display_type", "=", false]],
+              ["name", "quantity", "price_subtotal"],
+              { limit: 80 },
+            )
+          : [];
+        lines = raw
+          .map((l) => ({
+            label: String(l.name || "").trim(),
+            qty: l.quantity != null ? String(l.quantity) : undefined,
+            amount: l.price_subtotal != null ? String(l.price_subtotal) : undefined,
+          }))
+          .filter((l) => l.label);
+        if (lines.length) access = "ok";
+      } catch {
+        access = "name_only";
+      }
+      await this.expediente.upsertShared(
+        input.isos,
+        billDossierDraft({
+          odooId: Number(inv.id),
+          name: String(inv.name || fallbackName || "Factura"),
+          access,
+          partner: this.relName(inv.partner_id),
+          state: String(inv.state || ""),
+          amountTotal: Number(inv.amount_total) || null,
+          date: inv.invoice_date ? String(inv.invoice_date) : null,
+          poNames: input.poName ? [input.poName] : [],
+          lines,
+        }),
+        { candidateId: input.candidateId, containerIso: input.containerIso },
+      );
+    } catch {
+      await this.expediente.upsertShared(
+        input.isos,
+        billDossierDraft({
+          name: fallbackName || "Factura",
+          access: fallbackName ? "name_only" : "pending",
+          poNames: input.poName ? [input.poName] : [],
+        }),
+        { candidateId: input.candidateId, containerIso: input.containerIso },
+      );
+    }
+  }
+
+  private async hydrateMoCosts(lotIds: number[]) {
+    if (!lotIds.length) return 0;
+    const cands = await this.prisma.odooLotCandidate.findMany({
+      where: { odooLotId: { in: lotIds }, odooIntakeKind: "fabrication" },
+      select: {
+        id: true,
+        isoNormalized: true,
+        containerIso: true,
+        odooMoName: true,
+        odooPickingName: true,
+        odooSourceProductCode: true,
+        odooSourceProductName: true,
+        odooSourceUnitPrice: true,
+        productName: true,
+        productCode: true,
+      },
+    });
+    const groups = new Map<string, typeof cands>();
+    for (const c of cands) {
+      const name = c.odooMoName || c.odooPickingName;
+      if (!name) continue;
+      const list = groups.get(name) || [];
+      list.push(c);
+      groups.set(name, list);
+    }
+    let hits = 0;
+    for (const [moName, group] of groups) {
+      if (this.isAborted(this.runId)) return hits;
+      try {
+        await this.hydrateMoGroup(moName, group);
+        hits += 1;
+        await this.logs.add(this.runId, {
+          level: "ok",
+          step: "mo_costo",
+          iso: group[0]?.isoNormalized,
+          product: moName,
+          message: `MO ${moName} · ${group.length} serie(s)`,
+        });
+      } catch (e) {
+        const { message, detail } = errorDetail(e);
+        await this.logs.add(this.runId, {
+          level: "error",
+          step: "mo_costo",
+          iso: group[0]?.isoNormalized,
+          product: moName,
+          message: `Falló costo ${moName}: ${message}`,
+          detail,
+        });
+      }
+    }
+    return hits;
+  }
+
+  private async companyUsdRate() {
+    const companies = await this.odoo.searchRead("res.company", [], ["currency_id"], { limit: 1 });
+    const companyCurrency = this.relName(companies[0]?.currency_id) || "PEN";
+    if (companyCurrency !== "PEN") return { companyCurrency, ratePenToUsd: 1 };
+    const usd = await this.odoo.searchRead("res.currency", [["name", "=", "USD"]], ["rate"], { limit: 1 });
+    const rate = Number(usd[0]?.rate);
+    return { companyCurrency, ratePenToUsd: Number.isFinite(rate) && rate > 0 ? rate : 0.27 };
+  }
+
+  private async hydrateMoGroup(
+    moName: string,
+    group: Array<{
+      id: string;
+      isoNormalized: string;
+      containerIso: string | null;
+      odooSourceProductCode: string | null;
+      odooSourceProductName: string | null;
+      odooSourceUnitPrice: Prisma.Decimal | number | null;
+      productName: string;
+      productCode: string;
+    }>,
+  ) {
+    const moFields = ["id", "name", "product_id", "product_qty", "qty_producing", "date_finished", "state"];
+    const moExtra = ["dias_trabajados", "costo_agua", "costo_maquinaria", "costo_herramientas", "costo_gastos_admin", "costo_energia", "otros_costos_adicionales"];
+    let mos = [];
+    try {
+      mos = await this.odoo.searchRead("mrp.production", [["name", "=", moName]], [...moFields, ...moExtra], { limit: 1 });
+    } catch {
+      mos = await this.odoo.searchRead("mrp.production", [["name", "=", moName]], moFields, { limit: 1 });
+    }
+    const mo = mos[0];
+    const moId = mo ? Number(mo.id) : 0;
+    const raw = moId
+      ? await this.odoo.searchRead(
+          "stock.move",
+          [["raw_material_production_id", "=", moId]],
+          ["id", "product_id", "product_uom_qty", "price_unit", "product_qty", "quantity"],
+          { limit: 200 },
+        )
+      : [];
+    const productIds = [...new Set(raw.map((m) => this.relId(m.product_id)).filter((n) => n > 0))];
+    const products = productIds.length
+      ? await this.odoo.read("product.product", productIds, ["id", "name", "default_code", "standard_price", "categ_id"])
+      : [];
+    const productMap = new Map(products.map((p) => [Number(p.id), p]));
+    const moveIds = raw.map((m) => Number(m.id)).filter((n) => n > 0);
+    let layers: Record<string, unknown>[] = [];
+    try {
+      layers = moveIds.length
+        ? await this.odoo.searchRead(
+            "stock.valuation.layer",
+            [["stock_move_id", "in", moveIds]],
+            ["stock_move_id", "unit_cost", "value", "quantity"],
+            { limit: 400 },
+          )
+        : [];
+    } catch {
+      layers = [];
+    }
+    const layerByMove = new Map<number, number>();
+    for (const layer of layers) {
+      const moveId = this.relId(layer.stock_move_id);
+      const unit = Number(layer.unit_cost);
+      if (moveId && Number.isFinite(unit) && unit > 0 && !layerByMove.has(moveId)) layerByMove.set(moveId, unit);
+    }
+    const { companyCurrency, ratePenToUsd } = await this.companyUsdRate();
+    const toUsd = (pen: number | null) => (pen != null && pen > 0 ? penToUsd(pen, companyCurrency === "PEN" ? ratePenToUsd : 1) : null);
+    const sample = group[0];
+    const sourceNeedle = String(sample.odooSourceProductCode || "").toUpperCase();
+    const components = raw.map((m) => {
+      const pid = this.relId(m.product_id);
+      const prod = productMap.get(pid);
+      const code = String(prod?.default_code || "");
+      const name = this.relName(m.product_id) || String(prod?.name || "Insumo");
+      const qty = Number(m.quantity ?? m.product_uom_qty ?? m.product_qty) || 0;
+      const picked = pickComponentUnitCost({
+        valuationCost: layerByMove.get(Number(m.id)) ?? null,
+        standardPrice: Number(prod?.standard_price) > 0 ? Number(prod?.standard_price) : null,
+        movePrice: Number(m.price_unit) > 0 ? Number(m.price_unit) : null,
+      });
+      const isPrecursor = Boolean(sourceNeedle && code.toUpperCase() === sourceNeedle);
+      return {
+        name: (code ? `[${code}] ${name.replace(/^\[[^\]]+\]\s*/, "")}` : name).replace(/\t+/g, " ").replace(/\s+/g, " ").trim(),
+        qty,
+        unitCost: toUsd(picked.unitCost),
+        costOrigin: picked.origin,
+        category: this.relName(prod?.categ_id),
+        role: isPrecursor ? ("precursor" as const) : ("component" as const),
+      };
+    });
+    const zdryOverhead = await this.readMoOverheadOverride(moName);
+    const overheadPlan = inferMoOverheadPlan(
+      {
+        diasTrabajados: Number(mo?.dias_trabajados) || null,
+        costoAgua: Number(mo?.costo_agua) || 0,
+        costoHerramientas: Number(mo?.costo_herramientas) || 0,
+        costoGastosAdmin: Number(mo?.costo_gastos_admin) || 0,
+        costoMaquinaria: Number(mo?.costo_maquinaria) || 0,
+        costoEnergia: Number(mo?.costo_energia) || 0,
+        otros: Number(mo?.otros_costos_adicionales) || 0,
+      },
+      zdryOverhead,
+    );
+    const overhead = buildMoOverhead(overheadPlan);
+    let linkedPos: Record<string, unknown>[] = [];
+    try {
+      linkedPos = moId
+        ? await this.odoo.searchRead(
+            "purchase.order",
+            ["|", ["x_studio_nro_orden_de_produccion", "=", String(moId)], ["x_studio_nro_orden_de_produccion", "=", moName]],
+            ["name", "amount_untaxed", "currency_id", "partner_id"],
+            { limit: 20 },
+          )
+        : [];
+    } catch {
+      linkedPos = [];
+    }
+    for (const po of linkedPos) {
+      const curr = this.relName(po.currency_id);
+      const rawAmt = Number(po.amount_untaxed) || 0;
+      const amountUsd = curr === "USD" ? rawAmt : toUsd(rawAmt) || 0;
+      if (amountUsd > 0) {
+        overhead.push({
+          name: `OC operativa ${String(po.name || "")} · ${this.relName(po.partner_id) || ""}`.trim(),
+          amountUsd,
+        });
+      }
+    }
+    const finishedQty = Number(mo?.qty_producing ?? mo?.product_qty) || 1;
+    const valued = applyZdryLineCosts(components, await this.readMoLineOverrides(moName));
+    const breakdown = moCostBreakdown({ components: valued, overhead, finishedQty, companyCurrency });
+    const needs: string[] = [];
+    if (!raw.length) needs.push("movimientos de materia prima (move_raw_ids) en la MO");
+    if (!layers.length) needs.push("capas de valoración (stock.valuation.layer) o costo promedio en el producto");
+    if (breakdown.missingCount) {
+      needs.push(`costo promedio (standard_price) o valoración en ${breakdown.missingCount} producto(s) con costo 0`);
+    }
+    if (!linkedPos.length && !overhead.some((o) => o.name.startsWith("OC operativa"))) {
+      needs.push("OCs de taller ligadas en x_studio_nro_orden_de_produccion (opcional)");
+    }
+    const draft = moDossierDraft({
+      odooId: moId,
+      name: moName,
+      productFinished: sample.productName,
+      productCode: sample.productCode,
+      sourceProduct: sample.odooSourceProductCode
+        ? `[${sample.odooSourceProductCode}] ${sample.odooSourceProductName || ""}`.trim()
+        : sample.odooSourceProductName,
+      date: mo?.date_finished ? String(mo.date_finished) : null,
+      breakdown,
+      needs,
+      overhead: overheadPlan,
+    });
+    const isos = group.map((c) => c.isoNormalized);
+    await this.expediente.upsertShared(isos, draft, { candidateId: sample.id, containerIso: sample.containerIso });
+    if (breakdown.total > 0) {
+      for (const c of group) {
+        if (!c.containerIso) continue;
+        const row = await this.prisma.container.findUnique({ where: { iso: c.containerIso } });
+        if (!row) continue;
+        const awaitingReconcile = !row.odooPoId && (row.invoicePending || row.intakeType === "pendiente_factura");
+        if (awaitingReconcile) continue;
+        if (row.odooIntakeKind !== "fabrication" && row.intakeType !== "fabricacion_odoo") continue;
+        await this.prisma.container.update({
+          where: { iso: c.containerIso },
+          data: { fobCif: breakdown.unitCost, costSource: "mo" },
+        });
+      }
+    }
   }
 
   private async attachPurchaseRefs(lotIds: number[]) {

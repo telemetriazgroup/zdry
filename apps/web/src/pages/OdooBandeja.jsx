@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api.js";
+import { api, apiBlob } from "../api.js";
 import { useAuth } from "../auth.jsx";
 import { costLabel, originBadge } from "../odoo-origin.js";
 import OdooLotFicha, { SyncIcon } from "./OdooLotFicha.jsx";
@@ -51,6 +51,13 @@ export default function OdooBandeja() {
   const [openId, setOpenId] = useState(null);
   const [resetOn, setResetOn] = useState(false);
   const [resetText, setResetText] = useState("");
+  const [progress, setProgress] = useState(null);
+  const [diary, setDiary] = useState({ runs: [], current: null, entries: [], total: 0, take: 5 });
+  const [logLevel, setLogLevel] = useState("all");
+  const [logTake, setLogTake] = useState(5);
+  const [logFrom, setLogFrom] = useState("");
+  const [logTo, setLogTo] = useState("");
+  const [openLogId, setOpenLogId] = useState("");
 
   async function load() {
     const list = await api("/odoo-import/candidates");
@@ -58,12 +65,29 @@ export default function OdooBandeja() {
     api("/odoo-import/referential").then(setReferential).catch(() => {});
   }
 
+  async function loadLog(runId, take) {
+    const q = new URLSearchParams();
+    if (runId) q.set("runId", runId);
+    if (logLevel && logLevel !== "all") q.set("level", logLevel);
+    if (logFrom) q.set("from", logFrom);
+    if (logTo) q.set("to", logTo);
+    q.set("take", String(take || logTake || 5));
+    const out = await api(`/odoo-import/log?${q}`);
+    setDiary(out || { runs: [], current: null, entries: [], total: 0, take: 5 });
+    return out;
+  }
+
   useEffect(() => {
     load().catch((e) => setError(e.message));
+    loadLog().catch(() => {});
     if (canProbe) {
       api("/odoo-import/probe").then(setProbe).catch(() => {});
     }
   }, [canProbe]);
+
+  useEffect(() => {
+    loadLog().catch(() => {});
+  }, [logLevel, logTake, logFrom, logTo]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toUpperCase().replace(/[\s-]/g, "");
@@ -86,19 +110,55 @@ export default function OdooBandeja() {
     setPage(1);
   }, [q, onlyReview, originFilter]);
 
+  useEffect(() => {
+    if (busy !== "Buscando en Odoo" && busy !== "Asimilando") return undefined;
+    let stop = false;
+    const tick = () => {
+      api("/odoo-import/progress")
+        .then((p) => { if (!stop) setProgress(p); })
+        .catch(() => {});
+      loadLog().catch(() => {});
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => { stop = true; clearInterval(t); };
+  }, [busy, logLevel]);
+
+  async function waitForPass() {
+    for (let i = 0; i < 400; i += 1) {
+      const p = await api("/odoo-import/progress").catch(() => null);
+      if (p) setProgress(p);
+      await loadLog(p?.runId).catch(() => {});
+      if (!p || p.status === "done" || p.status === "error" || p.status === "idle" || p.status === "cancelled") return p;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    return null;
+  }
+
   async function run(label, fn) {
     setBusy(label);
     setError("");
     setMsg("");
+    if (label === "Buscando en Odoo" || label === "Asimilando") setLogTake(5);
     try {
       const out = await fn();
+      let p = null;
+      if (out?.running || label === "Buscando en Odoo") {
+        p = await waitForPass();
+        if (p?.status === "error") setError(p.message || "La pasada terminó con error. Revisa el diario.");
+        else setMsg(p?.message || out?.message || "Listo.");
+      } else {
+        const n = out?.items?.length;
+        setMsg(n != null ? `Listo. ${n} unidad(es) procesada(s).` : out?.message || "Listo.");
+      }
       await load();
+      const cancelled = p?.status === "idle" || p?.status === "cancelled";
+      await loadLog(cancelled ? undefined : out?.runId).catch(() => {});
       setSel({});
-      const n = out?.items?.length;
-      setMsg(n != null ? `Listo. ${n} unidad(es) procesada(s).` : out?.message || "Listo.");
       return out;
     } catch (e) {
       setError(e.message);
+      await loadLog().catch(() => {});
       return null;
     } finally {
       setBusy("");
@@ -141,6 +201,134 @@ export default function OdooBandeja() {
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
       {busy ? <div className="warn-inline">{busy}…</div> : null}
+      {diary.current ? (
+        <div className="odoo-log">
+          <div className="odoo-log-head">
+            <div>
+              <b>Diario de asimilación</b>
+              <div className="section-sub">
+                {diary.current.kind === "sync" ? "Buscar en Odoo" : diary.current.kind === "reset" ? "Reinicio" : "Asimilar a Recepción"}
+                {" · "}
+                {diary.current.status === "running"
+                  ? "en curso"
+                  : diary.current.status === "error"
+                    ? "con errores"
+                    : diary.current.status === "cancelled"
+                      ? "cancelada"
+                      : "terminada"}
+                {" · "}
+                {diary.current.okCount} ok · {diary.current.errorCount} error · {diary.current.skipCount} omitido
+                {diary.current.startedBy ? ` · ${diary.current.startedBy}` : ""}
+              </div>
+            </div>
+            <div className="odoo-log-filters">
+              <label className="odoo-filter">
+                Desde
+                <input type="date" value={logFrom} onChange={(e) => setLogFrom(e.target.value)} style={{ marginLeft: 6 }} />
+              </label>
+              <label className="odoo-filter">
+                Hasta
+                <input type="date" value={logTo} onChange={(e) => setLogTo(e.target.value)} style={{ marginLeft: 6 }} />
+              </label>
+              <label className="odoo-filter">
+                Ver
+                <select value={logLevel} onChange={(e) => setLogLevel(e.target.value)} style={{ marginLeft: 6 }}>
+                  <option value="all">Todo</option>
+                  <option value="error">Solo errores</option>
+                  <option value="ok">Solo ok</option>
+                  <option value="warn">Omitidos</option>
+                </select>
+              </label>
+              <button
+                className="btn-ghost"
+                type="button"
+                onClick={async () => {
+                  const q = new URLSearchParams();
+                  if (logLevel && logLevel !== "all") q.set("level", logLevel);
+                  if (logFrom) q.set("from", logFrom);
+                  if (logTo) q.set("to", logTo);
+                  if (diary.current?.id && !logFrom && !logTo) q.set("runId", diary.current.id);
+                  const blob = await apiBlob(`/odoo-import/log/export?${q}`);
+                  const a = document.createElement("a");
+                  a.href = URL.createObjectURL(blob);
+                  a.download = `diario-asimilacion${logFrom || logTo ? `-${logFrom || "inicio"}_${logTo || "hoy"}` : ""}.csv`;
+                  a.click();
+                  URL.revokeObjectURL(a.href);
+                }}
+              >
+                Descargar
+              </button>
+            </div>
+          </div>
+          {diary.current.message ? <p className="section-sub">{diary.current.message}</p> : null}
+          <p className="section-sub">Últimas {diary.entries?.length || 0} de {diary.total || 0} líneas. La lista de lotes está debajo.</p>
+          <div className="tablewrap">
+            <table className="data odoo-log-table">
+              <thead>
+                <tr>
+                  <th>Hora</th>
+                  <th>Nivel</th>
+                  <th>Paso</th>
+                  <th>Serie</th>
+                  <th>Producto</th>
+                  <th>Qué pasó</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(diary.entries || []).map((e) => (
+                  <tr key={e.id} className={e.level === "error" ? "iso-review-row" : ""}>
+                    <td>{new Date(e.createdAt).toLocaleTimeString("es-PE")}</td>
+                    <td>
+                      <span className="badge-scope" style={{ background: e.level === "error" ? "#c92a2a" : e.level === "warn" ? "#e8590c" : e.level === "ok" ? "#2f9e44" : "#495057" }}>
+                        {e.level}
+                      </span>
+                    </td>
+                    <td>{e.step}</td>
+                    <td>
+                      <b className="card-iso">{e.iso || e.serialRaw || "—"}</b>
+                      {e.odooLotId ? <div className="muted">lote {e.odooLotId}</div> : null}
+                    </td>
+                    <td>{e.product || "—"}</td>
+                    <td>
+                      <button type="button" className="odoo-open" onClick={() => setOpenLogId(openLogId === e.id ? "" : e.id)}>
+                        {e.message}
+                      </button>
+                      {openLogId === e.id && e.detail ? (
+                        <pre className="odoo-log-detail">{e.detail}</pre>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {!diary.entries?.length ? <p className="section-sub">Aún no hay líneas en esta pasada.</p> : null}
+          {(diary.total || 0) > (diary.entries?.length || 0) ? (
+            <div className="action-row" style={{ marginTop: 8 }}>
+              <button className="btn-ghost" type="button" onClick={() => setLogTake((n) => n + 20)}>
+                Ver más ({diary.total - (diary.entries?.length || 0)} restantes)
+              </button>
+            </div>
+          ) : logTake > 5 ? (
+            <div className="action-row" style={{ marginTop: 8 }}>
+              <button className="btn-ghost" type="button" onClick={() => setLogTake(5)}>Ver menos</button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {progress && (busy === "Buscando en Odoo" || progress.status === "running") ? (
+        <div className="odoo-progress">
+          <div className="odoo-progress-msg">
+            Asimilando · {progress.step || "…"}
+            {progress.iso ? ` · ${progress.iso}` : ""}
+          </div>
+          <div className="odoo-progress-bar" aria-valuemin={0} aria-valuemax={progress.total || 5} aria-valuenow={progress.current || 0}>
+            <i style={{ width: `${Math.min(100, ((progress.current || 0) / (progress.total || 5)) * 100)}%` }} />
+          </div>
+          <div className="section-sub">{progress.message || "Un pase de Odoo a la copia local."}</div>
+        </div>
+      ) : null}
 
       <div className="odoo-toolbar">
         <input
@@ -193,7 +381,7 @@ export default function OdooBandeja() {
           </select>
         </label>
         {canReset ? (
-          <button className="btn-ghost" type="button" disabled={!!busy} onClick={() => { setResetOn((v) => !v); setResetText(""); }}>
+          <button className="btn-ghost" type="button" disabled={busy === "Reiniciando"} onClick={() => { setResetOn((v) => !v); setResetText(""); }}>
             Reiniciar módulo
           </button>
         ) : null}
@@ -204,18 +392,37 @@ export default function OdooBandeja() {
         <div className="odoo-reset">
           <b>Reiniciar módulo de asimilación</b>
           <p className="section-sub">
-            Borra candidatos, writebacks y unidades creadas desde Odoo (no vendidas). Luego pulsa Buscar en Odoo para
-            depurar de cero. Escribe REINICIAR para confirmar.
+            Cancela la búsqueda en curso, cierra esa pasada en el diario y vacía candidatos / unidades Odoo no vendidas.
+            El diario queda listo para una pasada nueva (el historial se puede descargar por fecha). Escribe REINICIAR.
           </p>
           <div className="action-row">
             <input value={resetText} onChange={(e) => setResetText(e.target.value)} placeholder="REINICIAR" />
             <button
               className="btn-primary"
               type="button"
-              disabled={!!busy || resetText.trim().toUpperCase() !== "REINICIAR"}
-              onClick={() => run("Reiniciando", () => api("/odoo-import/reset", { method: "POST", body: { confirm: "REINICIAR" } })).then(() => { setResetOn(false); setResetText(""); })}
+              disabled={busy === "Reiniciando" || resetText.trim().toUpperCase() !== "REINICIAR"}
+              onClick={async () => {
+                setBusy("Reiniciando");
+                setError("");
+                setMsg("");
+                try {
+                  const out = await api("/odoo-import/reset", { method: "POST", body: { confirm: "REINICIAR" } });
+                  setProgress({ status: "idle", step: "", message: out.message });
+                  setLogTake(5);
+                  setSel({});
+                  await load();
+                  await loadLog(out.runId);
+                  setMsg(out.message || "Búsqueda cancelada. Módulo vaciado.");
+                  setResetOn(false);
+                  setResetText("");
+                } catch (e) {
+                  setError(e.message);
+                } finally {
+                  setBusy("");
+                }
+              }}
             >
-              Vaciar y empezar de nuevo
+              Cancelar búsqueda y vaciar
             </button>
           </div>
         </div>

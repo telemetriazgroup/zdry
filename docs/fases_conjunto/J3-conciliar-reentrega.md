@@ -42,6 +42,8 @@ No permitir que ZDRY llame `button_validate` del incoming.
 
 Validación local 19-sep-2026: reentrega `BMOU433548-9` → auto ISO `ZGROU/IN/06302` @ 1325; segundo confirm 409. Bandeja: **Compras → Conciliar**.
 
+Ampliación (ficha OC/IN/MO, asimilación de una vez, costo MO, factura pendiente): [j3_reto.md](j3_reto.md).
+
 ## Fuera de J3
 
 Crear la OC desde ZDRY. Validar el picking desde ZDRY.

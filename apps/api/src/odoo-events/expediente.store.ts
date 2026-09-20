@@ -12,6 +12,7 @@ import {
 } from "../domain/odoo-expediente";
 import { normalizeIncomingEvent, type IncomingOdooEvent } from "../domain/odoo-event";
 import { inspectOdooIso, type OdooOwnedField } from "../domain/odoo-lot-map";
+import { presentOdooDocument } from "../domain/odoo-doc-present";
 
 function syntheticId(name: string): number {
   let h = 0;
@@ -47,10 +48,17 @@ export class ExpedienteStore {
       isoNormalized: iso,
       timeline,
       evolution: fieldEvolution(timeline),
-      documents: [...grouped.values()].map((versions) => ({
-        current: versions[0],
-        versions,
-      })),
+      documents: [...grouped.values()].map((versions) => {
+        const current = versions[0];
+        const data = current.data && typeof current.data === "object" && !Array.isArray(current.data)
+          ? (current.data as Record<string, unknown>)
+          : {};
+        return {
+          current,
+          versions,
+          view: presentOdooDocument({ kind: current.kind, name: current.name, summary: current.summary, data }),
+        };
+      }),
       notes,
     };
   }
@@ -103,6 +111,33 @@ export class ExpedienteStore {
     });
   }
 
+  async upsertShared(
+    isos: string[],
+    draft: DocDraft,
+    meta?: { candidateId?: string | null; containerIso?: string | null },
+  ) {
+    for (const iso of [...new Set(isos.map((s) => inspectOdooIso(s).isoNormalized || s).filter(Boolean))]) {
+      await this.upsertDoc(iso, draft, meta);
+    }
+  }
+
+  async latestMoUnitCost(isoNormalized: string): Promise<number | null> {
+    const iso = inspectOdooIso(isoNormalized).isoNormalized || isoNormalized;
+    const row = await this.prisma.odooDocSnapshot.findFirst({
+      where: { isoNormalized: iso, kind: "mo" },
+      orderBy: { version: "desc" },
+    });
+    const data = row?.data && typeof row.data === "object" && !Array.isArray(row.data) ? (row.data as Record<string, unknown>) : {};
+    const n = Number(data.unitCost ?? data.total);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+
+  async hasOdooNotes(isoNormalized: string) {
+    const iso = inspectOdooIso(isoNormalized).isoNormalized || isoNormalized;
+    const n = await this.prisma.unitNote.count({ where: { isoNormalized: iso, source: "odoo" } });
+    return n > 0;
+  }
+
   async backfillCandidate(cand: {
     id: string;
     isoNormalized: string;
@@ -118,8 +153,14 @@ export class ExpedienteStore {
     odooSourceProductCode?: string | null;
     odooSourceLotId?: number | null;
   }) {
+    const iso = inspectOdooIso(cand.isoNormalized).isoNormalized || cand.isoNormalized;
     for (const draft of backfillDocsFromCandidate(cand)) {
-      await this.upsertDoc(cand.isoNormalized, draft, { candidateId: cand.id, containerIso: cand.containerIso });
+      const exists = await this.prisma.odooDocSnapshot.findFirst({
+        where: { isoNormalized: iso, kind: draft.kind, name: draft.name },
+        select: { id: true },
+      });
+      if (exists) continue;
+      await this.upsertDoc(iso, draft, { candidateId: cand.id, containerIso: cand.containerIso });
     }
   }
 

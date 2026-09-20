@@ -149,6 +149,7 @@ export function assimilateCostPlan(input: {
   odooUnitPrice?: number | null;
   odooBillName?: string | null;
   odooPoName?: string | null;
+  moUnitCost?: number | null;
 }): {
   intakeType: string;
   invoicePending: boolean;
@@ -177,11 +178,13 @@ export function assimilateCostPlan(input: {
     };
   }
   if (kind === "fabrication") {
+    const mo = Number(input.moUnitCost);
+    const fob = Number.isFinite(mo) && mo > 0 ? Math.round(mo * 100) / 100 : 0;
     return {
       odooIntakeKind: "fabrication",
       intakeType: "fabricacion_odoo",
       invoicePending: false,
-      fobCif: 0,
+      fobCif: fob,
       costSource: "mo",
     };
   }

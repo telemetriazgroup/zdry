@@ -27,6 +27,36 @@ export class OdooImportController {
     return this.svc.lotSelects({ refresh: refresh === "1" || refresh === "true" });
   }
 
+  @Get("progress")
+  progress() {
+    return this.svc.progress();
+  }
+
+  @Get("log")
+  log(
+    @Query("runId") runId?: string,
+    @Query("level") level?: string,
+    @Query("take") take?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+  ) {
+    return this.svc.assimilateLog({ runId, level, take: take ? Number(take) : 5, from, to });
+  }
+
+  @Get("log/export")
+  async exportLog(
+    @Query("runId") runId?: string,
+    @Query("level") level?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+  ) {
+    const out = await this.svc.exportAssimilateLog({ runId, level, from, to });
+    return new StreamableFile(Buffer.from(out.csv, "utf8"), {
+      type: "text/csv; charset=utf-8",
+      disposition: `attachment; filename="${out.filename.replace(/"/g, "")}"`,
+    });
+  }
+
   @Get("candidates")
   candidates(@Query("status") status?: string) {
     return this.svc.list(status);
@@ -38,13 +68,33 @@ export class OdooImportController {
   }
 
   @Get("candidates/:id/expediente")
-  expediente(@Param("id") id: string) {
-    return this.svc.expedienteOf(id);
+  expediente(@Param("id") id: string, @Query("refresh") refresh?: string) {
+    return this.svc.expedienteOf(id, { refresh: refresh === "1" || refresh === "true" });
   }
 
   @Post("candidates/:id/notes")
   addNote(@Param("id") id: string, @Body() body: { body?: string }, @CurrentUser() user: AuthUser) {
     return this.svc.addExpedienteNote(id, body.body || "", user);
+  }
+
+  @Patch("candidates/:id/mo-line")
+  patchMoLine(
+    @Param("id") id: string,
+    @Body() body: { key?: string; unitCost?: number; clear?: boolean },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.svc.patchMoLine(id, body, user, req.ip);
+  }
+
+  @Patch("candidates/:id/mo-overhead")
+  patchMoOverhead(
+    @Param("id") id: string,
+    @Body() body: { days?: number; aguaPerDay?: number; herramientasPerDay?: number; adminPerDay?: number; maquinaria?: number; reset?: boolean },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.svc.patchMoOverhead(id, body, user, req.ip);
   }
 
   @Get("candidates/:id/photos")

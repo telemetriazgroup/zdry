@@ -1,18 +1,33 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import { ROLE_LABELS, useAuth } from "../auth.jsx";
 
 export default function Home() {
   const { user } = useAuth();
   const [health, setHealth] = useState(null);
+  const [hits, setHits] = useState([]);
 
   useEffect(() => {
     api("/health").then(setHealth).catch(() => setHealth({ ok: false }));
-  }, []);
+    if (user?.role === "admin" || user?.role === "compras") {
+      api("/purchases/badges")
+        .then((b) => setHits(Array.isArray(b.hits) ? b.hits : []))
+        .catch(() => setHits([]));
+    }
+  }, [user?.role]);
 
   return (
     <>
       <h2 className="section-title">Inicio — {ROLE_LABELS[user.role]}</h2>
+      {hits.length ? (
+        <div className="reconcile-banner">
+          Hay {hits.length} serie(s) de patio para conciliar con IN/OC de Odoo
+          {hits.slice(0, 3).map((h) => ` · ${h.iso}${h.odooPoName ? ` ↔ ${h.odooPoName}` : ""}`).join("")}.
+          {" "}
+          <Link to="/app/compras/conciliar">Ir a Conciliar</Link>
+        </div>
+      ) : null}
       <p className="section-sub">Sesión real. El menú de la izquierda es el de tu cuenta; no hay cambio de rol con un clic.</p>
       <div className="tile-row">
         <div className="tile"><div className="v">{user.name.split(" ")[0]}</div><div className="l">{user.email}</div></div>

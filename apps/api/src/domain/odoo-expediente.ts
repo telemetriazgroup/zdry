@@ -213,7 +213,7 @@ export function backfillDocsFromCandidate(cand: {
       odooId: 0,
       name: cand.odooBillName,
       summary: cand.odooPoName || "",
-      data: { name: cand.odooBillName, poNames: cand.odooPoName ? [cand.odooPoName] : [], source: "j1_backfill" },
+      data: { name: cand.odooBillName, access: "name_only", poNames: cand.odooPoName ? [cand.odooPoName] : [], source: "j1_backfill" },
     });
   }
   if (cand.odooPickingName && cand.odooIntakeKind === "purchase") {

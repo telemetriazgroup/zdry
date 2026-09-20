@@ -99,7 +99,15 @@ export class PurchasesService {
         },
       }),
     ]);
-    return { extras, dam, odoo, reconcile };
+    const hits = (await this.listReconcile()).proposals
+      .filter((p) => p.mode === "auto" || p.mode === "proposal")
+      .map((p) => ({
+        iso: p.iso,
+        pickingName: p.pickingName,
+        odooPoName: p.odooPoName,
+        mode: p.mode,
+      }));
+    return { extras, dam, odoo, reconcile: Math.max(reconcile, hits.length), hits };
   }
 
   async listInvoices() {

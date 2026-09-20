@@ -60,7 +60,7 @@ export default function Compras() {
         : loc.pathname.includes("/odoo")
           ? "odoo"
           : "facturas";
-  const [badges, setBadges] = useState({ extras: 0, dam: 0, odoo: 0, reconcile: 0 });
+  const [badges, setBadges] = useState({ extras: 0, dam: 0, odoo: 0, reconcile: 0, hits: [] });
 
   const refreshBadges = useCallback(() => {
     api("/purchases/badges").then(setBadges).catch(() => {});
@@ -72,6 +72,12 @@ export default function Compras() {
     <>
       <h2 className="section-title">Compras</h2>
       <p className="section-sub">Facturas de importación, cola de extras reglada por la logística y DAM antes de despachar.</p>
+      {badges.hits?.length ? (
+        <div className="reconcile-banner">
+          {badges.hits.length} match(es) reentrega ↔ IN/OC listos para validar
+          {badges.hits.slice(0, 4).map((h) => ` · ${h.iso}${h.pickingName ? ` / ${h.pickingName}` : ""}`).join("")}.
+        </div>
+      ) : null}
       <div className="subtab-row">
         <NavLink to="/app/compras/facturas" className={`subtab ${tab === "facturas" ? "active" : ""}`}>Facturas de compra</NavLink>
         <NavLink to="/app/compras/conciliar" className={`subtab ${tab === "conciliar" ? "active" : ""}`}>

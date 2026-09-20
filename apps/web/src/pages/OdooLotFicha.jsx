@@ -61,11 +61,210 @@ const DOC_KIND = {
   sale: "Pedido de venta",
 };
 
+function MoOverheadEditor({ id, overhead, onSaved }) {
+  const [days, setDays] = useState(overhead.days);
+  const [agua, setAgua] = useState(overhead.aguaPerDay);
+  const [herr, setHerr] = useState(overhead.herramientasPerDay);
+  const [admin, setAdmin] = useState(overhead.adminPerDay);
+  const [maq, setMaq] = useState(overhead.maquinaria);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    setDays(overhead.days);
+    setAgua(overhead.aguaPerDay);
+    setHerr(overhead.herramientasPerDay);
+    setAdmin(overhead.adminPerDay);
+    setMaq(overhead.maquinaria);
+  }, [overhead.days, overhead.aguaPerDay, overhead.herramientasPerDay, overhead.adminPerDay, overhead.maquinaria]);
+
+  async function save(reset) {
+    setBusy(true);
+    setErr("");
+    try {
+      const out = await api(`/odoo-import/candidates/${id}/mo-overhead`, {
+        method: "PATCH",
+        body: reset ? { reset: true } : { days: Number(days), aguaPerDay: Number(agua), herramientasPerDay: Number(herr), adminPerDay: Number(admin), maquinaria: Number(maq) },
+      });
+      onSaved?.(out);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="odoo-mo-days">
+      <p className="section-sub">
+        Agua, herramientas y gastos administrativos son <b>referenciales de Odoo</b> (módulo de costo de fabricación):
+        default <b>9 días</b> × tarifa USD/día. No se calculan de la fecha de la MO. El trámite puede empezar antes de ejecutar;
+        ajusta los días aquí para una referencia más realista. Maquinaria es un monto fijo. El cambio queda en ZDRY y no escribe Odoo.
+      </p>
+      <div className="odoo-mo-days-grid">
+        <label>
+          <span>Días de ejecución {overhead.daysSource === "zdry" ? "(ajuste ZDRY)" : `(Odoo: ${overhead.odooDays})`}</span>
+          <input type="number" min="0.5" max="365" step="0.5" value={days} onChange={(e) => setDays(e.target.value)} />
+        </label>
+        <label>
+          <span>Agua USD/día</span>
+          <input type="number" min="0" step="0.5" value={agua} onChange={(e) => setAgua(e.target.value)} />
+        </label>
+        <label>
+          <span>Herramientas USD/día</span>
+          <input type="number" min="0" step="0.5" value={herr} onChange={(e) => setHerr(e.target.value)} />
+        </label>
+        <label>
+          <span>Gastos admin USD/día</span>
+          <input type="number" min="0" step="0.5" value={admin} onChange={(e) => setAdmin(e.target.value)} />
+        </label>
+        <label>
+          <span>Maquinaria USD (fijo)</span>
+          <input type="number" min="0" step="1" value={maq} onChange={(e) => setMaq(e.target.value)} />
+        </label>
+      </div>
+      {err ? <div className="err">{err}</div> : null}
+      <div className="action-row">
+        <button className="btn-primary" type="button" disabled={busy} onClick={() => save(false)}>Recalcular adicionales</button>
+        <button className="btn-ghost" type="button" disabled={busy} onClick={() => save(true)}>Volver a {overhead.odooDays} días Odoo</button>
+      </div>
+    </div>
+  );
+}
+
+function MoLineCostInput({ id, lineKey, current, onSaved }) {
+  const [val, setVal] = useState(current || "");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setVal(current || ""); }, [current, lineKey]);
+  async function save(clear) {
+    setBusy(true);
+    try {
+      const out = await api(`/odoo-import/candidates/${id}/mo-line`, {
+        method: "PATCH",
+        body: clear ? { key: lineKey, clear: true } : { key: lineKey, unitCost: Number(val) },
+      });
+      onSaved?.(out);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <span className="odoo-line-cost">
+      <input type="number" min="0.01" step="0.01" placeholder="USD" value={val} onChange={(e) => setVal(e.target.value)} />
+      <button type="button" className="btn-ghost" disabled={busy || (!val && !current)} onClick={() => save(false)}>Usar</button>
+      {current ? <button type="button" className="btn-ghost" disabled={busy} onClick={() => save(true)}>Quitar</button> : null}
+    </span>
+  );
+}
+
+function OdooDocCard({ group, candidateId, onOverheadSaved }) {
+  const v = group.view || {};
+  const kindLabel = DOC_KIND[v.kind || group.current?.kind] || v.kind || group.current?.kind;
+  return (
+    <div className={`odoo-doc-card${v.kind === "mo" ? " odoo-doc-mo" : ""}`}>
+      <div className="odoo-doc-head">
+        <b>{kindLabel}</b>
+        <span>{v.title || group.current?.name}</span>
+        {group.current?.version ? <small>v{group.current.version}</small> : null}
+      </div>
+      {v.pending ? <div className="odoo-doc-pending">{v.pending}</div> : null}
+      {v.rows?.length ? (
+        <dl className="odoo-doc-rows">
+          {v.rows.map((r) => (
+            <div key={r.label}>
+              <dt>{r.label}</dt>
+              <dd>{r.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {v.kind === "mo" ? (
+        <MoOverheadEditor
+          id={candidateId}
+          overhead={v.overhead || { days: 9, odooDays: 9, daysSource: "odoo", aguaPerDay: 4, herramientasPerDay: 20, adminPerDay: 20, maquinaria: 60 }}
+          onSaved={onOverheadSaved}
+        />
+      ) : null}
+      {v.totals?.length ? (
+        <div className="odoo-doc-totals">
+          {v.totals.map((t) => (
+            <div key={t.label}>
+              <span>{t.label}</span>
+              <b>{t.value}</b>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {v.lines?.length ? (
+        <table className="data odoo-doc-table">
+          <thead><tr><th>Línea</th><th>Cant.</th><th>Importe</th></tr></thead>
+          <tbody>
+            {v.lines.map((l, i) => (
+              <tr key={`${l.label}-${i}`}><td>{l.label}</td><td>{l.qty || "—"}</td><td>{l.amount || "—"}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+      {v.pickings?.length ? (
+        <div className="odoo-doc-picks">
+          {v.pickings.map((p) => (
+            <div key={p.name} className="odoo-doc-pick">
+              <b>{p.name}</b>
+              {p.date ? <span className="section-sub"> · {p.date}</span> : null}
+              <div className="odoo-doc-isos">{(p.isos || []).join(" · ") || "sin series en este IN"}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {v.components?.length ? (
+        <div className="tablewrap odoo-doc-table-wrap">
+          <table className="data odoo-doc-table">
+            <thead>
+              <tr>
+                <th>Componente</th>
+                <th>Categoría</th>
+                <th>Cant.</th>
+                <th>Costo un.</th>
+                <th>Total</th>
+                <th>Fuente</th>
+              </tr>
+            </thead>
+            <tbody>
+              {v.components.map((c, i) => (
+                <tr key={`${c.key || c.name}-${i}`} className={c.missing ? "odoo-cost-missing" : ""}>
+                  <td>{c.name}</td>
+                  <td>{c.category || "—"}</td>
+                  <td>{c.qty}</td>
+                  <td>
+                    {c.editable && candidateId ? (
+                      <MoLineCostInput
+                        id={candidateId}
+                        lineKey={c.key}
+                        current={c.missing ? "" : String(c.unitCost).replace(/[^\d.]/g, "")}
+                        onSaved={onOverheadSaved}
+                      />
+                    ) : (
+                      c.unitCost || "—"
+                    )}
+                  </td>
+                  <td>{c.cost}</td>
+                  <td>{c.origin}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ExpedientePanel({ id }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [histOpen, setHistOpen] = useState(false);
 
   function load() {
     api(`/odoo-import/candidates/${id}/expediente`)
@@ -96,64 +295,18 @@ function ExpedientePanel({ id }) {
 
   const evo = data.evolution || [];
 
+  const docs = [...(data.documents || [])].sort((a, b) => {
+    const rank = { mo: 0, purchase: 1, picking_in: 2, bill: 3, picking_out: 4 };
+    return (rank[a.view?.kind || a.current?.kind] ?? 9) - (rank[b.view?.kind || b.current?.kind] ?? 9);
+  });
+
   return (
-    <div>
+    <div className="odoo-exp">
       {error ? <div className="err">{error}</div> : null}
-      <h4>Evolución de la ficha <small>Odoo es la fuente principal: si cambia allá, pisa ZDRY y queda el rastro. Puedes volver a editar en Ficha.</small></h4>
-      {!evo.length ? <p className="section-sub">Aún no hay historial. Se arma al guardar aquí o al llegar un cambio de Odoo.</p> : null}
-      {evo.map((row) => (
-        <div key={row.field} className="evo-field">
-          <div className="evo-head">
-            <b>{row.label}</b>
-            <span className="section-sub">ahora: {row.current || "—"}</span>
-          </div>
-          <div className="evo-track">
-            {row.steps.map((s, i) => (
-              <span key={`${row.field}-${i}`} className="evo-step-wrap">
-                {i ? <span className="evo-arrow" aria-hidden>→</span> : null}
-                <span className={`evo-chip src-${s.source === "odoo" ? "odoo" : s.source === "zdry" ? "zdry" : "prev"}${s.applied === false ? " not-applied" : ""}`}>
-                  <em>{s.value || "—"}</em>
-                  <small>{s.source === "odoo" ? "Odoo" : s.source === "zdry" ? "ZDRY" : "antes"}{s.applied === false ? " · no aplicado" : ""} · {new Date(s.at).toLocaleString("es-PE")}</small>
-                </span>
-              </span>
-            ))}
-          </div>
-        </div>
-      ))}
-
-      <h4>Detalle cronológico</h4>
-      {!data.timeline?.length ? null : (
-      <div className="tablewrap">
-        <table className="data">
-          <thead>
-            <tr><th>Cuándo</th><th>Campo</th><th>Antes</th><th>Después</th><th>Origen</th></tr>
-          </thead>
-          <tbody>
-            {(data.timeline || []).map((t) => (
-              <tr key={t.id}>
-                <td>{new Date(t.createdAt).toLocaleString("es-PE")}</td>
-                <td>{t.field}</td>
-                <td>{t.before || "—"}</td>
-                <td>{t.after || "—"}</td>
-                <td>{t.source}{t.event ? ` · ${t.event}` : ""}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      )}
-
-      <h4>Documentos Odoo <small>copia informativa versionada. No hay que abrir Odoo para ver OC / IN / factura / MO.</small></h4>
-      {!data.documents?.length ? <p className="section-sub">Sin documentos aún. «Buscar en Odoo» rellena OC/MO ya clasificados.</p> : null}
-      {(data.documents || []).map((g) => (
-        <div key={g.current.id} className="odoo-sheet" style={{ marginBottom: 10, padding: 10 }}>
-          <b>{DOC_KIND[g.current.kind] || g.current.kind}</b> · {g.current.name}
-          <div className="section-sub">{g.current.summary || "—"} · v{g.current.version}</div>
-          <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, margin: "8px 0 0" }}>{JSON.stringify(g.current.data, null, 2)}</pre>
-          {g.versions.length > 1 ? (
-            <p className="section-sub">{g.versions.length} versiones. La de arriba es la última.</p>
-          ) : null}
-        </div>
+      <h4>Documentos y costo <small>copia local. «Traer de Odoo» recalcula la MO con costo promedio / valoración.</small></h4>
+      {!docs.length ? <p className="section-sub">Sin documentos aún. «Buscar en Odoo» rellena OC/MO ya clasificados.</p> : null}
+      {docs.map((g) => (
+        <OdooDocCard key={g.current.id} group={g} candidateId={id} onOverheadSaved={setData} />
       ))}
 
       <h4>Notas de la serie</h4>
@@ -165,16 +318,46 @@ function ExpedientePanel({ id }) {
         </label>
       </div>
       <button className="btn-ghost" type="button" disabled={busy || !note.trim()} onClick={saveNote}>Agregar nota</button>
-      <ul>
+      <ul className="odoo-note-list" style={{ marginTop: 12 }}>
         {(data.notes || []).map((n) => (
-          <li key={n.id}>
-            <b>{n.source === "odoo" ? "Odoo" : "ZDRY"}</b>
-            {n.author ? ` · ${n.author}` : ""}
-            {n.occurredAt || n.createdAt ? ` · ${new Date(n.occurredAt || n.createdAt).toLocaleString("es-PE")}` : ""}
-            <div>{n.body}</div>
+          <li key={n.id} className="odoo-note">
+            <div className="odoo-note-meta">
+              <b>{n.source === "odoo" ? "Odoo" : "ZDRY"}</b>
+              {n.author ? ` · ${n.author}` : ""}
+              {n.occurredAt || n.createdAt ? ` · ${new Date(n.occurredAt || n.createdAt).toLocaleString("es-PE")}` : ""}
+            </div>
+            <div className="odoo-note-body">{n.body}</div>
           </li>
         ))}
       </ul>
+
+      <button className="btn-ghost" type="button" onClick={() => setHistOpen((v) => !v)}>
+        {histOpen ? "Ocultar historial de ficha" : `Historial de ficha (${evo.length} campo(s))`}
+      </button>
+      {histOpen ? (
+        <div className="odoo-hist">
+          {!evo.length ? <p className="section-sub">Aún no hay historial. Se arma al guardar o al llegar un cambio de Odoo.</p> : null}
+          {evo.map((row) => (
+            <div key={row.field} className="evo-field">
+              <div className="evo-head">
+                <b>{row.label}</b>
+                <span className="section-sub">ahora: {row.current || "—"}</span>
+              </div>
+              <div className="evo-track">
+                {row.steps.map((s, i) => (
+                  <span key={`${row.field}-${i}`} className="evo-step-wrap">
+                    {i ? <span className="evo-arrow" aria-hidden>→</span> : null}
+                    <span className={`evo-chip src-${s.source === "odoo" ? "odoo" : s.source === "zdry" ? "zdry" : "prev"}${s.applied === false ? " not-applied" : ""}`}>
+                      <em>{s.value || "—"}</em>
+                      <small>{s.source === "odoo" ? "Odoo" : s.source === "zdry" ? "ZDRY" : "antes"}{s.applied === false ? " · no aplicado" : ""} · {new Date(s.at).toLocaleString("es-PE")}</small>
+                    </span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -307,7 +490,7 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
 
-      <div className="odoo-ficha-grid">
+      <div className={`odoo-ficha-grid${tab === "expediente" ? " odoo-ficha-grid-full" : ""}`}>
         <div className="odoo-sheet">
           <div className="odoo-sheet-head">
             <div>
@@ -372,7 +555,9 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
                     : row.costSource === "referential"
                       ? "Referencial DRY"
                       : row.costSource === "mo"
-                        ? "MO / referencial DRY"
+                        ? row.moUnitCost
+                          ? "MO (insumos + precursor)"
+                          : "MO / referencial DRY"
                         : "Sin costo"
                 }
               />
@@ -382,6 +567,18 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
               <input readOnly value={costLabel(row, row.dryReferential)} />
             </label>
           </div>
+
+          {row.odooIntakeKind === "fabrication" ? (
+            <div className="odoo-mo-summary">
+              <div>
+                <span>Costo de fabricación (USD)</span>
+                <b>{row.moUnitCost ? `USD ${Number(row.moUnitCost).toLocaleString("en-US")}` : "Pendiente — pulsa Traer de Odoo o abre Expediente"}</b>
+              </div>
+              <p className="section-sub">
+                Precursor + insumos + adicionales de la MO. El detalle por ítem está en Expediente. Si un producto no tiene costo promedio ni capa de valoración en Odoo, no se inventa.
+              </p>
+            </div>
+          ) : null}
 
           {row.odooIntakeKind === "fabrication" ? (
             <>
@@ -484,6 +681,7 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
           ) : null}
         </div>
 
+        {tab === "ficha" ? (
         <aside className="odoo-chatter">
           <h4>Notas Odoo</h4>
           <p className="section-sub">Mensajes y notas del chatter. Solo lectura; no se editan en ZDRY.</p>
@@ -511,6 +709,7 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
             ))}
           </div>
         </aside>
+        ) : null}
       </div>
     </div>
   );

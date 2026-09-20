@@ -909,3 +909,39 @@ model DataBackup {
 
   @@index([createdAt])
 }
+
+model OdooAssimilateRun {
+  id         String              @id @default(uuid())
+  kind       String
+  status     String              @default("running")
+  startedAt  DateTime            @default(now())
+  endedAt    DateTime?
+  startedBy  String?
+  okCount    Int                 @default(0)
+  errorCount Int                 @default(0)
+  skipCount  Int                 @default(0)
+  message    String              @default("")
+  entries    OdooAssimilateLog[]
+
+  @@index([startedAt])
+  @@index([status, startedAt])
+}
+
+model OdooAssimilateLog {
+  id         String            @id @default(uuid())
+  runId      String
+  run        OdooAssimilateRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  createdAt  DateTime          @default(now())
+  level      String
+  step       String
+  iso        String            @default("")
+  serialRaw  String            @default("")
+  odooLotId  Int?
+  product    String            @default("")
+  message    String
+  detail     String            @default("") @db.Text
+
+  @@index([runId, createdAt])
+  @@index([runId, level])
+  @@index([iso])
+}

@@ -159,6 +159,7 @@ p { margin: 0; }
 .hint { font-size: 12px; color: var(--text-2); margin-top: 14px; line-height: 1.45; }
 
 .page { max-width: 1320px; margin: 0 auto; padding: 24px 24px calc(60px + env(safe-area-inset-bottom)); }
+.page:has(.odoo-ficha) { max-width: 100%; overflow-x: hidden; }
 .section-title { font-size: 22px; margin: 8px 0 4px; }
 .section-sub { color: var(--text-2); font-size: 14px; margin-bottom: 18px; }
 .tile-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
@@ -316,9 +317,13 @@ tr.iso-review-row:hover { background: #ffe3e3; }
 .odoo-sync.deferred i { background: #e67700; box-shadow: 0 0 0 3px rgba(230,119,0,.2); }
 .odoo-sync.error i { background: #c92a2a; }
 .odoo-reset { margin: 0 0 14px; padding: 12px; border: 1px solid #c92a2a; border-radius: 8px; background: #fff5f5; }
+.odoo-ficha, .odoo-exp, .odoo-doc-card { min-width: 0; max-width: 100%; }
 .odoo-ficha-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
-.odoo-ficha-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(260px, .8fr); gap: 16px; align-items: start; }
-.odoo-sheet, .odoo-chatter { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; }
+.odoo-ficha-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(220px, .7fr); gap: 16px; align-items: start; min-width: 0; }
+.odoo-ficha-grid-full { grid-template-columns: minmax(0, 1fr); }
+.odoo-ficha-grid-full .odoo-sheet-head { flex-direction: column; align-items: flex-start; }
+.odoo-ficha-grid-full .odoo-sheet-meta { text-align: left; }
+.odoo-sheet, .odoo-chatter { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; min-width: 0; overflow: hidden; }
 .odoo-sheet-head { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 12px; margin-bottom: 14px; }
 .odoo-kicker { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--text-3); }
 .odoo-serial { margin: 4px 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 22px; color: var(--navy); }
@@ -337,6 +342,50 @@ tr.iso-review-row:hover { background: #ffe3e3; }
 .evo-chip.src-zdry { border-color: #e85d04; background: #fff4ec; }
 .evo-chip.src-prev { background: #f1f3f5; }
 .evo-chip.not-applied { opacity: .55; border-style: dashed; }
+.odoo-doc-card { margin: 0 0 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: #f8f9fb; }
+.odoo-doc-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 8px; }
+.odoo-doc-head b { color: var(--navy); }
+.odoo-doc-pending { margin: 0 0 10px; padding: 8px 10px; border-radius: 6px; background: #fff4e6; border: 1px solid #e8590c; color: #d9480f; font-size: 12px; font-weight: 700; white-space: normal; }
+.odoo-doc-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 240px)); justify-content: start; gap: 8px 14px; margin: 0 0 10px; }
+.odoo-doc-rows dt { font-size: 10px; font-weight: 800; text-transform: uppercase; color: var(--text-3); }
+.odoo-doc-rows dd { margin: 2px 0 0; font-size: 13px; font-weight: 700; color: var(--navy); }
+.odoo-doc-table { margin: 8px 0; font-size: 12px; width: 100%; max-width: 100%; }
+.odoo-doc-table-wrap { max-height: 420px; max-width: 100%; overflow: auto; }
+.odoo-doc-card table.data.odoo-doc-table { width: 100%; max-width: 100%; table-layout: fixed; }
+.odoo-doc-card table.data.odoo-doc-table th,
+.odoo-doc-card table.data.odoo-doc-table td { white-space: normal; word-break: break-word; vertical-align: top; }
+.odoo-doc-card table.data.odoo-doc-table th:first-child,
+.odoo-doc-card table.data.odoo-doc-table td:first-child { width: 40%; }
+.odoo-doc-totals { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 16px; margin: 0 0 10px; padding: 10px 12px; background: #fff; border: 1px solid var(--line); border-radius: 6px; }
+.odoo-doc-totals div { display: flex; flex-direction: column; gap: 2px; }
+.odoo-doc-totals span { font-size: 10px; font-weight: 800; text-transform: uppercase; color: var(--text-3); }
+.odoo-doc-totals b { font-size: 16px; color: var(--navy); }
+.odoo-cost-missing td { background: #fff5f5; }
+.odoo-line-cost { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.odoo-line-cost input { width: 88px; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; }
+.odoo-line-cost .btn-ghost { padding: 4px 8px; font-size: 11px; }
+.odoo-mo-days { margin: 0 0 12px; padding: 12px; border: 1px dashed #1971c2; border-radius: 8px; background: #fff; }
+.odoo-mo-days-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 170px)); justify-content: start; gap: 10px; margin: 10px 0; }
+.odoo-mo-days-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; font-weight: 700; color: var(--text-2); }
+.odoo-mo-days-grid input { font: inherit; font-weight: 600; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; }
+.odoo-mo-summary { margin: 0 0 14px; padding: 12px 14px; border: 1px solid #1971c2; border-radius: 8px; background: #eef5ff; }
+.odoo-mo-summary span { font-size: 10px; font-weight: 800; text-transform: uppercase; color: #1864ab; }
+.odoo-mo-summary b { display: block; margin-top: 4px; font-size: 20px; color: var(--navy); }
+.odoo-hist { margin-top: 12px; }
+.odoo-doc-picks { display: grid; gap: 8px; }
+.odoo-doc-pick { padding: 8px 10px; background: #fff; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; }
+.odoo-doc-isos { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; margin-top: 4px; color: var(--text-2); }
+.odoo-progress { margin: 10px 0 14px; padding: 10px 12px; border: 1px solid #1971c2; border-radius: 8px; background: #eef5ff; }
+.odoo-progress-bar { height: 8px; background: #d0ebff; border-radius: 99px; overflow: hidden; margin: 8px 0 6px; }
+.odoo-progress-bar i { display: block; height: 100%; background: #1971c2; }
+.odoo-progress-msg { font-size: 12px; font-weight: 700; color: #1864ab; }
+.reconcile-banner { margin: 10px 0 14px; padding: 10px 12px; border-radius: 8px; background: #fff4e6; border: 1px solid #e8590c; color: #d9480f; font-size: 13px; }
+.reconcile-banner a { color: #d9480f; font-weight: 800; }
+.odoo-log { margin: 12px 0 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.odoo-log-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 8px; }
+.odoo-log-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.odoo-log-table { font-size: 12px; }
+.odoo-log-detail { margin: 8px 0 0; padding: 8px 10px; background: #fff5f5; border: 1px solid #ffc9c9; border-radius: 6px; white-space: pre-wrap; font-size: 11px; max-height: 240px; overflow: auto; }
 .odoo-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
 .odoo-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; font-weight: 700; color: var(--text-2); }
 .odoo-form input, .odoo-form select, .odoo-form textarea { font: inherit; font-weight: 500; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; }
