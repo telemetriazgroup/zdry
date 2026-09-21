@@ -38,6 +38,12 @@ export type OdooQuoteIssueConfig = {
   paymentTermId: number | null;
   identificationTypeName: string;
   identificationTypeId: number | null;
+  planName: string;
+  planId: number | null;
+  rentReportName: string;
+  rentMonths: number;
+  rentPricelistName: string;
+  rentPricelistId: number | null;
   products: QuoteProductBind[];
   defaults: {
     validityDays: number;
@@ -71,6 +77,9 @@ export type QuoteIssueHits = {
   paymentTerm?: NamedOdooRow | null;
   company?: NamedOdooRow | null;
   identificationType?: NamedOdooRow | null;
+  plan?: NamedOdooRow | null;
+  rentReport?: NamedOdooRow | null;
+  rentPricelist?: NamedOdooRow | null;
   products?: Array<{ key: string; row: NamedOdooRow | null }>;
 };
 
@@ -79,6 +88,7 @@ const DEFAULT_PRODUCTS: QuoteProductBind[] = [
   { key: "40hc-segundo", measure: "40 HC", usage: "segundo_uso", defaultCode: "CDD40H0004", productId: null, productName: "" },
   { key: "40dc-segundo", measure: "40 DC", usage: "segundo_uso", defaultCode: "", productId: null, productName: "" },
   { key: "flete", measure: "FLETE", usage: "servicio", defaultCode: "", productId: null, productName: "" },
+  { key: "alquiler", measure: "ALQUILER", usage: "servicio", defaultCode: "", productId: null, productName: "" },
 ];
 
 export function defaultQuoteIssueConfig(): OdooQuoteIssueConfig {
@@ -99,6 +109,12 @@ export function defaultQuoteIssueConfig(): OdooQuoteIssueConfig {
     paymentTermId: null,
     identificationTypeName: "RUC",
     identificationTypeId: null,
+    planName: "Mensual",
+    planId: null,
+    rentReportName: "zgroup_subscription_report.report_proyeccion_template",
+    rentMonths: 12,
+    rentPricelistName: "PEN",
+    rentPricelistId: null,
     products: DEFAULT_PRODUCTS.map((p) => ({ ...p })),
     defaults: {
       validityDays: 7,
@@ -179,6 +195,15 @@ export function normalizeQuoteIssueConfig(raw: unknown): OdooQuoteIssueConfig {
     paymentTermId: asInt(src.paymentTermId),
     identificationTypeName: asStr(src.identificationTypeName, base.identificationTypeName) || base.identificationTypeName,
     identificationTypeId: asInt(src.identificationTypeId),
+    planName: asStr(src.planName, base.planName) || base.planName,
+    planId: asInt(src.planId),
+    rentReportName: asStr(src.rentReportName, base.rentReportName) || base.rentReportName,
+    rentMonths: (() => {
+      const n = Number(src.rentMonths);
+      return Number.isFinite(n) && n > 0 ? Math.min(120, Math.round(n)) : 12;
+    })(),
+    rentPricelistName: asStr(src.rentPricelistName, base.rentPricelistName) || base.rentPricelistName,
+    rentPricelistId: asInt(src.rentPricelistId),
     products,
     defaults: {
       validityDays: Number.isFinite(validityDays) && validityDays > 0 ? Math.min(90, Math.round(validityDays)) : 7,
@@ -224,6 +249,21 @@ export function freightProductId(cfg: OdooQuoteIssueConfig): number | null {
   return hit?.productId || null;
 }
 
+/** Q6: servicio que factura el alquiler. No es obligatorio para Q2 venta. */
+export function rentServiceProductId(cfg: OdooQuoteIssueConfig): number | null {
+  const hit = cfg.products.find((p) => p.key === "alquiler" && p.productId);
+  return hit?.productId || null;
+}
+
+export function rentIssueReady(cfg: OdooQuoteIssueConfig): { ok: boolean; missing: string[] } {
+  const base = quoteIssueReady(cfg);
+  const missing = [...base.missing];
+  if (!rentServiceProductId(cfg)) missing.push("product:alquiler");
+  if (!cfg.planId) missing.push("planId");
+  if (!cfg.rentReportName) missing.push("rentReportName");
+  return { ok: missing.length === 0, missing };
+}
+
 export function applyQuoteIssueHits(cfg: OdooQuoteIssueConfig, hits: QuoteIssueHits): OdooQuoteIssueConfig {
   const next = normalizeQuoteIssueConfig(cfg);
   if (hits.report) {
@@ -258,6 +298,17 @@ export function applyQuoteIssueHits(cfg: OdooQuoteIssueConfig, hits: QuoteIssueH
     next.identificationTypeId = asInt(hits.identificationType.id);
     next.identificationTypeName = rowName(hits.identificationType) || next.identificationTypeName;
   }
+  if (hits.plan) {
+    next.planId = asInt(hits.plan.id);
+    next.planName = rowName(hits.plan) || next.planName;
+  }
+  if (hits.rentReport) {
+    next.rentReportName = String(hits.rentReport.report_name || next.rentReportName);
+  }
+  if (hits.rentPricelist) {
+    next.rentPricelistId = asInt(hits.rentPricelist.id);
+    next.rentPricelistName = rowName(hits.rentPricelist) || next.rentPricelistName;
+  }
   for (const bind of hits.products || []) {
     const p = next.products.find((x) => x.key === bind.key);
     if (!p) continue;
@@ -289,6 +340,14 @@ export function quoteIssueChecks(cfg: OdooQuoteIssueConfig): QuoteIssueCheck[] {
     row("fiscalPositionId", cfg.fiscalPositionId, cfg.fiscalPositionName),
     row("paymentTermId", cfg.paymentTermId, cfg.paymentTermName),
     row("identificationTypeId", cfg.identificationTypeId, cfg.identificationTypeName, false),
+    row("planId", cfg.planId, cfg.planName, false),
+    {
+      key: "rentReportName",
+      ok: true,
+      id: null,
+      label: cfg.rentReportName || "cronograma",
+    },
+    row("rentPricelistId", cfg.rentPricelistId, cfg.rentPricelistName, false),
   ];
   for (const p of cfg.products) {
     const required = Boolean(p.defaultCode);

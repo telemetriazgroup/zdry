@@ -23,6 +23,7 @@ import OdooIntegrations from "./OdooIntegrations.jsx";
 import OdooBandeja from "./OdooBandeja.jsx";
 import SystemBackup from "./SystemBackup.jsx";
 import DryStats from "./DryStats.jsx";
+import Alquileres from "./Alquileres.jsx";
 
 const SIDEBAR_KEY = "zdry.sidebarCollapsed";
 
@@ -162,7 +163,7 @@ export default function Shell() {
             <Route path="negociacion" element={<Gate nav={nav} role={user.role} path="/app/negociacion"><QuotesHub /></Gate>} />
             <Route path="pagos" element={<Gate nav={nav} role={user.role} path="/app/pagos"><QuotesHub /></Gate>} />
             <Route path="seguimiento" element={<Gate nav={nav} role={user.role} path="/app/seguimiento"><QuotesHub /></Gate>} />
-            <Route path="alquileres" element={<Gate nav={nav} role={user.role} path="/app/alquileres"><ComingSoon title="Contratos de alquiler" sprint="5" /></Gate>} />
+            <Route path="alquileres" element={<Gate nav={nav} role={user.role} path="/app/alquileres"><Alquileres /></Gate>} />
             <Route path="compras/facturas" element={<Gate nav={nav} role={user.role} path="/app/compras/facturas"><Compras /></Gate>} />
             <Route path="compras/conciliar" element={<Gate nav={nav} role={user.role} path="/app/compras/conciliar"><Compras /></Gate>} />
             <Route path="compras/odoo" element={<Gate nav={nav} role={user.role} path="/app/compras/odoo"><Compras /></Gate>} />

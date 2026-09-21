@@ -659,9 +659,9 @@ export default function Catalog() {
               <label>Tipo</label>
               <select value={kind} onChange={(e) => setKind(e.target.value)}>
                 <option value="venta">Venta</option>
-                <option value="alquiler">Alquiler (solicitud)</option>
+                <option value="alquiler">Alquiler</option>
               </select>
-              {kind === "alquiler" ? <div className="locked-note">El contrato de alquiler completo entra en el Sprint 5. Esta solicitud queda como cotización nueva.</div> : null}
+              {kind === "alquiler" ? <div className="ok-msg">Se crea el presupuesto Odoo con servicio de alquiler + ISO a S/ 0. El comercial fija la cuota mensual.</div> : null}
 
               {user?.role === "cliente" ? (
                 <form className="quote-form" onSubmit={submitQuote}>

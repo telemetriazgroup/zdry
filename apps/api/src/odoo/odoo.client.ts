@@ -25,7 +25,7 @@ export class OdooClient {
   enqueueSaleClose(payload: OdooSaleClosePayload) {
     void this.readConfig().then((cfg) => {
       if (cfg.enabled && cfg.url) {
-        this.log.log(`Odoo encolado hacia ${cfg.url} / ${cfg.db}: ${JSON.stringify(payload)}`);
+        this.log.log(`Odoo cierre (job sale_close aparte): ${cfg.url} / ${cfg.db}: ${JSON.stringify(payload)}`);
         return;
       }
       this.log.log(`Odoo en espera — cierre: ${JSON.stringify(payload)}`);

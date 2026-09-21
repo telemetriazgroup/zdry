@@ -22,11 +22,12 @@ describe("quote-pedido Q4", () => {
     expect(() => assertPedidoKeepsOdooDraft("pago_validado", "asignacion_confirmada")).toThrow(QuotePedidoError);
   });
 
-  it("venta no demo exige el N° Odoo; alquiler/demo no", () => {
+  it("venta y alquiler no demo exigen el N° Odoo; demo no", () => {
     expect(requiresOdooQuoteForPedido("venta", false)).toBe(true);
+    expect(requiresOdooQuoteForPedido("alquiler", false)).toBe(true);
     expect(() => assertOdooQuoteForPedido("venta", false, null)).toThrow(/10020/);
+    expect(() => assertOdooQuoteForPedido("alquiler", false, null)).toThrow(/10020/);
     expect(() => assertOdooQuoteForPedido("venta", false, "10020263830")).not.toThrow();
-    expect(() => assertOdooQuoteForPedido("alquiler", false, null)).not.toThrow();
     expect(() => assertOdooQuoteForPedido("venta", true, null)).not.toThrow();
   });
 

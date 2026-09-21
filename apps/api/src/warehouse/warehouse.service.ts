@@ -225,6 +225,32 @@ export class WarehouseService {
     };
   }
 
+  async rentalReturns() {
+    const rows = await this.prisma.quote.findMany({
+      where: {
+        kind: "alquiler",
+        dealStatus: { notIn: ["perdida", "expirada"] },
+        odooPickingState: "done",
+        OR: [{ odooPickingInState: null }, { odooPickingInState: { not: "done" } }],
+      },
+      include: {
+        lines: true,
+        customer: { select: { companyName: true, rucDni: true } },
+      },
+      orderBy: { updatedAt: "desc" },
+    });
+    return rows.map((q) => ({
+      id: q.id,
+      number: q.number,
+      odooSaleName: q.odooSaleName,
+      customer: q.customer.companyName,
+      pickingName: q.odooPickingName,
+      pickingInName: q.odooPickingInName,
+      pickingInState: q.odooPickingInState,
+      isos: q.lines.map((l) => l.iso),
+    }));
+  }
+
   async pending(user?: AuthUser) {
     const [types, categories, rows] = await Promise.all([
       this.prisma.containerType.findMany(),

@@ -51,6 +51,16 @@ export function quotePdfStorageKey(quoteId: string, saleName?: string | null): s
   return `quotes/${quoteId}/presupuesto-${slug}.pdf`;
 }
 
+export function cronogramaFilename(saleName?: string | null, quoteNumber?: string | null): string {
+  const n = String(saleName || quoteNumber || "cronograma").replace(/[\\/:*?"<>|]+/g, "-").trim();
+  return `Cronograma - ${n}.pdf`;
+}
+
+export function cronogramaStorageKey(quoteId: string, saleName?: string | null): string {
+  const slug = String(saleName || quoteId).replace(/[^\w.-]+/g, "_");
+  return `quotes/${quoteId}/cronograma-${slug}.pdf`;
+}
+
 export function quoteMailBody(saleName: string, quoteNumber: string): string {
   return `<p>Adjuntamos su cotización <b>${saleName || quoteNumber}</b> (formato Perú – Presupuesto/Pedido versión 2).</p>`;
 }

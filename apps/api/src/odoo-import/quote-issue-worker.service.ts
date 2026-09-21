@@ -269,7 +269,7 @@ export class QuoteIssueWorker implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async saleFields() {
+  async saleFields() {
     const now = Date.now();
     if (this.fieldsCache && now - this.fieldsCache.at < 10 * 60 * 1000) return this.fieldsCache;
     const [order, line] = await Promise.all([
@@ -280,7 +280,7 @@ export class QuoteIssueWorker implements OnModuleInit, OnModuleDestroy {
     return this.fieldsCache;
   }
 
-  private async findUserId(email: string): Promise<number | null> {
+  async findUserId(email: string): Promise<number | null> {
     const login = (email || "").trim().toLowerCase();
     if (!login) return null;
     try {
@@ -296,7 +296,7 @@ export class QuoteIssueWorker implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async upsertPartner(
+  async upsertPartner(
     customer: {
       id: string;
       rucDni: string;

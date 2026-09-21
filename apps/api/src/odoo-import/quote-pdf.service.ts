@@ -11,6 +11,8 @@ import {
   presupuestoFilename,
   quoteMailBody,
   quotePdfStorageKey,
+  cronogramaFilename,
+  cronogramaStorageKey,
 } from "../domain/odoo-quote-pdf";
 
 const SYNC = { context: { ...ZDRY_SYNC_CONTEXT } };
@@ -76,6 +78,50 @@ export class QuotePdfService {
     return {
       buffer,
       filename: presupuestoFilename(q.odooSaleName, q.number),
+      source: "odoo",
+      storageKey: key,
+    };
+  }
+
+  async captureCronograma(quoteId: string, force = false): Promise<QuotePdfResult | null> {
+    const q = await this.prisma.quote.findUnique({ where: { id: quoteId } });
+    if (!q?.odooSaleId) return null;
+    if (q.cronogramaStorageKey && !force) {
+      try {
+        const stored = await this.storage.getBuffer(q.cronogramaStorageKey);
+        if (isPdfBuffer(stored.buffer)) {
+          return {
+            buffer: stored.buffer,
+            filename: cronogramaFilename(q.odooSaleName, q.number),
+            source: "odoo",
+            storageKey: q.cronogramaStorageKey,
+          };
+        }
+      } catch {
+        /* re-render */
+      }
+    }
+    const cfg = await loadQuoteIssueConfig(this.prisma);
+    const reportName = cfg.rentReportName || "zgroup_subscription_report.report_proyeccion_template";
+    const raw = await this.renderPdf(reportName, q.odooSaleId);
+    const buffer = decodeOdooPdf(raw);
+    if (!isPdfBuffer(buffer)) throw new Error("Odoo no devolvió el cronograma PDF.");
+    const key = cronogramaStorageKey(q.id, q.odooSaleName);
+    await this.storage.put(key, buffer, "application/pdf");
+    await this.prisma.quote.update({
+      where: { id: q.id },
+      data: { cronogramaStorageKey: key, cronogramaRenderedAt: new Date() },
+    });
+    await this.prisma.quoteEvent.create({
+      data: {
+        quoteId: q.id,
+        type: "odoo_cronograma",
+        detail: `Cronograma ${q.odooSaleName} (${buffer.length} bytes).`,
+      },
+    });
+    return {
+      buffer,
+      filename: cronogramaFilename(q.odooSaleName, q.number),
       source: "odoo",
       storageKey: key,
     };

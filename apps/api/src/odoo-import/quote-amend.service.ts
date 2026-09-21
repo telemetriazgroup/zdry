@@ -8,6 +8,7 @@ import { ZDRY_SYNC_CONTEXT } from "../domain/quote-issue-draft";
 import type { DraftLineIn } from "../domain/quote-issue-draft";
 import {
   AMEND_SOURCE,
+  extraLinesForAmend,
   amendWriteVals,
   assertCanAmendOdoo,
   buildAmendLines,
@@ -16,6 +17,12 @@ import {
   totalChanged,
   type SaleSnapshot,
 } from "../domain/quote-amend";
+import {
+  assertRentIssuable,
+  canAmendRentQuota,
+  rentQuotaWriteMode,
+  QuoteRentDraftError,
+} from "../domain/quote-rent-draft";
 
 const SYNC = { context: { ...ZDRY_SYNC_CONTEXT } };
 
@@ -29,12 +36,24 @@ export class QuoteAmendService {
     private readonly quotePdf: QuotePdfService,
   ) {}
 
-  /** Lee Odoo y bloquea si ya no es presupuesto. No-op si aún no hay SO. */
+  /** Lee Odoo y bloquea si ya no es presupuesto. Alquiler: cuota viva hasta sale. */
   async assertWritable(quoteId: string): Promise<void> {
     const q = await this.prisma.quote.findUnique({ where: { id: quoteId } });
     if (!q?.odooSaleId) return;
     const so = await this.readSale(q.odooSaleId);
-    assertCanAmendOdoo(so.state != null ? String(so.state) : "draft", q.odooUrl);
+    const state = so.state != null ? String(so.state) : "draft";
+    if (q.kind === "alquiler") {
+      if (!canAmendRentQuota(state)) {
+        throw new QuoteAmendError(
+          "El contrato de alquiler está cancelado en Odoo. No se puede enmendar desde ZDRY.",
+          "cancelled",
+          q.odooUrl || null,
+          state,
+        );
+      }
+      return;
+    }
+    assertCanAmendOdoo(state, q.odooUrl);
   }
 
   async sync(quoteId: string): Promise<{ skipped?: string; totalChanged?: boolean } | null> {
@@ -44,7 +63,8 @@ export class QuoteAmendService {
     });
     if (!q) throw new QuoteAmendError("Cotización no encontrada.", "missing_sale");
     if (!q.odooSaleId) return { skipped: "no_so" };
-    if (q.demo || q.kind === "alquiler") return { skipped: q.demo ? "demo" : "rental" };
+    if (q.demo) return { skipped: "demo" };
+    if (q.kind === "alquiler") return this.syncRent(q);
 
     const cfg = await loadQuoteIssueConfig(this.prisma);
     const dry: DraftLineIn[] = q.lines.map((l) => ({
@@ -134,6 +154,138 @@ export class QuoteAmendService {
       },
     });
 
+    return { totalChanged: changed };
+  }
+
+  private async syncRent(q: {
+    id: string;
+    number: string;
+    kind: string;
+    odooSaleId: number | null;
+    odooSaleName: string | null;
+    odooUrl: string | null;
+    rentPriceNet: Prisma.Decimal | number | null;
+    clientPickup: boolean;
+    vendor: { name: string };
+    lines: Array<{ iso: string; type: string; cat: string }>;
+    extras: Array<{ kind: string; label: string; amount: Prisma.Decimal | number }>;
+  }): Promise<{ skipped?: string; totalChanged?: boolean } | null> {
+    if (!q.odooSaleId) return { skipped: "no_so" };
+    const cfg = await loadQuoteIssueConfig(this.prisma);
+    const rentPrice = q.rentPriceNet != null ? Number(q.rentPriceNet) : 0;
+    let rentLines;
+    try {
+      rentLines = assertRentIssuable("alquiler", false, cfg, q.lines, rentPrice);
+    } catch (e) {
+      if (e instanceof QuoteRentDraftError) throw new QuoteAmendError(e.message, "empty");
+      throw e;
+    }
+    const extras = extraLinesForAmend(
+      cfg,
+      q.extras.map((e) => ({ kind: e.kind, label: e.label, amount: Number(e.amount) })),
+      q.clientPickup,
+    );
+    const before = await this.readSnapshot(q.odooSaleId);
+    const mode = rentQuotaWriteMode(before.state);
+    if (mode === "blocked") {
+      throw new QuoteAmendError(
+        "El contrato de alquiler está cancelado en Odoo. No se puede enmendar desde ZDRY.",
+        "cancelled",
+        q.odooUrl || null,
+        before.state,
+      );
+    }
+
+    if (mode === "replace") {
+      let vals = amendWriteVals([...rentLines, ...extras], "alquiler");
+      const lineFields = await this.odoo.fieldsGet("sale.order.line");
+      const orderFields = await this.odoo.fieldsGet("sale.order");
+      if (Array.isArray(vals.order_line)) {
+        vals.order_line = (vals.order_line as unknown[]).map((cmd) => {
+          const tuple = cmd as [number, number, Record<string, unknown>?];
+          if (tuple[0] !== 0 || !tuple[2]) return cmd;
+          const lv = { ...tuple[2] };
+          if (lineFields && !("x_studio_tipo" in lineFields)) delete lv.x_studio_tipo;
+          return [tuple[0], tuple[1], lv];
+        });
+      }
+      if (orderFields && !("x_studio_asunto_cotizacion" in orderFields)) {
+        delete vals.x_studio_asunto_cotizacion;
+      }
+      await this.odoo.write("sale.order", [q.odooSaleId], vals, SYNC);
+    } else {
+      const so = await this.readSale(q.odooSaleId);
+      const lineIds = Array.isArray(so.order_line) ? (so.order_line as number[]) : [];
+      const sols = lineIds.length
+        ? await this.odoo.read("sale.order.line", lineIds, ["id", "name", "x_studio_tipo", "price_unit"])
+        : [];
+      const service = sols.find((l) =>
+        String(l.x_studio_tipo || "")
+          .toUpperCase()
+          .includes("ALQUILER"),
+      ) || sols.find((l) =>
+        String(l.name || "")
+          .toUpperCase()
+          .includes("ALQUILER"),
+      );
+      if (!service?.id) {
+        throw new QuoteAmendError("No se encontró la línea de servicio de alquiler en Odoo.", "empty");
+      }
+      await this.odoo.write("sale.order.line", [Number(service.id)], { price_unit: rentPrice }, SYNC);
+    }
+
+    const after = await this.readSnapshot(q.odooSaleId);
+    const diff = snapshotDiff(before, after);
+    await this.prisma.quote.update({
+      where: { id: q.id },
+      data: {
+        odooState: after.state,
+        odooInvoiceStatus: after.invoiceStatus || null,
+        odooAmountUntaxed: after.amountUntaxed,
+        odooAmountTax: after.amountTax,
+        odooAmountTotal: after.amountTotal,
+      },
+    });
+    if (Object.keys(diff).length) {
+      await this.prisma.quoteOdooRevision.create({
+        data: {
+          quoteId: q.id,
+          source: AMEND_SOURCE,
+          state: after.state,
+          invoiceStatus: after.invoiceStatus,
+          amountUntaxed: after.amountUntaxed,
+          amountTax: after.amountTax,
+          amountTotal: after.amountTotal,
+          linesJson: after.lines as Prisma.InputJsonValue,
+          diffJson: diff as Prisma.InputJsonValue,
+        },
+      });
+    }
+    const changed = totalChanged(before.amountTotal, after.amountTotal);
+    try {
+      await this.quotePdf.capture(q.id, true);
+      await this.quotePdf.captureCronograma(q.id, true);
+      if (changed && mode === "replace") {
+        await this.quotePdf.postToSale(q.id);
+        await this.prisma.dealMessage.create({
+          data: {
+            quoteId: q.id,
+            authorRole: "vendedor",
+            authorName: q.vendor.name,
+            body: `La cuota de alquiler Odoo ${q.odooSaleName} cambió de ${before.amountTotal} a ${after.amountTotal}.`,
+          },
+        });
+      }
+    } catch (e) {
+      this.log.warn(`PDF Q6 ${q.number}: ${(e as Error).message}`);
+    }
+    await this.prisma.quoteEvent.create({
+      data: {
+        quoteId: q.id,
+        type: "odoo_amend",
+        detail: `Cuota alquiler ${q.odooSaleName}: ${before.amountTotal} → ${after.amountTotal} (${mode}).`,
+      },
+    });
     return { totalChanged: changed };
   }
 

@@ -6,6 +6,7 @@ import {
   productIdFor,
   quoteIssueChecks,
   quoteIssueReady,
+  rentIssueReady,
 } from "./odoo-quote-issue";
 
 describe("odoo-quote-issue", () => {
@@ -54,6 +55,24 @@ describe("odoo-quote-issue", () => {
     expect(productIdFor(next, "20 DC")).toBe(5800);
     expect(productIdFor(next, "40 HC", "segundo_uso")).toBe(5807);
     expect(quoteIssueReady(next).ok).toBe(true);
+  });
+
+  it("Q6 exige producto alquiler y plan; Q2 no", () => {
+    const cfg = defaultQuoteIssueConfig();
+    cfg.taxId = 325;
+    cfg.pricelistId = 1;
+    cfg.warehouseId = 22;
+    cfg.fiscalPositionId = 32;
+    cfg.paymentTermId = 1;
+    cfg.companyId = 19;
+    cfg.products[0].productId = 5800;
+    cfg.products[1].productId = 5807;
+    expect(quoteIssueReady(cfg).ok).toBe(true);
+    expect(rentIssueReady(cfg).ok).toBe(false);
+    expect(rentIssueReady(cfg).missing).toEqual(expect.arrayContaining(["product:alquiler", "planId"]));
+    cfg.planId = 4;
+    cfg.products.find((p) => p.key === "alquiler")!.productId = 9100;
+    expect(rentIssueReady(cfg).ok).toBe(true);
   });
 
   it("pickNamed prefiere el needle y no el primer row", () => {

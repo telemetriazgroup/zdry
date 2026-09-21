@@ -179,10 +179,17 @@ export default function Recepcion() {
   const [docRows, setDocRows] = useState([newDocRow()]);
   const [capNote, setCapNote] = useState("");
   const [pushingRef, setPushingRef] = useState(null);
+  const [rentalReturns, setRentalReturns] = useState([]);
 
   async function loadPending() {
     const rows = await api("/warehouse/pending");
     setPending(rows);
+  }
+
+  async function loadRentalReturns() {
+    if (!canSeeOdoo) return;
+    const rows = await api("/warehouse/rental-returns");
+    setRentalReturns(rows);
   }
 
   async function loadVisits() {
@@ -206,6 +213,7 @@ export default function Recepcion() {
       .catch((e) => setError(e.message));
     loadPending().catch((e) => setError(e.message));
     loadVisits().catch(() => undefined);
+    loadRentalReturns().catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -689,7 +697,35 @@ export default function Recepcion() {
       <div className="panel">
         <button className="btn-ghost" type="button" onClick={() => { setMode("bandeja"); setError(""); }}>← Volver</button>
         <h3 style={{ marginTop: 10 }}>Devolución de alquiler</h3>
-        <p className="section-sub">No hay alquileres activos pendientes de devolución (Sprint 5).</p>
+        <p className="section-sub">OUT hecho en Odoo y aún sin IN. El ingreso a patio se concilia con el picking de devolución.</p>
+        {!rentalReturns.length ? (
+          <p className="section-sub">No hay alquileres con OUT pendiente de devolución.</p>
+        ) : (
+          <div className="tablewrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>N° Odoo</th>
+                  <th>Cliente</th>
+                  <th>ISO</th>
+                  <th>OUT</th>
+                  <th>IN</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rentalReturns.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.odooSaleName || row.number}</td>
+                    <td>{row.customer}</td>
+                    <td className="card-iso">{(row.isos || []).join(", ")}</td>
+                    <td>{row.pickingName || "hecho"}</td>
+                    <td>{row.pickingInName || row.pickingInState || "pendiente"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     );
   }
@@ -1407,7 +1443,7 @@ export default function Recepcion() {
           <span className="recv-full">+ Nuevo ingreso — almacenaje de cliente tercero</span>
           <span className="recv-short">+ Almacenaje de cliente</span>
         </button>
-        <button className="btn-ghost" type="button" onClick={() => setMode("devolucion")}>
+        <button className="btn-ghost" type="button" onClick={() => { setMode("devolucion"); loadRentalReturns().catch((e) => setError(e.message)); }}>
           <span className="recv-full">↩ Registrar devolución de alquiler</span>
           <span className="recv-short">↩ Devolución alquiler</span>
         </button>

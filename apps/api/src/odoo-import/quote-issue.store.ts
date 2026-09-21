@@ -5,6 +5,7 @@ import {
   normalizeQuoteIssueConfig,
   quoteIssueChecks,
   quoteIssueReady,
+  rentIssueReady,
   type OdooQuoteIssueConfig,
   type QuoteIssueHits,
 } from "../domain/odoo-quote-issue";
@@ -26,10 +27,13 @@ export async function saveQuoteIssueConfig(prisma: PrismaService, raw: unknown):
 
 export function presentQuoteIssue(cfg: OdooQuoteIssueConfig, extra: { resolvedAt?: string | null } = {}) {
   const ready = quoteIssueReady(cfg);
+  const rent = rentIssueReady(cfg);
   return {
     config: cfg,
     ready: ready.ok,
     missing: ready.missing,
+    rentReady: rent.ok,
+    rentMissing: rent.missing,
     checks: quoteIssueChecks(cfg),
     resolvedAt: extra.resolvedAt || null,
   };

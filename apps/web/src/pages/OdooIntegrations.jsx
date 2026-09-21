@@ -112,14 +112,14 @@ export default function OdooIntegrations() {
       <div className="panel">
         <h3>Cotización ZDRY → Odoo (Q0 + Q2)</h3>
         <p className="section-sub">
-          IDs de impuesto, productos DRY, almacén, PDF Perú v2. Q2 crea el presupuesto <b>draft</b> (no confirma). La cola de abajo muestra `quote_issue`.
+          IDs de impuesto, productos DRY, almacén, PDF Perú v2, servicio de alquiler y plan mensual. Q2 crea el presupuesto <b>draft</b> de venta. Q6 crea el de alquiler (servicio + ISO $0). La cola muestra `quote_issue` y `rent_issue`.
         </p>
         <QuoteIssuePanel />
       </div>
 
       <div className="panel">
         <h3>Cola de sincronización</h3>
-        <p className="section-sub">`quote_issue` = presupuesto draft. `sale_close` sigue siendo Q5 (confirmar), no Q2.</p>
+        <p className="section-sub">`quote_issue` = venta draft. `rent_issue` = alquiler draft (servicio + ISO $0). `sale_close` = Q5 confirma venta. `rent_close` = Q6 confirma suscripción (sin factura de producto).</p>
         {!data?.queue?.length ? (
           <p className="section-sub">No hay trabajos en cola.</p>
         ) : (
@@ -144,7 +144,7 @@ export default function OdooIntegrations() {
                     <td>{j.status}</td>
                     <td>{j.attempts}{j.lastError ? ` · ${j.lastError}` : ""}</td>
                     <td>
-                      {j.event === "quote_issue" && j.status === "error" ? (
+                      {["quote_issue", "sale_close", "rent_issue", "rent_close"].includes(j.event) && j.status === "error" ? (
                         <button className="link-btn" type="button" onClick={async () => {
                           setError("");
                           try {
@@ -200,8 +200,12 @@ function QuoteIssuePanel() {
     <>
       {error ? <div className="err">{error}</div> : null}
       {data?.ready ? <div className="ok-msg">Listo para Q2: impuesto, almacén, productos y reporte existen en Odoo.</div> : null}
+      {data?.rentReady ? <div className="ok-msg">Listo para Q6: producto de alquiler y plan mensual.</div> : null}
       {data && !data.ready ? (
         <p className="section-sub">Falta resolver: {(data.missing || []).join(", ") || "—"}. Pulsa «Leer IDs desde Odoo».</p>
+      ) : null}
+      {data && data.ready && !data.rentReady ? (
+        <p className="section-sub">Q6 falta: {(data.rentMissing || []).join(", ") || "—"}.</p>
       ) : null}
       <div className="action-row" style={{ margin: "10px 0 12px" }}>
         <button className="btn-primary" type="button" disabled={busy} onClick={resolve}>

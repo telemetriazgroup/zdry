@@ -444,6 +444,22 @@ model Quote {
   odooAmountTotal    Decimal?         @db.Decimal(16, 2)
   odooUrl            String?
   odooPartnerId      Int?
+  odooInvoiceId      Int?
+  odooInvoiceName    String?
+  odooPickingId      Int?
+  odooPickingName    String?
+  odooPickingState   String?
+  odooPickingInId    Int?
+  odooPickingInName  String?
+  odooPickingInState String?
+  rentPriceNet       Decimal?         @db.Decimal(12, 2)
+  rentMonths         Int?
+  rentStart          DateTime?
+  rentEnd            DateTime?
+  odooPlanId         Int?
+  odooSubscriptionId Int?
+  cronogramaStorageKey String?
+  cronogramaRenderedAt DateTime?
   pdfStorageKey      String?
   pdfSource          String?
   pdfRenderedAt      DateTime?
@@ -457,6 +473,7 @@ model Quote {
   odooJobs           OdooSyncJob[]
   dispatches         Dispatch[]
   odooRevisions      QuoteOdooRevision[]
+  installments       QuoteInstallment[]
 
   @@index([dealStatus])
   @@index([vendorId])
@@ -527,6 +544,21 @@ model QuoteEvent {
   type      String
   detail    String
   createdAt DateTime @default(now())
+
+  @@index([quoteId, createdAt])
+}
+
+model QuoteInstallment {
+  id            String    @id @default(uuid())
+  quoteId       String
+  quote         Quote     @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  odooMoveId    Int       @unique
+  name          String
+  invoiceDate   DateTime?
+  dueDate       DateTime?
+  amountTotal   Decimal   @db.Decimal(16, 2)
+  paymentState  String    @default("")
+  createdAt     DateTime  @default(now())
 
   @@index([quoteId, createdAt])
 }

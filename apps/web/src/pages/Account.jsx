@@ -272,6 +272,13 @@ export default function Account() {
                   {detail.order?.registered ? " · pedido registrado en ZDRY (voucher). No es una OC de Odoo." : "."}
                 </p>
               ) : null}
+              {detail.odoo?.close?.quoted ? (
+                <p className="section-sub">
+                  {detail.odoo.close.confirmed ? "Confirmada" : "Presupuesto"}
+                  {detail.odoo.close.invoiced ? ` · facturada ${detail.odoo.invoiceName || ""}` : ""}
+                  {detail.odoo.close.dispatchedOdoo ? " · despachada en Odoo" : ""}
+                </p>
+              ) : null}
               <p>
                 <button
                   className="link-btn"

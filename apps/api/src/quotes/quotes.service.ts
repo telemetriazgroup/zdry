@@ -22,8 +22,14 @@ import { SunatRucService } from "./sunat-ruc.service";
 import { QuoteIssueWorker } from "../odoo-import/quote-issue-worker.service";
 import { QuotePdfService } from "../odoo-import/quote-pdf.service";
 import { QuoteAmendService } from "../odoo-import/quote-amend.service";
+import { SaleCloseWorker } from "../odoo-import/sale-close-worker.service";
+import { RentIssueWorker } from "../odoo-import/rent-issue-worker.service";
+import { RentCloseWorker } from "../odoo-import/rent-close-worker.service";
 import { presupuestoFilename } from "../domain/odoo-quote-pdf";
 import { QUOTE_ISSUE_EVENT } from "../domain/quote-issue-draft";
+import { SALE_CLOSE_EVENT, quoteSemaphore } from "../domain/quote-sale-close";
+import { RENT_ISSUE_EVENT, canAmendRentQuota, contractEndDate } from "../domain/quote-rent-draft";
+import { RENT_CLOSE_EVENT, rentSemaphore } from "../domain/quote-rent-close";
 import {
   assertCanRegisterPedido,
   assertOdooQuoteForPedido,
@@ -109,6 +115,7 @@ const QUOTE_INCLUDE = {
   vendor: { select: { id: true, name: true, email: true } },
   odooJobs: { orderBy: { createdAt: "desc" as const } },
   odooRevisions: { orderBy: { createdAt: "desc" as const }, take: 20 },
+  installments: { orderBy: { createdAt: "desc" as const } },
   dispatches: true,
 };
 
@@ -133,6 +140,9 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     private readonly quoteIssue: QuoteIssueWorker,
     private readonly quotePdf: QuotePdfService,
     private readonly quoteAmend: QuoteAmendService,
+    private readonly saleClose: SaleCloseWorker,
+    private readonly rentIssue: RentIssueWorker,
+    private readonly rentClose: RentCloseWorker,
   ) {}
 
   onModuleInit() {
@@ -619,7 +629,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         cat: c.cat,
         listPrice: prices.priceList,
         minPrice: prices.priceMin,
-        priceNet: prices.priceList,
+        priceNet: kind === "alquiler" ? 0 : prices.priceList,
       });
     }
 
@@ -637,6 +647,8 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         demo: anyDemo,
         dispatchNotes: place || null,
         freightSnapshot: freightSnap ? (freightSnap as object) : undefined,
+        rentPriceNet: kind === "alquiler" ? 0 : undefined,
+        rentMonths: kind === "alquiler" ? 12 : undefined,
         lines: { create: lines },
         events: {
           create: {
@@ -651,10 +663,8 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     });
     if (kind === "venta" && !anyDemo) {
       await this.quoteIssue.enqueue(quote.id);
-    } else if (kind === "alquiler") {
-      await this.prisma.quoteEvent.create({
-        data: { quoteId: quote.id, type: "odoo_skip", detail: "Alquiler: la SO Odoo entra en Q6, no en Q2." },
-      });
+    } else if (kind === "alquiler" && !anyDemo) {
+      await this.rentIssue.enqueue(quote.id);
     }
     await this.audit.log({
       user,
@@ -685,7 +695,11 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
 
   presentQuote(q: QuoteFull, role?: Role | string) {
     const staff = role === "admin" || role === "gerente" || role === "vendedor";
-    const net = q.lines.reduce((s, l) => s + n(l.priceNet), 0) + q.extras.filter((e) => e.accepted || staff).reduce((s, e) => s + n(e.amount), 0);
+    const extraNet = q.extras.filter((e) => e.accepted || staff).reduce((s, e) => s + n(e.amount), 0);
+    const rentNet = q.kind === "alquiler" ? n(q.rentPriceNet) : null;
+    const net = (rentNet != null ? rentNet : q.lines.reduce((s, l) => s + n(l.priceNet), 0)) + extraNet;
+    const issueJob = q.odooJobs.find((j) => j.event === (q.kind === "alquiler" ? RENT_ISSUE_EVENT : QUOTE_ISSUE_EVENT));
+    const closeJob = q.odooJobs.find((j) => j.event === (q.kind === "alquiler" ? RENT_CLOSE_EVENT : SALE_CLOSE_EVENT));
     return {
       id: q.id,
       number: q.number,
@@ -755,19 +769,57 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         amountUntaxed: q.odooAmountUntaxed != null ? n(q.odooAmountUntaxed) : null,
         amountTax: q.odooAmountTax != null ? n(q.odooAmountTax) : null,
         amountTotal: q.odooAmountTotal != null ? n(q.odooAmountTotal) : null,
+        invoiceName: q.odooInvoiceName || null,
+        pickingName: q.odooPickingName || null,
+        pickingState: q.odooPickingState || null,
+        pickingInName: q.odooPickingInName || null,
+        pickingInState: q.odooPickingInState || null,
         url: staff ? q.odooUrl : null,
-        job: (() => {
-          const job = q.odooJobs.find((j) => j.event === QUOTE_ISSUE_EVENT);
-          return job ? { status: job.status, error: job.lastError, attempts: job.attempts } : null;
-        })(),
+        planId: q.odooPlanId || null,
+        close: q.kind === "alquiler"
+          ? rentSemaphore({
+              odooSaleId: q.odooSaleId,
+              odooState: q.odooState,
+              odooInvoiceName: q.odooInvoiceName,
+              installmentCount: q.installments?.length || 0,
+              odooPickingState: q.odooPickingState,
+              odooPickingInState: q.odooPickingInState,
+            })
+          : quoteSemaphore({
+              odooSaleId: q.odooSaleId,
+              odooState: q.odooState,
+              odooInvoiceStatus: q.odooInvoiceStatus,
+              odooInvoiceName: q.odooInvoiceName,
+              odooPickingState: q.odooPickingState,
+            }),
+        job: issueJob ? { status: issueJob.status, error: issueJob.lastError, attempts: issueJob.attempts } : null,
+        closeJob: closeJob ? { status: closeJob.status, error: closeJob.lastError, attempts: closeJob.attempts } : null,
         pdf: {
           ready: Boolean(q.pdfStorageKey && q.pdfSource === "odoo"),
           source: q.pdfSource || null,
           renderedAt: q.pdfRenderedAt,
+          cronogramaReady: Boolean(q.cronogramaStorageKey),
         },
       },
+      rent: q.kind === "alquiler"
+        ? {
+            priceNet: n(q.rentPriceNet),
+            months: q.rentMonths,
+            start: q.rentStart,
+            end: q.rentEnd,
+            quotaEditable: canAmendRentQuota(q.odooState),
+            installments: (q.installments || []).map((i) => ({
+              id: i.id,
+              name: i.name,
+              amountTotal: n(i.amountTotal),
+              invoiceDate: i.invoiceDate,
+              dueDate: i.dueDate,
+              paymentState: i.paymentState,
+            })),
+          }
+        : null,
       amend: {
-        allowed: Boolean(q.odooSaleId) && canAmendOdoo(q.odooState),
+        allowed: q.kind === "alquiler" ? canAmendRentQuota(q.odooState) && Boolean(q.odooSaleId) : Boolean(q.odooSaleId) && canAmendOdoo(q.odooState),
         odooState: q.odooState || null,
       },
         revisions: (q.odooRevisions || []).map((r) => ({
@@ -791,10 +843,11 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async listForStaff(status?: string) {
+  async listForStaff(status?: string, kind?: string) {
     const where: Prisma.QuoteWhereInput = {
       ...(await this.prisma.hideDemo()),
       ...(status ? { dealStatus: status } : {}),
+      ...(kind === "alquiler" || kind === "venta" ? { kind } : {}),
     };
     const rows = await this.prisma.quote.findMany({
       where,
@@ -1210,8 +1263,8 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       await this.prisma.container.update({
         where: { iso: line.iso },
         data: {
-          status: "Vendido",
-          commercialStatus: "comprometido_venta",
+          status: q.kind === "alquiler" ? "Alquilado" : "Vendido",
+          commercialStatus: q.kind === "alquiler" ? "comprometido_alquiler" : "comprometido_venta",
           reservationExpiry: null,
         },
       });
@@ -1219,10 +1272,11 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         data: { iso: line.iso, type: "Asignación", detail: `ISO confirmado en ${q.number} — permanece en slot hasta despacho` },
       });
     }
-    await this.prisma.odooSyncJob.create({
+    const closeEvent = q.kind === "alquiler" ? RENT_CLOSE_EVENT : SALE_CLOSE_EVENT;
+    const closeJob = await this.prisma.odooSyncJob.create({
       data: {
         quoteId: id,
-        event: "sale_close",
+        event: closeEvent,
         payload: {
           quoteId: id,
           number: q.number,
@@ -1234,6 +1288,11 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         status: "pending",
       },
     });
+    if (q.kind === "alquiler") {
+      void this.rentClose.runJob(closeJob.id).catch((e) => this.log.warn(`rent_close ${id}: ${(e as Error).message}`));
+    } else {
+      void this.saleClose.runJob(closeJob.id).catch((e) => this.log.warn(`sale_close ${id}: ${(e as Error).message}`));
+    }
     await this.audit.log({ user, action: "assign", entity: "Quote", entityId: id, ip });
     return this.presentQuote(await this.getQuoteOrThrow(next.id), user.role);
   }
@@ -1363,6 +1422,15 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  async cronogramaPdf(id: string, user: AuthUser) {
+    const q = await this.getQuoteOrThrow(id);
+    this.assertAccess(q, user);
+    if (q.kind !== "alquiler") throw new UnprocessableEntityException("El cronograma es de alquiler (Q6).");
+    const out = await this.quotePdf.captureCronograma(id, true);
+    if (!out) throw new UnprocessableEntityException("Aún no hay SO Odoo para el cronograma.");
+    return out;
+  }
+
   async expireHolds() {
     const now = new Date();
     const due = await this.prisma.quote.findMany({
@@ -1398,18 +1466,112 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async retryQuoteIssue(jobId: string) {
+    const job = await this.prisma.odooSyncJob.findUnique({ where: { id: jobId } });
+    if (job?.event === SALE_CLOSE_EVENT) return this.saleClose.retry(jobId);
+    if (job?.event === RENT_CLOSE_EVENT) return this.rentClose.retry(jobId);
+    if (job?.event === RENT_ISSUE_EVENT) return this.rentIssue.retry(jobId);
     return this.quoteIssue.retry(jobId);
+  }
+
+  async closeOdoo(id: string, user: AuthUser, ip?: string) {
+    const q = await this.getQuoteOrThrow(id);
+    this.assertAccess(q, user, true);
+    if (q.kind === "alquiler") return this.closeRentOdoo(id, user, ip);
+    if (q.kind !== "venta") throw new UnprocessableEntityException("Q5 solo cierra venta. Alquiler es Q6.");
+    if (q.demo) throw new UnprocessableEntityException("Las cotizaciones demo no se cierran en Odoo.");
+    let job = await this.prisma.odooSyncJob.findFirst({
+      where: { quoteId: id, event: SALE_CLOSE_EVENT },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!job) {
+      job = await this.prisma.odooSyncJob.create({
+        data: {
+          quoteId: id,
+          event: SALE_CLOSE_EVENT,
+          payload: { quoteId: id, number: q.number, from: q.dealStatus, to: "asignacion_confirmada" },
+          status: "pending",
+        },
+      });
+    } else if (job.status === "error" || job.status === "sent") {
+      await this.prisma.odooSyncJob.update({
+        where: { id: job.id },
+        data: { status: "pending", lastError: null, attempts: 0 },
+      });
+    }
+    await this.saleClose.runJob(job.id);
+    await this.audit.log({ user, action: "sale_close", entity: "Quote", entityId: id, ip });
+    return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
+  }
+
+  async closeRentOdoo(id: string, user: AuthUser, ip?: string) {
+    const q = await this.getQuoteOrThrow(id);
+    this.assertAccess(q, user, true);
+    if (q.kind !== "alquiler") throw new UnprocessableEntityException("Q6 solo cierra alquiler.");
+    if (q.demo) throw new UnprocessableEntityException("Las cotizaciones demo no se cierran en Odoo.");
+    let job = await this.prisma.odooSyncJob.findFirst({
+      where: { quoteId: id, event: RENT_CLOSE_EVENT },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!job) {
+      job = await this.prisma.odooSyncJob.create({
+        data: {
+          quoteId: id,
+          event: RENT_CLOSE_EVENT,
+          payload: { quoteId: id, number: q.number, from: q.dealStatus, to: "asignacion_confirmada" },
+          status: "pending",
+        },
+      });
+    } else if (job.status === "error" || job.status === "sent") {
+      await this.prisma.odooSyncJob.update({
+        where: { id: job.id },
+        data: { status: "pending", lastError: null, attempts: 0 },
+      });
+    }
+    await this.rentClose.runJob(job.id);
+    await this.audit.log({ user, action: "rent_close", entity: "Quote", entityId: id, ip });
+    return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
   }
 
   async issueOdoo(id: string, user: AuthUser, ip?: string) {
     const q = await this.getQuoteOrThrow(id);
     this.assertAccess(q, user, true);
-    if (q.kind !== "venta") throw new UnprocessableEntityException("Q2 solo emite venta. Alquiler es Q6.");
     if (q.demo) throw new UnprocessableEntityException("Las cotizaciones demo no se emiten en Odoo.");
     if (q.odooSaleId) return this.presentQuote(q, user.role);
+    if (q.kind === "alquiler") {
+      const job = await this.rentIssue.enqueue(q.id);
+      await this.rentIssue.runJob(job.id);
+      await this.audit.log({ user, action: "rent_issue", entity: "Quote", entityId: id, ip });
+      return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
+    }
+    if (q.kind !== "venta") throw new UnprocessableEntityException("Q2 solo emite venta. Alquiler es Q6.");
     const job = await this.quoteIssue.enqueue(q.id);
     await this.quoteIssue.runJob(job.id);
     await this.audit.log({ user, action: "quote_issue", entity: "Quote", entityId: id, ip });
+    return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
+  }
+
+  async grantRent(id: string, priceNet: number, months: number | undefined, user: AuthUser, ip?: string) {
+    const q = await this.getQuoteOrThrow(id);
+    this.assertAccess(q, user, true);
+    if (q.kind !== "alquiler") throw new UnprocessableEntityException("La cuota mensual es de alquiler (Q6).");
+    if (!Number.isFinite(priceNet) || priceNet < 0) throw new BadRequestException("Cuota inválida.");
+    await this.assertOdooAmendable(id);
+    const nextMonths = months && months > 0 ? Math.min(120, Math.round(months)) : q.rentMonths || 12;
+    const start = q.rentStart || new Date();
+    await this.prisma.quote.update({
+      where: { id },
+      data: {
+        rentPriceNet: priceNet,
+        rentMonths: nextMonths,
+        rentStart: start,
+        rentEnd: new Date(`${contractEndDate(start, nextMonths)}T00:00:00.000Z`),
+      },
+    });
+    await this.prisma.quoteEvent.create({
+      data: { quoteId: id, type: "cuota_alquiler", detail: `Cuota mensual ${priceNet} · ${nextMonths} meses` },
+    });
+    await this.pushOdooAmend(id);
+    await this.audit.log({ user, action: "grant_rent", entity: "Quote", entityId: id, after: { priceNet, months: nextMonths }, ip });
     return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
   }
 

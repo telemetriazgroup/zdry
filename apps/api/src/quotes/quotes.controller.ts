@@ -31,8 +31,8 @@ export class QuotesController {
 
   @Get()
   @Roles("admin", "gerente", "vendedor")
-  list(@Query("status") status?: string) {
-    return this.quotes.listForStaff(status);
+  list(@Query("status") status?: string, @Query("kind") kind?: string) {
+    return this.quotes.listForStaff(status, kind);
   }
 
   @Post("expire-now")
@@ -44,6 +44,16 @@ export class QuotesController {
   @Get(":id/pdf")
   async pdf(@Param("id") id: string, @CurrentUser() user: AuthUser) {
     const out = await this.quotes.pdf(id, user);
+    const filename = out.filename.replace(/"/g, "");
+    return new StreamableFile(out.buffer, {
+      type: "application/pdf",
+      disposition: `inline; filename="${filename}"`,
+    });
+  }
+
+  @Get(":id/cronograma")
+  async cronograma(@Param("id") id: string, @CurrentUser() user: AuthUser) {
+    const out = await this.quotes.cronogramaPdf(id, user);
     const filename = out.filename.replace(/"/g, "");
     return new StreamableFile(out.buffer, {
       type: "application/pdf",
@@ -95,10 +105,27 @@ export class QuotesController {
     return this.quotes.grantDiscount(id, body.iso || "", Number(body.priceNet), user, req.ip);
   }
 
+  @Post(":id/grant-rent")
+  @Roles("admin", "gerente", "vendedor")
+  grantRent(
+    @Param("id") id: string,
+    @Body() body: { priceNet?: number; months?: number },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.quotes.grantRent(id, Number(body.priceNet), body.months != null ? Number(body.months) : undefined, user, req.ip);
+  }
+
   @Patch(":id/amend-odoo")
   @Roles("admin", "gerente", "vendedor", "superadmin")
   amendOdoo(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.quotes.amendOdoo(id, user, req.ip);
+  }
+
+  @Post(":id/close-odoo")
+  @Roles("admin", "gerente", "vendedor", "superadmin")
+  closeOdoo(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.quotes.closeOdoo(id, user, req.ip);
   }
 
   @Post(":id/close-thread")

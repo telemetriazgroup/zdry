@@ -36,6 +36,11 @@ export class WarehouseController {
     return this.warehouse.validateIso(code || "");
   }
 
+  @Get("rental-returns")
+  rentalReturns() {
+    return this.warehouse.rentalReturns();
+  }
+
   @Get("pending")
   pending(@CurrentUser() user: AuthUser) {
     return this.warehouse.pending(user);

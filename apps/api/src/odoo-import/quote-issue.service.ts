@@ -90,6 +90,18 @@ export class QuoteIssueService {
         products.push({ key: p.key, row: pickNamed(rows, ["flete", "transporte"]) });
         continue;
       }
+      if (p.key === "alquiler" && !p.defaultCode) {
+        const byRent = await this.search(
+          "product.product",
+          [["sale_ok", "=", true], ["name", "ilike", "alquiler"]],
+          ["id", "name", "default_code", "display_name"],
+          errors,
+          "producto alquiler",
+          true,
+        );
+        products.push({ key: p.key, row: pickNamed(byRent, ["alquiler", "servicio"]) });
+        continue;
+      }
       if (!p.defaultCode) {
         products.push({ key: p.key, row: null });
         continue;
@@ -104,6 +116,36 @@ export class QuoteIssueService {
       products.push({ key: p.key, row: rows[0] || null });
     }
     hits.products = products;
+
+    hits.rentReport = await this.first(
+      "ir.actions.report",
+      [["report_name", "=", cfg.rentReportName]],
+      ["id", "name", "report_name"],
+      errors,
+      "cronograma alquiler",
+    );
+    hits.plan = pickNamed(
+      await this.search(
+        "sale.subscription.plan",
+        [["name", "ilike", cfg.planName.split(" ")[0] || "Mensual"]],
+        ["id", "name", "display_name"],
+        errors,
+        "plan mensual",
+        true,
+      ),
+      [cfg.planName, "mensual", "month"],
+    );
+    hits.rentPricelist = pickNamed(
+      await this.search(
+        "product.pricelist",
+        [["name", "ilike", "PEN"]],
+        ["id", "name"],
+        errors,
+        "lista PEN",
+        true,
+      ),
+      [cfg.rentPricelistName, "pen", "sol"],
+    );
 
     const next = mergeHits(cfg, hits);
     await saveQuoteIssueConfig(this.prisma, next);

@@ -37,7 +37,7 @@ export function canRegisterPedido(status: DealStatus): boolean {
 }
 
 export function requiresOdooQuoteForPedido(kind: string, demo: boolean): boolean {
-  return kind === "venta" && !demo;
+  return (kind === "venta" || kind === "alquiler") && !demo;
 }
 
 export function clientOrderDisplay(odooSaleName?: string | null, zdryNumber?: string | null): string {
@@ -85,7 +85,7 @@ export function pedidoEventDetail(odooSaleName: string | null | undefined, bank:
   const ref = String(odooSaleName || "").trim();
   const tail = op ? ` Comprobante ${op}.` : "";
   if (ref) {
-    return `Pedido ZDRY sobre cotización Odoo ${ref}.${tail} No es purchase.order. La SO sigue draft hasta J5.`;
+    return `Pedido ZDRY sobre cotización Odoo ${ref}.${tail} No es purchase.order. La SO sigue draft hasta confirmar.`;
   }
-  return `Pedido ZDRY registrado.${tail} Sin SO Odoo (alquiler/demo).`;
+  return `Pedido ZDRY registrado.${tail} Sin SO Odoo (demo).`;
 }

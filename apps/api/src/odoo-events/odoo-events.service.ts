@@ -13,6 +13,7 @@ import {
 } from "../domain/odoo-event";
 import { inspectOdooIso, type OdooOwnedField } from "../domain/odoo-lot-map";
 import { ExpedienteStore } from "./expediente.store";
+import { QuoteOdooFollowService } from "../odoo-import/quote-odoo-follow.service";
 
 @Injectable()
 export class OdooEventsService implements OnModuleInit, OnModuleDestroy {
@@ -23,6 +24,7 @@ export class OdooEventsService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly odoo: OdooClient,
     private readonly imports: OdooImportService,
+    private readonly quoteFollow: QuoteOdooFollowService,
   ) {
     this.expediente = new ExpedienteStore(prisma);
   }
@@ -237,6 +239,20 @@ export class OdooEventsService implements OnModuleInit, OnModuleDestroy {
         reason: "reason" in decision ? decision.reason : null,
       },
     });
+
+    if (decision.action !== "ignore") {
+      try {
+        await this.quoteFollow.applyEvent({
+          event: ev.event,
+          origin: ev.origin,
+          model: ev.model,
+          resId: ev.resId,
+          payload: ev.payload,
+        });
+      } catch (e) {
+        this.log.warn(`follow quote ${ev.event}: ${(e as Error).message}`);
+      }
+    }
 
     return {
       odooEventId: ev.odooEventId,

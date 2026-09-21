@@ -53,6 +53,7 @@ export default function QuotesHub() {
   const [zoneId, setZoneId] = useState("fz20");
   const [sellFreight, setSellFreight] = useState("");
   const [dispatchDate, setDispatchDate] = useState("");
+  const [rentCuota, setRentCuota] = useState("");
 
   const load = useCallback(() => {
     api("/quotes").then(setQuotes).catch((e) => setError(e.message));
@@ -68,6 +69,7 @@ export default function QuotesHub() {
   async function refresh(id) {
     const q = await api(`/quotes/${id}`);
     setSelected(q);
+    setRentCuota(q.rent?.priceNet != null ? String(q.rent.priceNet) : "");
     load();
     return q;
   }
@@ -138,19 +140,38 @@ export default function QuotesHub() {
               <p className="err">Odoo: {q.odoo.job.error || "error al emitir"} <button className="link-btn" type="button" onClick={() => act(`/quotes/${q.id}/issue-odoo`)}>Reintentar</button></p>
             ) : q.kind === "venta" && !q.demo ? (
               <p className="section-sub">Presupuesto Odoo: {q.odoo?.job?.status === "running" ? "creando…" : "en cola (Q2, draft, sin confirmar)."}</p>
+            ) : q.kind === "alquiler" && !q.demo ? (
+              <p className="section-sub">Alquiler Odoo: {q.odoo?.job?.status === "running" ? "creando…" : "en cola (Q6, servicio + ISO $0, draft)."}</p>
             ) : null}
-            {q.odoo?.saleName && q.amend && !q.amend.allowed ? (
+            {q.odoo?.saleName && q.amend && !q.amend.allowed && q.kind !== "alquiler" ? (
               <p className="err">
                 Esta cotización ya está confirmada. Modifícala en Odoo
                 {q.odoo.url ? <> · <a href={q.odoo.url} target="_blank" rel="noreferrer">abrir formulario</a></> : null}.
+              </p>
+            ) : null}
+            {q.odoo?.close?.quoted ? (
+              <p className="ok-msg">
+                Semáforo Odoo: cotización
+                {q.odoo.close.confirmed ? " → confirmada" : " (draft)"}
+                {q.odoo.close.invoiced ? ` → facturada ${q.odoo.invoiceName || ""}` : ""}
+                {q.odoo.close.dispatchedOdoo ? " → OUT hecho" : " · OUT en espera (el patio ZDRY no se vacía al confirmar)"}
+              </p>
+            ) : null}
+            {q.odoo?.closeJob?.status === "error" ? (
+              <p className="err">
+                Cierre Odoo: {q.odoo.closeJob.error}
+                <button className="link-btn" type="button" onClick={() => act(`/quotes/${q.id}/close-odoo`)}>Reintentar cierre</button>
               </p>
             ) : null}
             {q.dispatchNotes ? (
               <p className="ok-msg">Destino referencial del cliente: {q.dispatchNotes}. Confirma el flete al cotizar.</p>
             ) : null}
             <ul>{q.lines.map((l) => (
-              <li key={l.id}>{l.iso} lista {money(l.listPrice)} / piso {money(l.minPrice)} / neto {money(l.priceNet)}</li>
+              <li key={l.id}>{l.iso} {q.kind === "alquiler" ? "" : `lista ${money(l.listPrice)} / piso ${money(l.minPrice)} / neto ${money(l.priceNet)}`}</li>
             ))}</ul>
+            {q.kind === "alquiler" && q.rent ? (
+              <p className="ok-msg">Cuota mensual {money(q.rent.priceNet)}{q.rent.months ? ` · ${q.rent.months} meses` : ""}</p>
+            ) : null}
 
             {q.dealStatus === "nueva" ? (
               <button className="btn-primary" type="button" onClick={() => act(`/quotes/${q.id}/send`)}>Enviar cotización (PDF Odoo)</button>
@@ -168,6 +189,15 @@ export default function QuotesHub() {
                   <input value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Responder…" />
                   <button className="btn-ghost" type="submit">Enviar</button>
                 </form>
+                {q.kind === "alquiler" ? (
+                  <div className="form-grid" style={{ marginTop: 10 }}>
+                    <div>
+                      <label>Cuota mensual (neto)</label>
+                      <input value={rentCuota} onChange={(e) => setRentCuota(e.target.value)} />
+                    </div>
+                    <button className="btn-ghost" type="button" onClick={() => act(`/quotes/${q.id}/grant-rent`, { priceNet: Number(rentCuota) })} disabled={!q.rent?.quotaEditable}>Escribir cuota en Odoo</button>
+                  </div>
+                ) : (
                 <div className="form-grid" style={{ marginTop: 10 }}>
                   <div>
                     <label>ISO</label>
@@ -181,7 +211,10 @@ export default function QuotesHub() {
                     <input value={discNet} onChange={(e) => setDiscNet(e.target.value)} />
                   </div>
                 </div>
+                )}
+                {q.kind !== "alquiler" ? (
                 <button className="btn-ghost" type="button" onClick={() => act(`/quotes/${q.id}/grant-discount`, { iso: discIso, priceNet: Number(discNet) })} disabled={q.amend && !q.amend.allowed}>Otorgar descuento (−5 % o piso)</button>
+                ) : null}
                 {q.dealStatus === "en_negociacion" ? (
                   <button className="btn-primary" type="button" style={{ marginLeft: 8 }} onClick={() => act(`/quotes/${q.id}/close-thread`)}>Cerrar hilo (vuelve a reservada)</button>
                 ) : null}
@@ -276,6 +309,9 @@ export default function QuotesHub() {
               {q.odoo?.pdf?.ready ? <span className="muted"> · archivo de Odoo {q.odoo.saleName || ""}</span> : q.odoo?.saleName ? <span className="muted"> · aún prototipo si Odoo no renderizó</span> : null}
               {q.amend?.allowed ? (
                 <button className="link-btn" type="button" style={{ marginLeft: 8 }} onClick={() => act(`/quotes/${q.id}/amend-odoo`, {}, "PATCH")}>Reescribir SO draft</button>
+              ) : null}
+              {q.kind === "alquiler" && q.odoo?.saleName ? (
+                <button className="link-btn" type="button" style={{ marginLeft: 8 }} onClick={() => openBlob(`/quotes/${q.id}/cronograma`)}>Cronograma</button>
               ) : null}
             </div>
             {q.revisions?.length ? (
