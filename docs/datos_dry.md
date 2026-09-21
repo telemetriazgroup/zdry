@@ -29,6 +29,6 @@ Módulo superadmin `/app/estadistica-dry`: archivo local de las 2203 SO DRY (ven
 
 ## Plan
 
-A datos → B quote auto (casi hay) → C `zdry-wa` piloto → D J5 P1 → E eventos a web/WA → F alquiler/flete → G bordes.
+A datos → B quote auto = [ruta Q0–Q4b](ruta_cotizacion_zdry.md) (catálogo → SO draft + PDF v2 + pedido + enmienda en borrador) → C `zdry-wa` → D J5 P1 (Q5) → E Q7 seguimiento+diff → F alquiler/flete (Q6) → G bordes.
 
 Cierre de stock/factura **sigue siendo humano** (`proyecto_zdry.md` §1.5).

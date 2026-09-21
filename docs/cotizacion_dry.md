@@ -30,4 +30,4 @@ Servicio cobrado + líneas ISO precio 0 + varios OUT + IN de devolución + cuota
 | `Quote.kind=venta` | Congela `priceNet` | Ese monto debe ser el de la SO (USD + IGV 18 %) |
 | `Quote.kind=alquiler` | Solicitud | Post-J5 / sprint 5 |
 
-Detalle: canónico en el repo Odoo. Ficha: [J5-cierre-comercial.md](fases_conjunto/J5-cierre-comercial.md).
+Detalle: canónico en el repo Odoo. Ficha: [J5-cierre-comercial.md](fases_conjunto/J5-cierre-comercial.md). Emisión del presupuesto (PDF Perú v2 + pago): [ruta_cotizacion_zdry.md](ruta_cotizacion_zdry.md).

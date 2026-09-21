@@ -47,4 +47,8 @@ La oportunidad nace en ZDRY (quote + voucher). La **orden, factura SUNAT y GRE**
 
 Pasarela de cobro, alquiler `sale_subscription`, GRE automática desde ZDRY, detracción en el voucher.
 
+La **emisión del presupuesto** (catálogo → SO `draft` + PDF v2 + pedido/voucher) va **antes** de este cierre: [ruta_cotizacion_zdry.md](../ruta_cotizacion_zdry.md) Q0–Q4b. J5 confirma la SO que Q2 ya creó.
+
+Después de confirmar: descuento, flete o más ítems **solo en Odoo**. ZDRY muestra link al form y guarda el diff (Q7). El despacho de patio sigue en ZDRY.
+
 Sustento de **venta** (patrón de este worker): SO `100202628772` IMEXCAL, dos DRY 20 DC con precio USD + lote, un OUT, sin IN. Sustento de **alquiler** (fuera de J5): SO `100202616899` Pichari. Proceso: [cotizacion_dry.md](../cotizacion_dry.md). No copiar el patrón de alquiler (servicio + línea a 0 + suscripción) en `sale_close`.
