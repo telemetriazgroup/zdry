@@ -110,16 +110,16 @@ export default function OdooIntegrations() {
       </form>
 
       <div className="panel">
-        <h3>Cotización ZDRY → Odoo (Q0)</h3>
+        <h3>Cotización ZDRY → Odoo (Q0 + Q2)</h3>
         <p className="section-sub">
-          IDs de impuesto, productos DRY, almacén, PDF Perú v2. Se leen de Odoo; no se inventan. Q2 no arranca hasta que esto esté verde.
+          IDs de impuesto, productos DRY, almacén, PDF Perú v2. Q2 crea el presupuesto <b>draft</b> (no confirma). La cola de abajo muestra `quote_issue`.
         </p>
         <QuoteIssuePanel />
       </div>
 
       <div className="panel">
         <h3>Cola de sincronización</h3>
-        <p className="section-sub">Trabajos pendientes o enviados tras un cierre comercial.</p>
+        <p className="section-sub">`quote_issue` = presupuesto draft. `sale_close` sigue siendo Q5 (confirmar), no Q2.</p>
         {!data?.queue?.length ? (
           <p className="section-sub">No hay trabajos en cola.</p>
         ) : (
@@ -132,6 +132,7 @@ export default function OdooIntegrations() {
                   <th>Cotización</th>
                   <th>Estado</th>
                   <th>Intentos</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -142,6 +143,19 @@ export default function OdooIntegrations() {
                     <td className="card-iso">{j.quoteId}</td>
                     <td>{j.status}</td>
                     <td>{j.attempts}{j.lastError ? ` · ${j.lastError}` : ""}</td>
+                    <td>
+                      {j.event === "quote_issue" && j.status === "error" ? (
+                        <button className="link-btn" type="button" onClick={async () => {
+                          setError("");
+                          try {
+                            await api(`/admin/odoo-queue/${j.id}/retry`, { method: "POST" });
+                            await load();
+                          } catch (e) {
+                            setError(e.message);
+                          }
+                        }}>Reintentar</button>
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>

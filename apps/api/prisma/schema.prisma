@@ -306,6 +306,8 @@ model Customer {
   rucValidatedAt       DateTime?
   rucLookupAttempts    Int         @default(0)
   rucLookupLockedUntil DateTime?
+  odooPartnerId        Int?
+  odooContactId        Int?
   risk                 RiskGrade   @default(B)
   demo                 Boolean     @default(false)
   createdAt            DateTime    @default(now())
@@ -433,6 +435,15 @@ model Quote {
   dispatchDepotId    String?
   dispatchNotes      String?
   demo               Boolean          @default(false)
+  odooSaleId         Int?
+  odooSaleName       String?
+  odooState          String?
+  odooInvoiceStatus  String?
+  odooAmountUntaxed  Decimal?         @db.Decimal(16, 2)
+  odooAmountTax      Decimal?         @db.Decimal(16, 2)
+  odooAmountTotal    Decimal?         @db.Decimal(16, 2)
+  odooUrl            String?
+  odooPartnerId      Int?
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
   lines              QuoteLine[]
@@ -447,6 +458,7 @@ model Quote {
   @@index([vendorId])
   @@index([customerId])
   @@index([demo])
+  @@index([odooSaleId])
 }
 
 model QuoteLine {

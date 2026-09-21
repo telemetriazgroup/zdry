@@ -59,6 +59,12 @@ export class QuotesController {
     return this.quotes.getOne(id, user);
   }
 
+  @Post(":id/issue-odoo")
+  @Roles("admin", "gerente", "vendedor", "superadmin")
+  issueOdoo(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.quotes.issueOdoo(id, user, req.ip);
+  }
+
   @Post(":id/send")
   @Roles("admin", "gerente", "vendedor")
   send(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
@@ -246,5 +252,10 @@ export class AdminOdooController {
   @Get("odoo-queue")
   queue() {
     return this.quotes.odooQueue();
+  }
+
+  @Post("odoo-queue/:id/retry")
+  retry(@Param("id") id: string) {
+    return this.quotes.retryQuoteIssue(id);
   }
 }

@@ -99,7 +99,7 @@ export default function QuotesHub() {
             <tbody>
               {filtered.map((row) => (
                 <tr key={row.id} className="expandable" onClick={() => refresh(row.id)}>
-                  <td>{row.number}{row.demo ? <span className="demo-chip">DEMO</span> : null}</td>
+                  <td>{row.number}{row.demo ? <span className="demo-chip">DEMO</span> : null}{row.odoo?.saleName ? <div className="muted">{row.odoo.saleName}</div> : null}</td>
                   <td>{row.customer.companyName}</td>
                   <td>{STATUS_LABEL[row.dealStatus] || row.dealStatus}</td>
                   <td>{money(row.totals.gross)}</td>
@@ -113,6 +113,16 @@ export default function QuotesHub() {
           <div className="panel">
             <h3>{q.number}{q.demo ? <span className="demo-chip">DEMO</span> : null}</h3>
             <p className="section-sub">{q.customer.companyName} · {STATUS_LABEL[q.dealStatus]} {q.holdPaused ? "· hold en pausa" : ""}</p>
+            {q.odoo?.saleName ? (
+              <p className="ok-msg">
+                Odoo {q.odoo.saleName} · {q.odoo.state || "draft"}
+                {q.odoo.url ? <> · <a href={q.odoo.url} target="_blank" rel="noreferrer">abrir en Odoo</a></> : null}
+              </p>
+            ) : q.odoo?.job?.status === "error" ? (
+              <p className="err">Odoo: {q.odoo.job.error || "error al emitir"} <button className="link-btn" type="button" onClick={() => act(`/quotes/${q.id}/issue-odoo`)}>Reintentar</button></p>
+            ) : q.kind === "venta" && !q.demo ? (
+              <p className="section-sub">Presupuesto Odoo: {q.odoo?.job?.status === "running" ? "creando…" : "en cola (Q2, draft, sin confirmar)."}</p>
+            ) : null}
             {q.dispatchNotes ? (
               <p className="ok-msg">Destino referencial del cliente: {q.dispatchNotes}. Confirma el flete al cotizar.</p>
             ) : null}

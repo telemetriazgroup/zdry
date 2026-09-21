@@ -5,9 +5,10 @@ import { QuotesController, AccountController, AdminOdooController } from "./quot
 import { DealCloseModule } from "../deal-close/deal-close.module";
 import { OdooModule } from "../odoo/odoo.module";
 import { SunatRucService } from "./sunat-ruc.service";
+import { OdooImportModule } from "../odoo-import/odoo-import.module";
 
 @Module({
-  imports: [DealCloseModule, OdooModule],
+  imports: [DealCloseModule, OdooModule, OdooImportModule],
   controllers: [CatalogController, QuotesController, AccountController, AdminOdooController],
   providers: [QuotesService, SunatRucService],
   exports: [QuotesService],

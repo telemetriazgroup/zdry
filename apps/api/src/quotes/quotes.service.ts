@@ -19,6 +19,8 @@ import { StorageService } from "../storage/storage.service";
 import { YardLockService } from "../redis/yard-lock.service";
 import { DealCloseService } from "../deal-close/deal-close.service";
 import { SunatRucService } from "./sunat-ruc.service";
+import { QuoteIssueWorker } from "../odoo-import/quote-issue-worker.service";
+import { QUOTE_ISSUE_EVENT } from "../domain/quote-issue-draft";
 import { AuthUser } from "../auth/auth.types";
 import { type DealStatus, holdClockPaused } from "../deal-close/deal-close.types";
 import { applyShowPrice, DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
@@ -109,6 +111,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     private readonly locks: YardLockService,
     private readonly deals: DealCloseService,
     private readonly sunat: SunatRucService,
+    private readonly quoteIssue: QuoteIssueWorker,
   ) {}
 
   onModuleInit() {
@@ -625,6 +628,13 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       },
       include: QUOTE_INCLUDE,
     });
+    if (kind === "venta" && !anyDemo) {
+      await this.quoteIssue.enqueue(quote.id);
+    } else if (kind === "alquiler") {
+      await this.prisma.quoteEvent.create({
+        data: { quoteId: quote.id, type: "odoo_skip", detail: "Alquiler: la SO Odoo entra en Q6, no en Q2." },
+      });
+    }
     await this.audit.log({
       user,
       action: "create",
@@ -716,6 +726,20 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       })),
       events: q.events,
       odooJobs: staff ? q.odooJobs : undefined,
+      odoo: {
+        saleId: q.odooSaleId,
+        saleName: q.odooSaleName,
+        state: q.odooState,
+        invoiceStatus: q.odooInvoiceStatus,
+        amountUntaxed: q.odooAmountUntaxed != null ? n(q.odooAmountUntaxed) : null,
+        amountTax: q.odooAmountTax != null ? n(q.odooAmountTax) : null,
+        amountTotal: q.odooAmountTotal != null ? n(q.odooAmountTotal) : null,
+        url: staff ? q.odooUrl : null,
+        job: (() => {
+          const job = q.odooJobs.find((j) => j.event === QUOTE_ISSUE_EVENT);
+          return job ? { status: job.status, error: job.lastError, attempts: job.attempts } : null;
+        })(),
+      },
       dispatches: q.dispatches,
       totals: { net, igv: igvOf(net), gross: grossOf(net) },
     };
@@ -1252,8 +1276,24 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   async odooQueue() {
     return this.prisma.odooSyncJob.findMany({
       orderBy: { createdAt: "desc" },
-      include: { quote: { select: { number: true, dealStatus: true } } },
+      include: { quote: { select: { number: true, dealStatus: true, odooSaleName: true } } },
     });
+  }
+
+  async retryQuoteIssue(jobId: string) {
+    return this.quoteIssue.retry(jobId);
+  }
+
+  async issueOdoo(id: string, user: AuthUser, ip?: string) {
+    const q = await this.getQuoteOrThrow(id);
+    this.assertAccess(q, user, true);
+    if (q.kind !== "venta") throw new UnprocessableEntityException("Q2 solo emite venta. Alquiler es Q6.");
+    if (q.demo) throw new UnprocessableEntityException("Las cotizaciones demo no se emiten en Odoo.");
+    if (q.odooSaleId) return this.presentQuote(q, user.role);
+    const job = await this.quoteIssue.enqueue(q.id);
+    await this.quoteIssue.runJob(job.id);
+    await this.audit.log({ user, action: "quote_issue", entity: "Quote", entityId: id, ip });
+    return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
   }
 
   async commercialServices() {

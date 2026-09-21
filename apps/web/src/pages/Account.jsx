@@ -261,6 +261,7 @@ export default function Account() {
             <div className="panel">
               <h3>{detail.number}</h3>
               <p className="section-sub">{STATUS_LABEL[detail.dealStatus]} · asesor {detail.vendor?.name}</p>
+              {detail.odoo?.saleName ? <p className="ok-msg">Cotización Odoo {detail.odoo.saleName}</p> : null}
               {detail.dispatchNotes ? (
                 <p className="section-sub">Destino referencial: {detail.dispatchNotes}. El flete lo confirma el comercial.</p>
               ) : null}
