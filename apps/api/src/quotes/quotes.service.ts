@@ -20,6 +20,8 @@ import { YardLockService } from "../redis/yard-lock.service";
 import { DealCloseService } from "../deal-close/deal-close.service";
 import { SunatRucService } from "./sunat-ruc.service";
 import { QuoteIssueWorker } from "../odoo-import/quote-issue-worker.service";
+import { QuotePdfService } from "../odoo-import/quote-pdf.service";
+import { presupuestoFilename } from "../domain/odoo-quote-pdf";
 import { QUOTE_ISSUE_EVENT } from "../domain/quote-issue-draft";
 import { AuthUser } from "../auth/auth.types";
 import { type DealStatus, holdClockPaused } from "../deal-close/deal-close.types";
@@ -112,6 +114,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     private readonly deals: DealCloseService,
     private readonly sunat: SunatRucService,
     private readonly quoteIssue: QuoteIssueWorker,
+    private readonly quotePdf: QuotePdfService,
   ) {}
 
   onModuleInit() {
@@ -739,6 +742,11 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
           const job = q.odooJobs.find((j) => j.event === QUOTE_ISSUE_EVENT);
           return job ? { status: job.status, error: job.lastError, attempts: job.attempts } : null;
         })(),
+        pdf: {
+          ready: Boolean(q.pdfStorageKey && q.pdfSource === "odoo"),
+          source: q.pdfSource || null,
+          renderedAt: q.pdfRenderedAt,
+        },
       },
       dispatches: q.dispatches,
       totals: { net, igv: igvOf(net), gross: grossOf(net) },
@@ -802,6 +810,20 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     this.assertAccess(q, user, true);
     const now = new Date();
     await this.prisma.quoteLine.updateMany({ where: { quoteId: id }, data: { frozenAt: now } });
+    if (q.odooSaleId) {
+      try {
+        await this.quotePdf.capture(id);
+        await this.quotePdf.postToSale(id);
+        await this.prisma.quoteEvent.create({
+          data: { quoteId: id, type: "odoo_mail", detail: `PDF Perú v2 publicado en Odoo ${q.odooSaleName}.` },
+        });
+      } catch (e) {
+        this.log.warn(`enviar PDF ${q.number}: ${(e as Error).message}`);
+        await this.prisma.quoteEvent.create({
+          data: { quoteId: id, type: "odoo_mail_error", detail: ((e as Error).message || "").slice(0, 280) },
+        });
+      }
+    }
     const updated = await this.setStatus(await this.getQuoteOrThrow(id), "cotizada");
     await this.audit.log({ user, action: "send_quote", entity: "Quote", entityId: id, ip });
     return this.presentQuote(updated, user.role);
@@ -1226,6 +1248,27 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   async pdf(id: string, user: AuthUser) {
     const q = await this.getQuoteOrThrow(id);
     this.assertAccess(q, user);
+    if (q.odooSaleId) {
+      try {
+        const odooPdf = await this.quotePdf.capture(id);
+        if (odooPdf) return odooPdf;
+      } catch (e) {
+        this.log.warn(`PDF Odoo ${q.number}: ${(e as Error).message}`);
+      }
+    }
+    if (q.pdfStorageKey) {
+      try {
+        const stored = await this.storage.getBuffer(q.pdfStorageKey);
+        return {
+          buffer: stored.buffer,
+          filename: presupuestoFilename(q.odooSaleName, q.number),
+          source: (q.pdfSource === "odoo" ? "odoo" : "prototype") as "odoo" | "prototype",
+          storageKey: q.pdfStorageKey,
+        };
+      } catch {
+        /* prototype */
+      }
+    }
     const types = await this.prisma.containerType.findMany();
     const cats = await this.prisma.category.findMany();
     const buf = buildQuotePdf({
@@ -1243,7 +1286,12 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       })),
       extras: q.extras.map((e) => ({ label: e.label, amount: n(e.amount) })),
     });
-    return buf;
+    return {
+      buffer: buf,
+      filename: presupuestoFilename(q.odooSaleName, q.number),
+      source: "prototype" as const,
+      storageKey: null,
+    };
   }
 
   async expireHolds() {

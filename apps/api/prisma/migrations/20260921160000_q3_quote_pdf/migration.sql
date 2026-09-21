@@ -1,0 +1,5 @@
+-- Q3: PDF Perú v2 de Odoo en MinIO
+
+ALTER TABLE "Quote" ADD COLUMN IF NOT EXISTS "pdfStorageKey" TEXT;
+ALTER TABLE "Quote" ADD COLUMN IF NOT EXISTS "pdfSource" TEXT;
+ALTER TABLE "Quote" ADD COLUMN IF NOT EXISTS "pdfRenderedAt" TIMESTAMP(3);

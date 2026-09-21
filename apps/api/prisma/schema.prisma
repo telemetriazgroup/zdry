@@ -444,6 +444,9 @@ model Quote {
   odooAmountTotal    Decimal?         @db.Decimal(16, 2)
   odooUrl            String?
   odooPartnerId      Int?
+  pdfStorageKey      String?
+  pdfSource          String?
+  pdfRenderedAt      DateTime?
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
   lines              QuoteLine[]

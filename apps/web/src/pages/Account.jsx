@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, apiUpload, ApiError, goAppRoot, publicUrl } from "../api.js";
+import { api, apiBlob, apiUpload, ApiError, goAppRoot, publicUrl } from "../api.js";
 import { useAuth } from "../auth.jsx";
 import SiteFooter from "./SiteFooter.jsx";
 
@@ -262,6 +262,18 @@ export default function Account() {
               <h3>{detail.number}</h3>
               <p className="section-sub">{STATUS_LABEL[detail.dealStatus]} · asesor {detail.vendor?.name}</p>
               {detail.odoo?.saleName ? <p className="ok-msg">Cotización Odoo {detail.odoo.saleName}</p> : null}
+              <p>
+                <button
+                  className="link-btn"
+                  type="button"
+                  onClick={async () => {
+                    const blob = await apiBlob(`/quotes/${detail.id}/pdf`);
+                    window.open(URL.createObjectURL(blob));
+                  }}
+                >
+                  {detail.odoo?.pdf?.ready ? "Descargar PDF Perú v2" : "Descargar PDF"}
+                </button>
+              </p>
               {detail.dispatchNotes ? (
                 <p className="section-sub">Destino referencial: {detail.dispatchNotes}. El flete lo confirma el comercial.</p>
               ) : null}

@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/commo
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { OdooClient } from "../odoo/odoo.client";
+import { QuotePdfService } from "./quote-pdf.service";
 import { loadQuoteIssueConfig } from "./quote-issue.store";
 import { normalizeOdooConfig, envOdooConfig, ODOO_CONFIG_KEY } from "../domain/odoo-config";
 import {
@@ -32,6 +33,7 @@ export class QuoteIssueWorker implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly odoo: OdooClient,
+    private readonly quotePdf: QuotePdfService,
   ) {}
 
   onModuleInit() {
@@ -240,6 +242,14 @@ export class QuoteIssueWorker implements OnModuleInit, OnModuleDestroy {
           detail: `Presupuesto Odoo ${saleName} (draft, ${expected.total} c/IGV).`,
         },
       });
+      try {
+        await this.quotePdf.capture(q.id);
+      } catch (pdfErr) {
+        this.log.warn(`PDF Q3 ${q.number}: ${(pdfErr as Error).message}`);
+        await this.prisma.quoteEvent.create({
+          data: { quoteId: q.id, type: "odoo_pdf_error", detail: ((pdfErr as Error).message || "").slice(0, 280) },
+        });
+      }
       return {
         saleId,
         saleName,

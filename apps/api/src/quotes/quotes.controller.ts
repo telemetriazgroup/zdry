@@ -42,10 +42,11 @@ export class QuotesController {
 
   @Get(":id/pdf")
   async pdf(@Param("id") id: string, @CurrentUser() user: AuthUser) {
-    const buf = await this.quotes.pdf(id, user);
-    return new StreamableFile(buf, {
+    const out = await this.quotes.pdf(id, user);
+    const filename = out.filename.replace(/"/g, "");
+    return new StreamableFile(out.buffer, {
       type: "application/pdf",
-      disposition: `attachment; filename="cotizacion-${id}.pdf"`,
+      disposition: `inline; filename="${filename}"`,
     });
   }
 

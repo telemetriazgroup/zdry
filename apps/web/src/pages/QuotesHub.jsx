@@ -131,7 +131,7 @@ export default function QuotesHub() {
             ))}</ul>
 
             {q.dealStatus === "nueva" ? (
-              <button className="btn-primary" type="button" onClick={() => act(`/quotes/${q.id}/send`)}>Enviar cotización</button>
+              <button className="btn-primary" type="button" onClick={() => act(`/quotes/${q.id}/send`)}>Enviar cotización (PDF Odoo)</button>
             ) : null}
             {q.dealStatus === "cotizada" ? (
               <button className="btn-primary" type="button" onClick={() => act(`/quotes/${q.id}/reserve`)}>Reservar 48 h</button>
@@ -226,7 +226,8 @@ export default function QuotesHub() {
                 const blob = await apiBlob(`/quotes/${q.id}/pdf`);
                 const url = URL.createObjectURL(blob);
                 window.open(url);
-              }}>PDF</button>
+              }}>{q.odoo?.pdf?.ready ? "PDF Perú v2" : "PDF"}</button>
+              {q.odoo?.pdf?.ready ? <span className="muted"> · archivo de Odoo</span> : q.odoo?.saleName ? <span className="muted"> · aún prototipo si Odoo no renderizó</span> : null}
             </div>
           </div>
         ) : null}
