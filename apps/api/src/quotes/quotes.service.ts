@@ -23,6 +23,16 @@ import { QuoteIssueWorker } from "../odoo-import/quote-issue-worker.service";
 import { QuotePdfService } from "../odoo-import/quote-pdf.service";
 import { presupuestoFilename } from "../domain/odoo-quote-pdf";
 import { QUOTE_ISSUE_EVENT } from "../domain/quote-issue-draft";
+import {
+  assertCanRegisterPedido,
+  assertOdooQuoteForPedido,
+  assertPedidoKeepsOdooDraft,
+  clientOrderDisplay,
+  PEDIDO_EVENT,
+  pedidoEventDetail,
+  pedidoRegistered,
+  QuotePedidoError,
+} from "../domain/quote-pedido";
 import { AuthUser } from "../auth/auth.types";
 import { type DealStatus, holdClockPaused } from "../deal-close/deal-close.types";
 import { applyShowPrice, DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
@@ -748,6 +758,13 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
           renderedAt: q.pdfRenderedAt,
         },
       },
+      order: {
+        displayNumber: clientOrderDisplay(q.odooSaleName, q.number),
+        odooSaleName: q.odooSaleName || null,
+        pdfReady: Boolean(q.pdfStorageKey && q.pdfSource === "odoo"),
+        voucherCount: q.vouchers.length,
+        registered: pedidoRegistered(q.vouchers.length),
+      },
       dispatches: q.dispatches,
       totals: { net, igv: igvOf(net), gross: grossOf(net) },
     };
@@ -783,8 +800,8 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async setStatus(q: QuoteFull, to: DealStatus, extra: Prisma.QuoteUpdateInput = {}) {
-    this.deals.transition(q.dealStatus as DealStatus, to);
     const from = q.dealStatus as DealStatus;
+    this.deals.transition(from, to);
     const data: Prisma.QuoteUpdateInput = { dealStatus: to, ...extra };
     if (holdClockPaused(to) && !q.holdPausedAt) {
       data.holdPausedAt = new Date();
@@ -794,7 +811,6 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       if (q.holdExpiresAt) data.holdExpiresAt = new Date(q.holdExpiresAt.getTime() + pausedMs);
       data.holdPausedAt = null;
     }
-    void from;
     return this.prisma.quote.update({
       where: { id: q.id },
       data: {
@@ -934,6 +950,13 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     if (user.role !== "cliente" && !["admin", "gerente", "vendedor"].includes(user.role)) {
       throw new ForbiddenException("Sin acceso");
     }
+    try {
+      assertOdooQuoteForPedido(q.kind, q.demo, q.odooSaleName);
+      if (user.role === "cliente") assertCanRegisterPedido(q.dealStatus as DealStatus);
+    } catch (e) {
+      if (e instanceof QuotePedidoError) throw new UnprocessableEntityException(e.message);
+      throw e;
+    }
     if (!file?.buffer) throw new BadRequestException("Selecciona un archivo");
     let mime: string;
     try {
@@ -959,8 +982,21 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     });
     const from = q.dealStatus as DealStatus;
     if (from === "reservada" || from === "en_negociacion" || from === "pago_rechazado") {
+      try {
+        assertPedidoKeepsOdooDraft(from, "comprobante_subido");
+      } catch (e) {
+        if (e instanceof QuotePedidoError) throw new UnprocessableEntityException(e.message);
+        throw e;
+      }
       await this.setStatus(await this.getQuoteOrThrow(id), "comprobante_subido");
     }
+    await this.prisma.quoteEvent.create({
+      data: {
+        quoteId: id,
+        type: PEDIDO_EVENT,
+        detail: pedidoEventDetail(q.odooSaleName, meta.bank || "", meta.operationNumber || ""),
+      },
+    });
     await this.audit.log({ user, action: "upload_voucher", entity: "Quote", entityId: id, ip });
     return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
   }
@@ -980,6 +1016,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     if (!(note || "").trim()) throw new BadRequestException("La nota de verificación es obligatoria (p. ej. esperando CCI 24–48 h).");
     const v = q.vouchers.find((x) => x.id === voucherId);
     if (!v) throw new NotFoundException("Comprobante no encontrado.");
+    this.assertPedidoDoesNotCloseOdoo(q.dealStatus as DealStatus, "en_verificacion");
     await this.prisma.paymentVoucher.update({
       where: { id: voucherId },
       data: { status: "en_verificacion", reviewNote: note.trim() },
@@ -994,6 +1031,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     this.assertAccess(q, user, true);
     const v = q.vouchers.find((x) => x.id === voucherId);
     if (!v) throw new NotFoundException("Comprobante no encontrado.");
+    this.assertPedidoDoesNotCloseOdoo(q.dealStatus as DealStatus, "pago_validado");
     await this.prisma.paymentVoucher.update({ where: { id: voucherId }, data: { status: "validado" } });
     const next = await this.setStatus(await this.getQuoteOrThrow(quoteId), "pago_validado");
     await this.audit.log({ user, action: "validate_voucher", entity: "Quote", entityId: quoteId, ip });
@@ -1004,6 +1042,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     const q = await this.getQuoteOrThrow(quoteId);
     this.assertAccess(q, user, true);
     if (!(motivo || "").trim()) throw new BadRequestException("Indica el motivo del rechazo.");
+    this.assertPedidoDoesNotCloseOdoo(q.dealStatus as DealStatus, "pago_rechazado");
     await this.prisma.paymentVoucher.update({
       where: { id: voucherId },
       data: { status: "rechazado", reviewNote: motivo.trim() },
@@ -1342,6 +1381,15 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     await this.quoteIssue.runJob(job.id);
     await this.audit.log({ user, action: "quote_issue", entity: "Quote", entityId: id, ip });
     return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
+  }
+
+  private assertPedidoDoesNotCloseOdoo(from: DealStatus, to: DealStatus) {
+    try {
+      assertPedidoKeepsOdooDraft(from, to);
+    } catch (e) {
+      if (e instanceof QuotePedidoError) throw new UnprocessableEntityException(e.message);
+      throw e;
+    }
   }
 
   async commercialServices() {

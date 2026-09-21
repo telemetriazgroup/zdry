@@ -243,12 +243,17 @@ export default function Account() {
             <h3>Cotizaciones</h3>
             <div className="tablewrap">
             <table className="data">
-              <thead><tr><th>N°</th><th>Estado</th><th>Total</th><th></th></tr></thead>
+              <thead><tr><th>Cotización Odoo</th><th>Estado</th><th>Pedido</th><th>Total</th><th></th></tr></thead>
               <tbody>
                 {quotes.map((q) => (
                   <tr key={q.id}>
-                    <td>{q.number}{q.demo ? <span className="demo-chip">DEMO</span> : null}</td>
+                    <td>
+                      {q.order?.displayNumber || q.odoo?.saleName || q.number}
+                      {q.demo ? <span className="demo-chip">DEMO</span> : null}
+                      {q.odoo?.saleName && q.number !== q.odoo.saleName ? <div className="muted">{q.number}</div> : null}
+                    </td>
                     <td>{STATUS_LABEL[q.dealStatus] || q.dealStatus}</td>
+                    <td>{q.order?.registered ? "Voucher adjunto" : "—"}</td>
                     <td>{money(q.totals.gross)}</td>
                     <td><button className="link-btn" type="button" onClick={() => openQuote(q.id)}>Ver</button></td>
                   </tr>
@@ -259,9 +264,14 @@ export default function Account() {
           </div>
           {detail ? (
             <div className="panel">
-              <h3>{detail.number}</h3>
-              <p className="section-sub">{STATUS_LABEL[detail.dealStatus]} · asesor {detail.vendor?.name}</p>
-              {detail.odoo?.saleName ? <p className="ok-msg">Cotización Odoo {detail.odoo.saleName}</p> : null}
+              <h3>{detail.order?.displayNumber || detail.odoo?.saleName || detail.number}</h3>
+              <p className="section-sub">{STATUS_LABEL[detail.dealStatus]} · asesor {detail.vendor?.name} · ZDRY {detail.number}</p>
+              {detail.odoo?.saleName ? (
+                <p className="ok-msg">
+                  Cotización Odoo {detail.odoo.saleName}
+                  {detail.order?.registered ? " · pedido registrado en ZDRY (voucher). No es una OC de Odoo." : "."}
+                </p>
+              ) : null}
               <p>
                 <button
                   className="link-btn"
@@ -285,7 +295,11 @@ export default function Account() {
                 <b>{money(detail.totals.gross)}</b>
               </div>
               {["nueva", "cotizada"].includes(detail.dealStatus) ? (
-                <div className="locked-note">Cuando tu comercial envíe/reserve la cotización (hold 48 h) podrás negociar descuento y transferir a las cuentas ZDRY.</div>
+                <div className="locked-note">
+                  {detail.odoo?.saleName
+                    ? `Tu cotización Odoo ${detail.odoo.saleName} está lista. Cuando el comercial reserve (hold 48 h) transfiere a las cuentas ZDRY y adjunta el voucher: eso registra tu pedido aquí (no es una orden de compra de Odoo).`
+                    : "Cuando tu comercial envíe/reserve la cotización (hold 48 h) podrás negociar descuento y transferir a las cuentas ZDRY."}
+                </div>
               ) : null}
               <div style={{ maxHeight: 180, overflow: "auto", background: "var(--bg)", padding: 10, borderRadius: 8, margin: "12px 0" }}>
                 {detail.messages.map((m) => (
@@ -303,7 +317,11 @@ export default function Account() {
               ) : null}
               {canPay(detail.dealStatus) ? (
                 <div style={{ marginTop: 14 }}>
-                  <div className="box-kicker">Adjuntar voucher de transferencia</div>
+                  <div className="box-kicker">
+                    Adjuntar voucher de transferencia
+                    {detail.odoo?.saleName ? ` · pedido de ${detail.odoo.saleName}` : ""}
+                  </div>
+                  <p className="section-sub">El comprobante deja tu pedido en ZDRY. No se crea otra cotización ni se confirma Odoo.</p>
                   <select value={bank} onChange={(e) => setBank(e.target.value)}>
                     {(profile?.paymentAccounts || [{ bank: "BCP" }, { bank: "Interbank" }]).map((a) => (
                       <option key={a.bank} value={a.bank}>{a.bank}</option>
@@ -311,6 +329,26 @@ export default function Account() {
                   </select>
                   <input value={op} onChange={(e) => setOp(e.target.value)} placeholder="N° operación / referencia" style={{ marginTop: 6, width: "100%" }} />
                   <input type="file" accept="application/pdf,image/*" onChange={uploadVoucher} style={{ marginTop: 8 }} />
+                </div>
+              ) : null}
+              {detail.vouchers?.length ? (
+                <div style={{ marginTop: 12 }}>
+                  <div className="box-kicker">Comprobantes</div>
+                  {detail.vouchers.map((v) => (
+                    <div key={v.id} className="section-sub">
+                      {v.bank} {v.operationNumber} · {v.status}{" "}
+                      <button
+                        className="link-btn"
+                        type="button"
+                        onClick={async () => {
+                          const blob = await apiBlob(`/quotes/${detail.id}/vouchers/${v.id}`);
+                          window.open(URL.createObjectURL(blob));
+                        }}
+                      >
+                        Ver
+                      </button>
+                    </div>
+                  ))}
                 </div>
               ) : null}
               {detail.extras.filter((e) => !e.accepted).map((e) => (

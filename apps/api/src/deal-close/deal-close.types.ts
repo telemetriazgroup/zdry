@@ -72,6 +72,7 @@ export function canAssignProduct(status: DealStatus): boolean {
   return status === "pago_validado" || status === "asignacion_confirmada";
 }
 
+/** Solo al confirmar ISO (Q5/J5). Q4 voucher / pago_validado no encola. */
 export function shouldEnqueueOdoo(from: DealStatus, to: DealStatus): boolean {
   return from === "pago_validado" && to === "asignacion_confirmada";
 }

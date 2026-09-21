@@ -26,10 +26,15 @@ function tabOf(path) {
 }
 
 function matchTab(tab, status) {
-  if (tab === "bandeja") return ["nueva", "cotizada"].includes(status);
+  if (tab === "bandeja") return ["nueva", "cotizada", "reservada"].includes(status);
   if (tab === "negociacion") return status === "en_negociacion";
-  if (tab === "pagos") return ["comprobante_subido", "en_verificacion"].includes(status);
+  if (tab === "pagos") return ["comprobante_subido", "en_verificacion", "pago_rechazado"].includes(status);
   return true;
+}
+
+async function openBlob(path) {
+  const blob = await apiBlob(path);
+  window.open(URL.createObjectURL(blob));
 }
 
 export default function QuotesHub() {
@@ -83,7 +88,10 @@ export default function QuotesHub() {
   return (
     <>
       <h2 className="section-title">Comercial</h2>
-      <p className="section-sub">Cierre por comprobante. No existe «Marcar Ganada»: el ISO se confirma después de validar el pago.</p>
+      <p className="section-sub">
+        El voucher del cliente registra el pedido en ZDRY (atado a la cotización Odoo). No es una OC de Odoo.
+        La SO sigue draft / cotización hasta el cierre. No existe «Marcar Ganada»: el ISO se confirma después de validar el pago.
+      </p>
       <div className="subtab-row">
         <NavLink to="/app/bandeja" className={`subtab ${tab === "bandeja" ? "active" : ""}`}>Bandeja</NavLink>
         <NavLink to="/app/negociacion" className={`subtab ${tab === "negociacion" ? "active" : ""}`}>Negociación</NavLink>
@@ -95,13 +103,16 @@ export default function QuotesHub() {
         <div className="panel">
           <div className="tablewrap">
           <table className="data">
-            <thead><tr><th>N°</th><th>Cliente</th><th>Estado</th><th>Total</th></tr></thead>
+            <thead><tr><th>N° Odoo</th><th>ZDRY</th><th>Cliente</th><th>Estado</th><th>PDF</th><th>Voucher</th><th>Total</th></tr></thead>
             <tbody>
               {filtered.map((row) => (
                 <tr key={row.id} className="expandable" onClick={() => refresh(row.id)}>
-                  <td>{row.number}{row.demo ? <span className="demo-chip">DEMO</span> : null}{row.odoo?.saleName ? <div className="muted">{row.odoo.saleName}</div> : null}</td>
+                  <td>{row.order?.displayNumber || row.odoo?.saleName || "—"}{row.demo ? <span className="demo-chip">DEMO</span> : null}</td>
+                  <td>{row.number}</td>
                   <td>{row.customer.companyName}</td>
                   <td>{STATUS_LABEL[row.dealStatus] || row.dealStatus}</td>
+                  <td>{row.order?.pdfReady || row.odoo?.pdf?.ready ? "Perú v2" : "—"}</td>
+                  <td>{row.order?.voucherCount || row.vouchers?.length || 0}</td>
                   <td>{money(row.totals.gross)}</td>
                 </tr>
               ))}
@@ -111,8 +122,11 @@ export default function QuotesHub() {
         </div>
         {q ? (
           <div className="panel">
-            <h3>{q.number}{q.demo ? <span className="demo-chip">DEMO</span> : null}</h3>
-            <p className="section-sub">{q.customer.companyName} · {STATUS_LABEL[q.dealStatus]} {q.holdPaused ? "· hold en pausa" : ""}</p>
+            <h3>{q.order?.displayNumber || q.odoo?.saleName || q.number}{q.demo ? <span className="demo-chip">DEMO</span> : null}</h3>
+            <p className="section-sub">{q.customer.companyName} · {STATUS_LABEL[q.dealStatus]} {q.holdPaused ? "· hold en pausa" : ""} · ZDRY {q.number}</p>
+            {q.order?.registered ? (
+              <p className="ok-msg">Pedido registrado en ZDRY sobre {q.odoo?.saleName || q.number}. El voucher no confirma la SO.</p>
+            ) : null}
             {q.odoo?.saleName ? (
               <p className="ok-msg">
                 Odoo {q.odoo.saleName} · {q.odoo.state || "draft"}
@@ -169,6 +183,7 @@ export default function QuotesHub() {
             {q.vouchers.map((v) => (
               <div key={v.id} style={{ marginTop: 12, padding: 10, border: "1px solid var(--line)", borderRadius: 8 }}>
                 <div>{v.originalName} · {v.bank} · {v.operationNumber} · {v.status}</div>
+                <button className="link-btn" type="button" onClick={() => openBlob(`/quotes/${q.id}/vouchers/${v.id}`)}>Ver voucher</button>
                 {q.dealStatus === "comprobante_subido" ? (
                   <>
                     <input value={note} onChange={(e) => setNote(e.target.value)} />
@@ -222,12 +237,10 @@ export default function QuotesHub() {
             ) : null}
 
             <div style={{ marginTop: 16 }}>
-              <button className="link-btn" type="button" onClick={async () => {
-                const blob = await apiBlob(`/quotes/${q.id}/pdf`);
-                const url = URL.createObjectURL(blob);
-                window.open(url);
-              }}>{q.odoo?.pdf?.ready ? "PDF Perú v2" : "PDF"}</button>
-              {q.odoo?.pdf?.ready ? <span className="muted"> · archivo de Odoo</span> : q.odoo?.saleName ? <span className="muted"> · aún prototipo si Odoo no renderizó</span> : null}
+              <button className="link-btn" type="button" onClick={() => openBlob(`/quotes/${q.id}/pdf`)}>
+                {q.odoo?.pdf?.ready ? "PDF Perú v2" : "PDF"}
+              </button>
+              {q.odoo?.pdf?.ready ? <span className="muted"> · archivo de Odoo {q.odoo.saleName || ""}</span> : q.odoo?.saleName ? <span className="muted"> · aún prototipo si Odoo no renderizó</span> : null}
             </div>
           </div>
         ) : null}
