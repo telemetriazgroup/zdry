@@ -217,7 +217,7 @@ export function applyOdooEvent(input: {
   }
 
   if (ev.event === "sale_state" || ev.event === "invoice_posted") {
-    return { action: "record", reason: `${ev.event} se aplica a la Quote (Q5)` };
+    return { action: "record", reason: `${ev.event} se aplica a la Quote (Q7)` };
   }
 
   return { action: "record", reason: `evento ${ev.event} registrado` };

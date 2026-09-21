@@ -242,6 +242,19 @@ export class QuoteIssueWorker implements OnModuleInit, OnModuleDestroy {
           detail: `Presupuesto Odoo ${saleName} (draft, ${expected.total} c/IGV).`,
         },
       });
+      await this.prisma.quoteOdooRevision.create({
+        data: {
+          quoteId: q.id,
+          source: "zdry",
+          state: String(so.state || "draft"),
+          invoiceStatus: so.invoice_status ? String(so.invoice_status) : null,
+          amountUntaxed: Number(so.amount_untaxed) || expected.untaxed,
+          amountTax: Number(so.amount_tax) || expected.tax,
+          amountTotal: Number(so.amount_total) || expected.total,
+          linesJson: { event: QUOTE_ISSUE_EVENT, saleName } as Prisma.InputJsonValue,
+          diffJson: { state: { before: "", after: String(so.state || "draft") } } as Prisma.InputJsonValue,
+        },
+      });
       try {
         await this.quotePdf.capture(q.id);
       } catch (pdfErr) {

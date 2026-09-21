@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, apiBlob, apiUpload, ApiError, goAppRoot, publicUrl } from "../api.js";
 import { useAuth } from "../auth.jsx";
 import SiteFooter from "./SiteFooter.jsx";
+import FollowTimeline from "./FollowTimeline.jsx";
 
 const money = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
 const STATUS_LABEL = {
@@ -279,6 +280,7 @@ export default function Account() {
                   {detail.odoo.close.dispatchedOdoo ? " · despachada en Odoo" : ""}
                 </p>
               ) : null}
+              {detail.timeline?.length ? <FollowTimeline hits={detail.timeline} /> : null}
               <p>
                 <button
                   className="link-btn"

@@ -4,7 +4,7 @@ Copia operativa. Canónico: `zgroup/documentacion/ruta_cotizacion_zdry.md`.
 
 Sustento: SO `10020263830` · PDF **Perú – Presupuesto/Pedido versión 2**. Report `sale.report_saleorder_copy_1_copy_4`. Alquiler: Pichari `100202616899` (servicio + ISO $0).
 
-**Q0–Q6 hechos.** Venta: SO draft + PDF + pedido + enmienda draft + `sale_close` confirma. Alquiler: `rent_issue` (servicio + ISO $0 + plan) + cuota viva + `rent_close` confirma sin factura de producto. Cronograma = reporte Odoo.
+**Q0–Q7 hechos.** Venta: SO draft + PDF + pedido + enmienda draft + `sale_close` confirma. Alquiler: `rent_issue` (servicio + ISO $0 + plan) + cuota viva + `rent_close` confirma sin factura de producto. Cronograma = reporte Odoo. Seguimiento: timeline + `QuoteOdooRevision` (zdry/odoo); patio espera factura.
 
 Odoo: puente **17.0.1.5.0** (ACL plan de suscripción + vencimiento/pago en `invoice_posted`).
 
@@ -18,4 +18,4 @@ Odoo: puente **17.0.1.5.0** (ACL plan de suscripción + vencimiento/pago en `inv
 | Q4b | No | write SO draft; 409 si `sale` (venta) |
 | Q5 | ACL 1.4.0 | `sale_close` confirma SO Q2; no valida OUT |
 | Q6 | ACL 1.5.0 | `rent_issue` / `rent_close`; cronograma; IN |
-| Q7 | Eventos ya en 1.2.0 | `QuoteOdooRevision` (source=odoo en J2 de la Quote) |
+| Q7 | Eventos ya en 1.2.0 | timeline + diffs; primera revisión Q2/Q6 `source=zdry`; J2 `source=odoo`; patio = factura + ISO |

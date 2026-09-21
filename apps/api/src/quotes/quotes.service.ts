@@ -45,6 +45,7 @@ import {
   canAmendOdoo,
   QuoteAmendError,
 } from "../domain/quote-amend";
+import { quoteTimeline, revisionDiffSummary, yardDispatchReady } from "../domain/quote-odoo-timeline";
 import { AuthUser } from "../auth/auth.types";
 import { type DealStatus, holdClockPaused } from "../deal-close/deal-close.types";
 import { applyShowPrice, DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
@@ -822,15 +823,38 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         allowed: q.kind === "alquiler" ? canAmendRentQuota(q.odooState) && Boolean(q.odooSaleId) : Boolean(q.odooSaleId) && canAmendOdoo(q.odooState),
         odooState: q.odooState || null,
       },
-        revisions: (q.odooRevisions || []).map((r) => ({
-        id: r.id,
-        source: r.source,
-        state: r.state,
-        invoiceStatus: r.invoiceStatus,
-        amountTotal: r.amountTotal != null ? n(r.amountTotal) : null,
-        diff: r.diffJson,
-        at: r.createdAt,
-      })),
+      timeline: quoteTimeline(
+        {
+          odooSaleId: q.odooSaleId,
+          odooSaleName: q.odooSaleName,
+          odooState: q.odooState,
+          odooInvoiceName: q.odooInvoiceName,
+          odooInvoiceStatus: q.odooInvoiceStatus,
+          odooPickingName: q.odooPickingName,
+          odooPickingState: q.odooPickingState,
+          odooPickingInName: q.odooPickingInName,
+          odooPickingInState: q.odooPickingInState,
+          kind: q.kind,
+        },
+        staff ? "staff" : "client",
+      ),
+      yard: yardDispatchReady({
+        dealStatus: q.dealStatus,
+        odooInvoiceName: q.odooInvoiceName,
+        odooInvoiceStatus: q.odooInvoiceStatus,
+      }),
+      revisions: staff
+        ? (q.odooRevisions || []).map((r) => ({
+            id: r.id,
+            source: r.source,
+            state: r.state,
+            invoiceStatus: r.invoiceStatus,
+            amountTotal: r.amountTotal != null ? n(r.amountTotal) : null,
+            diff: r.diffJson,
+            summary: revisionDiffSummary(r.diffJson),
+            at: r.createdAt,
+          }))
+        : undefined,
       order: {
         displayNumber: clientOrderDisplay(q.odooSaleName, q.number),
         odooSaleName: q.odooSaleName || null,
@@ -1305,6 +1329,12 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   ) {
     const q = await this.getQuoteOrThrow(id);
     this.assertAccess(q, user, true);
+    const yard = yardDispatchReady({
+      dealStatus: q.dealStatus,
+      odooInvoiceName: q.odooInvoiceName,
+      odooInvoiceStatus: q.odooInvoiceStatus,
+    });
+    if (!yard.ok) throw new UnprocessableEntityException(yard.reason);
     const movement = q.extras.find((e) => e.kind === "movement");
     const moves = movement && typeof movement.meta === "object" && movement.meta && "moves" in movement.meta
       ? Number((movement.meta as { moves?: number }).moves) || 0

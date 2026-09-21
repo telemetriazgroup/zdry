@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { api, apiBlob, ApiError } from "../api.js";
+import FollowTimeline from "./FollowTimeline.jsx";
 
 const money = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
 const STATUS_LABEL = {
@@ -29,6 +30,7 @@ function matchTab(tab, status) {
   if (tab === "bandeja") return ["nueva", "cotizada", "reservada"].includes(status);
   if (tab === "negociacion") return status === "en_negociacion";
   if (tab === "pagos") return ["comprobante_subido", "en_verificacion", "pago_rechazado"].includes(status);
+  if (tab === "seguimiento") return ["pago_validado", "asignacion_confirmada", "despacho_programado"].includes(status);
   return true;
 }
 
@@ -64,7 +66,12 @@ export default function QuotesHub() {
     api("/catalog/meta").then((m) => setZones(m.freightZones || [])).catch(() => {});
   }, [load]);
 
-  const filtered = useMemo(() => quotes.filter((q) => matchTab(tab, q.dealStatus)), [quotes, tab]);
+  const filtered = useMemo(() => {
+    if (tab === "seguimiento") {
+      return quotes.filter((q) => matchTab(tab, q.dealStatus) || q.odoo?.saleId || q.odoo?.close?.quoted);
+    }
+    return quotes.filter((q) => matchTab(tab, q.dealStatus));
+  }, [quotes, tab]);
 
   async function refresh(id) {
     const q = await api(`/quotes/${id}`);
@@ -94,7 +101,9 @@ export default function QuotesHub() {
       <h2 className="section-title">Comercial</h2>
       <p className="section-sub">
         El voucher del cliente registra el pedido en ZDRY (atado a la cotización Odoo). No es una OC de Odoo.
-        La SO sigue draft / cotización hasta el cierre. No existe «Marcar Ganada»: el ISO se confirma después de validar el pago.
+        {tab === "seguimiento"
+          ? " Seguimiento: la SO de cada quote (borrador → confirmada → factura → OUT). Si ya está confirmada, el editor es Odoo."
+          : " La SO sigue draft / cotización hasta el cierre. No existe «Marcar Ganada»: el ISO se confirma después de validar el pago."}
       </p>
       <div className="subtab-row">
         <NavLink to="/app/bandeja" className={`subtab ${tab === "bandeja" ? "active" : ""}`}>Bandeja</NavLink>
@@ -157,6 +166,7 @@ export default function QuotesHub() {
                 {q.odoo.close.dispatchedOdoo ? " → OUT hecho" : " · OUT en espera (el patio ZDRY no se vacía al confirmar)"}
               </p>
             ) : null}
+            {q.timeline?.length ? <FollowTimeline hits={q.timeline} /> : null}
             {q.odoo?.closeJob?.status === "error" ? (
               <p className="err">
                 Cierre Odoo: {q.odoo.closeJob.error}
@@ -296,7 +306,8 @@ export default function QuotesHub() {
                   <div style={{ marginTop: 10 }}>
                     <label>Fecha despacho</label>
                     <input type="date" value={dispatchDate} onChange={(e) => setDispatchDate(e.target.value)} />
-                    <button className="btn-primary" type="button" onClick={() => act(`/quotes/${q.id}/schedule`, { date: dispatchDate })}>Programar despacho</button>
+                    <button className="btn-primary" type="button" onClick={() => act(`/quotes/${q.id}/schedule`, { date: dispatchDate })} disabled={!q.yard?.ok}>Programar despacho</button>
+                    {!q.yard?.ok ? <p className="section-sub">{q.yard?.reason || "Espera la factura publicada."}</p> : null}
                   </div>
                 ) : null}
               </div>
@@ -316,9 +327,13 @@ export default function QuotesHub() {
             </div>
             {q.revisions?.length ? (
               <div style={{ marginTop: 12 }}>
-                <div className="box-kicker">Enmiendas Odoo</div>
-                {q.revisions.slice(0, 8).map((r) => (
-                  <div key={r.id} className="muted">{new Date(r.at).toLocaleString("es-PE")} · {r.source} · total {r.amountTotal} · {r.state}</div>
+                <div className="box-kicker">Diff de la SO</div>
+                {q.revisions.slice(0, 12).map((r) => (
+                  <div key={r.id} className="muted">
+                    {new Date(r.at).toLocaleString("es-PE")} · {r.source}
+                    {r.summary ? ` · ${r.summary}` : ` · ${r.state || ""}`}
+                    {r.amountTotal != null ? ` · ${r.amountTotal}` : ""}
+                  </div>
                 ))}
               </div>
             ) : null}

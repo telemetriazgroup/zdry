@@ -10,6 +10,7 @@ import {
   type QuoteFollowPatch,
 } from "../domain/quote-odoo-follow";
 import { snapshotDiff, type SaleSnapshot } from "../domain/quote-amend";
+import { followDiffJson, followLinesJson } from "../domain/quote-odoo-timeline";
 
 @Injectable()
 export class QuoteOdooFollowService {
@@ -86,7 +87,15 @@ export class QuoteOdooFollowService {
       amountTotal: Number(updated.odooAmountTotal || 0),
       lines: [],
     };
-    const diff = snapshotDiff(before, after);
+    const diff = followDiffJson({
+      snapshot: snapshotDiff(before, after),
+      beforeInvoice: quote.odooInvoiceName,
+      afterInvoice: updated.odooInvoiceName,
+      beforePicking: quote.odooPickingName,
+      afterPicking: updated.odooPickingName,
+      beforePickingIn: quote.odooPickingInName,
+      afterPickingIn: updated.odooPickingInName,
+    });
     if (Object.keys(diff).length) {
       await this.prisma.quoteOdooRevision.create({
         data: {
@@ -97,7 +106,12 @@ export class QuoteOdooFollowService {
           amountUntaxed: after.amountUntaxed,
           amountTax: after.amountTax,
           amountTotal: after.amountTotal,
-          linesJson: [] as Prisma.InputJsonValue,
+          linesJson: followLinesJson({
+            event: input.event,
+            payload: input.payload,
+            invoiceName: patch.odooInvoiceName,
+            pickingName: patch.odooPickingName || patch.odooPickingInName,
+          }) as Prisma.InputJsonValue,
           diffJson: diff as Prisma.InputJsonValue,
         },
       });
