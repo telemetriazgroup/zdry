@@ -21,6 +21,7 @@ import { DealCloseService } from "../deal-close/deal-close.service";
 import { SunatRucService } from "./sunat-ruc.service";
 import { QuoteIssueWorker } from "../odoo-import/quote-issue-worker.service";
 import { QuotePdfService } from "../odoo-import/quote-pdf.service";
+import { QuoteAmendService } from "../odoo-import/quote-amend.service";
 import { presupuestoFilename } from "../domain/odoo-quote-pdf";
 import { QUOTE_ISSUE_EVENT } from "../domain/quote-issue-draft";
 import {
@@ -33,6 +34,11 @@ import {
   pedidoRegistered,
   QuotePedidoError,
 } from "../domain/quote-pedido";
+import {
+  amendConflictBody,
+  canAmendOdoo,
+  QuoteAmendError,
+} from "../domain/quote-amend";
 import { AuthUser } from "../auth/auth.types";
 import { type DealStatus, holdClockPaused } from "../deal-close/deal-close.types";
 import { applyShowPrice, DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
@@ -102,6 +108,7 @@ const QUOTE_INCLUDE = {
   customer: true,
   vendor: { select: { id: true, name: true, email: true } },
   odooJobs: { orderBy: { createdAt: "desc" as const } },
+  odooRevisions: { orderBy: { createdAt: "desc" as const }, take: 20 },
   dispatches: true,
 };
 
@@ -125,6 +132,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     private readonly sunat: SunatRucService,
     private readonly quoteIssue: QuoteIssueWorker,
     private readonly quotePdf: QuotePdfService,
+    private readonly quoteAmend: QuoteAmendService,
   ) {}
 
   onModuleInit() {
@@ -758,6 +766,19 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
           renderedAt: q.pdfRenderedAt,
         },
       },
+      amend: {
+        allowed: Boolean(q.odooSaleId) && canAmendOdoo(q.odooState),
+        odooState: q.odooState || null,
+      },
+        revisions: (q.odooRevisions || []).map((r) => ({
+        id: r.id,
+        source: r.source,
+        state: r.state,
+        invoiceStatus: r.invoiceStatus,
+        amountTotal: r.amountTotal != null ? n(r.amountTotal) : null,
+        diff: r.diffJson,
+        at: r.createdAt,
+      })),
       order: {
         displayNumber: clientOrderDisplay(q.odooSaleName, q.number),
         odooSaleName: q.odooSaleName || null,
@@ -909,6 +930,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     const q = await this.getQuoteOrThrow(id);
     this.assertAccess(q, user, true);
     if (!["admin", "gerente", "vendedor"].includes(user.role)) throw new ForbiddenException("Sin acceso");
+    await this.assertOdooAmendable(id);
     const line = q.lines.find((l) => l.iso === iso);
     if (!line) throw new NotFoundException("Línea no encontrada.");
     const override = user.role === "gerente" || user.role === "admin";
@@ -925,6 +947,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         detail: `${iso} neto ${priceNet}${override && priceNet < n(line.minPrice) ? " (override gerente)" : ""}`,
       },
     });
+    await this.pushOdooAmend(id);
     await this.audit.log({ user, action: "grant_discount", entity: "Quote", entityId: id, after: { iso, priceNet }, ip });
     return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
   }
@@ -1095,9 +1118,10 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   ) {
     const q = await this.getQuoteOrThrow(id);
     this.assertAccess(q, user, true);
-    if (!["pago_validado", "asignacion_confirmada"].includes(q.dealStatus)) {
-      throw new BadRequestException("Ofrece el flete después de validar el pago.");
+    if (["perdida", "expirada", "nueva"].includes(q.dealStatus)) {
+      throw new BadRequestException("Ofrece el flete cuando la cotización ya está en Odoo (enviada o reservada).");
     }
+    await this.assertOdooAmendable(id);
     if (body.clientPickup) {
       await this.prisma.quoteExtra.deleteMany({ where: { quoteId: id, kind: "freight" } });
       await this.prisma.quote.update({
@@ -1105,6 +1129,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         data: { clientPickup: true, freightSnapshot: { clientPickup: true } as Prisma.InputJsonValue },
       });
       await this.prisma.quoteEvent.create({ data: { quoteId: id, type: "flete", detail: "Cliente retira en patio" } });
+      await this.pushOdooAmend(id);
       return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
     }
     const est = freightConsolidatedEstimate(
@@ -1142,6 +1167,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     await this.prisma.quoteEvent.create({
       data: { quoteId: id, type: "flete", detail: `${est.zoneName} venta ${sell} (costo ${est.cost})` },
     });
+    await this.pushOdooAmend(id);
     await this.audit.log({ user, action: "freight_extra", entity: "Quote", entityId: id, ip });
     return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
   }
@@ -1149,11 +1175,13 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   async addService(id: string, serviceId: string, user: AuthUser, ip?: string) {
     const q = await this.getQuoteOrThrow(id);
     this.assertAccess(q, user, true);
+    await this.assertOdooAmendable(id);
     const svc = await this.prisma.commercialService.findUnique({ where: { id: serviceId } });
     if (!svc) throw new NotFoundException("Servicio comercial no encontrado.");
     await this.prisma.quoteExtra.create({
       data: { quoteId: id, kind: "service", label: svc.name, amount: n(svc.price), accepted: false },
     });
+    await this.pushOdooAmend(id);
     await this.audit.log({ user, action: "service_extra", entity: "Quote", entityId: id, ip });
     return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
   }
@@ -1164,10 +1192,12 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     await this.assertClientProfile(user);
     const extra = q.extras.find((e) => e.id === extraId);
     if (!extra) throw new NotFoundException("Extra no encontrado.");
+    await this.assertOdooAmendable(id);
     await this.prisma.quoteExtra.update({ where: { id: extraId }, data: { accepted: true } });
     await this.prisma.quoteEvent.create({
       data: { quoteId: id, type: "extra_aceptado", detail: extra.label },
     });
+    await this.pushOdooAmend(id);
     await this.audit.log({ user, action: "accept_extra", entity: "Quote", entityId: id, ip });
     return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
   }
@@ -1381,6 +1411,39 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     await this.quoteIssue.runJob(job.id);
     await this.audit.log({ user, action: "quote_issue", entity: "Quote", entityId: id, ip });
     return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
+  }
+
+  async amendOdoo(id: string, user: AuthUser, ip?: string) {
+    const q = await this.getQuoteOrThrow(id);
+    this.assertAccess(q, user, true);
+    await this.assertOdooAmendable(id);
+    await this.pushOdooAmend(id);
+    await this.audit.log({ user, action: "amend_odoo", entity: "Quote", entityId: id, ip });
+    return this.presentQuote(await this.getQuoteOrThrow(id), user.role);
+  }
+
+  private async assertOdooAmendable(id: string) {
+    try {
+      await this.quoteAmend.assertWritable(id);
+    } catch (e) {
+      this.throwAmend(e);
+    }
+  }
+
+  private async pushOdooAmend(id: string) {
+    try {
+      await this.quoteAmend.sync(id);
+    } catch (e) {
+      this.throwAmend(e);
+    }
+  }
+
+  private throwAmend(e: unknown): never {
+    if (e instanceof QuoteAmendError && (e.code === "confirmed" || e.code === "cancelled")) {
+      throw new ConflictException(amendConflictBody(e));
+    }
+    if (e instanceof QuoteAmendError) throw new UnprocessableEntityException(e.message);
+    throw e;
   }
 
   private assertPedidoDoesNotCloseOdoo(from: DealStatus, to: DealStatus) {

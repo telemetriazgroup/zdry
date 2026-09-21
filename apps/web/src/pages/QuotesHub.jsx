@@ -72,14 +72,16 @@ export default function QuotesHub() {
     return q;
   }
 
-  async function act(path, body) {
+  async function act(path, body, method = "POST") {
     setError("");
     try {
-      const q = await api(path, { method: "POST", body: body || {} });
+      const q = await api(path, { method, body: body || {} });
       setSelected(q);
       load();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : e.message);
+      const err = e instanceof ApiError ? e : null;
+      const url = err?.data?.odooUrl;
+      setError(url ? `${err.message} Abrir en Odoo: ${url}` : (err ? err.message : e.message));
     }
   }
 
@@ -137,6 +139,12 @@ export default function QuotesHub() {
             ) : q.kind === "venta" && !q.demo ? (
               <p className="section-sub">Presupuesto Odoo: {q.odoo?.job?.status === "running" ? "creando…" : "en cola (Q2, draft, sin confirmar)."}</p>
             ) : null}
+            {q.odoo?.saleName && q.amend && !q.amend.allowed ? (
+              <p className="err">
+                Esta cotización ya está confirmada. Modifícala en Odoo
+                {q.odoo.url ? <> · <a href={q.odoo.url} target="_blank" rel="noreferrer">abrir formulario</a></> : null}.
+              </p>
+            ) : null}
             {q.dispatchNotes ? (
               <p className="ok-msg">Destino referencial del cliente: {q.dispatchNotes}. Confirma el flete al cotizar.</p>
             ) : null}
@@ -173,9 +181,28 @@ export default function QuotesHub() {
                     <input value={discNet} onChange={(e) => setDiscNet(e.target.value)} />
                   </div>
                 </div>
-                <button className="btn-ghost" type="button" onClick={() => act(`/quotes/${q.id}/grant-discount`, { iso: discIso, priceNet: Number(discNet) })}>Otorgar descuento</button>
+                <button className="btn-ghost" type="button" onClick={() => act(`/quotes/${q.id}/grant-discount`, { iso: discIso, priceNet: Number(discNet) })} disabled={q.amend && !q.amend.allowed}>Otorgar descuento (−5 % o piso)</button>
                 {q.dealStatus === "en_negociacion" ? (
                   <button className="btn-primary" type="button" style={{ marginLeft: 8 }} onClick={() => act(`/quotes/${q.id}/close-thread`)}>Cerrar hilo (vuelve a reservada)</button>
+                ) : null}
+                {q.amend?.allowed ? (
+                  <div style={{ marginTop: 12 }}>
+                    <div className="box-kicker">Flete en el presupuesto Odoo (Q4b)</div>
+                    <div className="form-grid">
+                      <div>
+                        <label>Zona flete</label>
+                        <select value={zoneId} onChange={(e) => setZoneId(e.target.value)}>
+                          {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label>Venta flete (vacío = mínimo +15%)</label>
+                        <input value={sellFreight} onChange={(e) => setSellFreight(e.target.value)} />
+                      </div>
+                    </div>
+                    <button className="btn-ghost" type="button" onClick={() => act(`/quotes/${q.id}/extras/freight`, { zoneId, sellAmount: sellFreight ? Number(sellFreight) : undefined })}>Poner flete en la SO draft</button>
+                    <button className="btn-ghost" type="button" onClick={() => act(`/quotes/${q.id}/extras/freight`, { clientPickup: true })}>Cliente retira</button>
+                  </div>
                 ) : null}
               </>
             ) : null}
@@ -219,8 +246,14 @@ export default function QuotesHub() {
                     <input value={sellFreight} onChange={(e) => setSellFreight(e.target.value)} />
                   </div>
                 </div>
-                <button className="btn-ghost" type="button" onClick={() => act(`/quotes/${q.id}/extras/freight`, { zoneId, sellAmount: sellFreight ? Number(sellFreight) : undefined })}>Ofrecer flete</button>
-                <button className="btn-ghost" type="button" onClick={() => act(`/quotes/${q.id}/extras/freight`, { clientPickup: true })}>Cliente retira</button>
+                {q.amend?.allowed ? (
+                  <>
+                    <button className="btn-ghost" type="button" onClick={() => act(`/quotes/${q.id}/extras/freight`, { zoneId, sellAmount: sellFreight ? Number(sellFreight) : undefined })}>Poner flete en la SO draft</button>
+                    <button className="btn-ghost" type="button" onClick={() => act(`/quotes/${q.id}/extras/freight`, { clientPickup: true })}>Cliente retira</button>
+                  </>
+                ) : q.odoo?.url ? (
+                  <p className="section-sub">Flete/descuento: solo en Odoo · <a href={q.odoo.url} target="_blank" rel="noreferrer">abrir formulario</a></p>
+                ) : null}
                 {q.dealStatus === "pago_validado" ? (
                   <div style={{ marginTop: 10 }}>
                     <button className="btn-primary" type="button" onClick={() => act(`/quotes/${q.id}/assign`)}>Confirmar ISO</button>
@@ -241,7 +274,18 @@ export default function QuotesHub() {
                 {q.odoo?.pdf?.ready ? "PDF Perú v2" : "PDF"}
               </button>
               {q.odoo?.pdf?.ready ? <span className="muted"> · archivo de Odoo {q.odoo.saleName || ""}</span> : q.odoo?.saleName ? <span className="muted"> · aún prototipo si Odoo no renderizó</span> : null}
+              {q.amend?.allowed ? (
+                <button className="link-btn" type="button" style={{ marginLeft: 8 }} onClick={() => act(`/quotes/${q.id}/amend-odoo`, {}, "PATCH")}>Reescribir SO draft</button>
+              ) : null}
             </div>
+            {q.revisions?.length ? (
+              <div style={{ marginTop: 12 }}>
+                <div className="box-kicker">Enmiendas Odoo</div>
+                {q.revisions.slice(0, 8).map((r) => (
+                  <div key={r.id} className="muted">{new Date(r.at).toLocaleString("es-PE")} · {r.source} · total {r.amountTotal} · {r.state}</div>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

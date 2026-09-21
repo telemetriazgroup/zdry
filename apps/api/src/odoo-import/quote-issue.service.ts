@@ -68,6 +68,28 @@ export class QuoteIssueService {
 
     const products: NonNullable<QuoteIssueHits["products"]> = [];
     for (const p of cfg.products) {
+      if (p.key === "flete" && !p.defaultCode) {
+        const byFlete = await this.search(
+          "product.product",
+          [["sale_ok", "=", true], ["name", "ilike", "flete"]],
+          ["id", "name", "default_code", "display_name"],
+          errors,
+          "producto flete",
+          true,
+        );
+        const rows = byFlete.length
+          ? byFlete
+          : await this.search(
+              "product.product",
+              [["sale_ok", "=", true], ["name", "ilike", "transporte"]],
+              ["id", "name", "default_code", "display_name"],
+              errors,
+              "producto transporte",
+              true,
+            );
+        products.push({ key: p.key, row: pickNamed(rows, ["flete", "transporte"]) });
+        continue;
+      }
       if (!p.defaultCode) {
         products.push({ key: p.key, row: null });
         continue;

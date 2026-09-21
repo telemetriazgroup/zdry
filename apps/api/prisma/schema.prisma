@@ -456,6 +456,7 @@ model Quote {
   events             QuoteEvent[]
   odooJobs           OdooSyncJob[]
   dispatches         Dispatch[]
+  odooRevisions      QuoteOdooRevision[]
 
   @@index([dealStatus])
   @@index([vendorId])
@@ -526,6 +527,23 @@ model QuoteEvent {
   type      String
   detail    String
   createdAt DateTime @default(now())
+
+  @@index([quoteId, createdAt])
+}
+
+model QuoteOdooRevision {
+  id             String   @id @default(uuid())
+  quoteId        String
+  quote          Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  source         String
+  state          String?
+  invoiceStatus  String?
+  amountUntaxed  Decimal? @db.Decimal(16, 2)
+  amountTax      Decimal? @db.Decimal(16, 2)
+  amountTotal    Decimal? @db.Decimal(16, 2)
+  linesJson      Json
+  diffJson       Json
+  createdAt      DateTime @default(now())
 
   @@index([quoteId, createdAt])
 }

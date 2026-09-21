@@ -78,6 +78,7 @@ const DEFAULT_PRODUCTS: QuoteProductBind[] = [
   { key: "20dc-segundo", measure: "20 DC", usage: "segundo_uso", defaultCode: "CDD20F0003", productId: null, productName: "" },
   { key: "40hc-segundo", measure: "40 HC", usage: "segundo_uso", defaultCode: "CDD40H0004", productId: null, productName: "" },
   { key: "40dc-segundo", measure: "40 DC", usage: "segundo_uso", defaultCode: "", productId: null, productName: "" },
+  { key: "flete", measure: "FLETE", usage: "servicio", defaultCode: "", productId: null, productName: "" },
 ];
 
 export function defaultQuoteIssueConfig(): OdooQuoteIssueConfig {
@@ -215,6 +216,12 @@ export function productIdFor(cfg: OdooQuoteIssueConfig, measure: string, usage =
   const u = usage.trim().toLowerCase();
   const hit = cfg.products.find((p) => p.measure.toUpperCase().replace(/\s+/g, " ") === m && p.usage === u && p.productId);
   return hit?.productId || cfg.products.find((p) => p.measure.toUpperCase().replace(/\s+/g, " ") === m && p.productId)?.productId || null;
+}
+
+/** Q4b: línea de flete/servicio. No es obligatorio para emitir la SO de producto (Q2). */
+export function freightProductId(cfg: OdooQuoteIssueConfig): number | null {
+  const hit = cfg.products.find((p) => p.key === "flete" && p.productId);
+  return hit?.productId || null;
 }
 
 export function applyQuoteIssueHits(cfg: OdooQuoteIssueConfig, hits: QuoteIssueHits): OdooQuoteIssueConfig {

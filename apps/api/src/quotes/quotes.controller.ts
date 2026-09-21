@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -92,6 +93,12 @@ export class QuotesController {
     @Req() req: Request,
   ) {
     return this.quotes.grantDiscount(id, body.iso || "", Number(body.priceNet), user, req.ip);
+  }
+
+  @Patch(":id/amend-odoo")
+  @Roles("admin", "gerente", "vendedor", "superadmin")
+  amendOdoo(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.quotes.amendOdoo(id, user, req.ip);
   }
 
   @Post(":id/close-thread")
