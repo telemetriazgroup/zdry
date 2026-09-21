@@ -1,14 +1,33 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, StreamableFile } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post, Put, Query, Req, StreamableFile } from "@nestjs/common";
 import { Request } from "express";
 import { Roles } from "../auth/roles.decorator";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
 import { OdooImportService } from "./odoo-import.service";
+import { QuoteIssueService } from "./quote-issue.service";
 
 @Controller("odoo-import")
 @Roles("superadmin", "admin")
 export class OdooImportController {
-  constructor(private readonly svc: OdooImportService) {}
+  constructor(
+    private readonly svc: OdooImportService,
+    private readonly quotes: QuoteIssueService,
+  ) {}
+
+  @Get("quote-issue")
+  quoteIssue() {
+    return this.quotes.get();
+  }
+
+  @Put("quote-issue")
+  putQuoteIssue(@Body() body: Record<string, unknown>) {
+    return this.quotes.put(body);
+  }
+
+  @Post("quote-issue/resolve")
+  resolveQuoteIssue() {
+    return this.quotes.resolve();
+  }
 
   @Get("probe")
   @Roles("superadmin", "admin")

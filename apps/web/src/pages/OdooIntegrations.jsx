@@ -110,6 +110,14 @@ export default function OdooIntegrations() {
       </form>
 
       <div className="panel">
+        <h3>Cotización ZDRY → Odoo (Q0)</h3>
+        <p className="section-sub">
+          IDs de impuesto, productos DRY, almacén, PDF Perú v2. Se leen de Odoo; no se inventan. Q2 no arranca hasta que esto esté verde.
+        </p>
+        <QuoteIssuePanel />
+      </div>
+
+      <div className="panel">
         <h3>Cola de sincronización</h3>
         <p className="section-sub">Trabajos pendientes o enviados tras un cierre comercial.</p>
         {!data?.queue?.length ? (
@@ -141,6 +149,75 @@ export default function OdooIntegrations() {
           </div>
         )}
       </div>
+    </>
+  );
+}
+
+function QuoteIssuePanel() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    const d = await api("/odoo-import/quote-issue");
+    setData(d);
+  }
+
+  useEffect(() => {
+    load().catch((e) => setError(e.message));
+  }, []);
+
+  async function resolve() {
+    setBusy(true);
+    setError("");
+    try {
+      const d = await api("/odoo-import/quote-issue/resolve", { method: "POST" });
+      setData(d);
+      if (d.errors?.length) setError(d.errors.join(" · "));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const checks = data?.checks || [];
+  return (
+    <>
+      {error ? <div className="err">{error}</div> : null}
+      {data?.ready ? <div className="ok-msg">Listo para Q2: impuesto, almacén, productos y reporte existen en Odoo.</div> : null}
+      {data && !data.ready ? (
+        <p className="section-sub">Falta resolver: {(data.missing || []).join(", ") || "—"}. Pulsa «Leer IDs desde Odoo».</p>
+      ) : null}
+      <div className="action-row" style={{ margin: "10px 0 12px" }}>
+        <button className="btn-primary" type="button" disabled={busy} onClick={resolve}>
+          {busy ? "Leyendo…" : "Leer IDs desde Odoo"}
+        </button>
+      </div>
+      {checks.length ? (
+        <div className="tablewrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Pieza</th>
+                <th>Id</th>
+                <th>Odoo</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {checks.map((c) => (
+                <tr key={c.key}>
+                  <td>{c.key}</td>
+                  <td className="card-iso">{c.id || "—"}</td>
+                  <td>{c.label}</td>
+                  <td>{c.ok ? "ok" : c.error || "falta"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </>
   );
 }

@@ -8,6 +8,7 @@ export const ODOO_BRIDGE_EVENT_TYPES = [
   "po_confirm",
   "bill_posted",
   "sale_state",
+  "invoice_posted",
   "lot_note",
   "mo_done",
 ] as const;
@@ -215,8 +216,8 @@ export function applyOdooEvent(input: {
     return { action: "record", reason: "nota de serie" };
   }
 
-  if (ev.event === "sale_state") {
-    return { action: "record", reason: "sale_state queda en bandeja para J5" };
+  if (ev.event === "sale_state" || ev.event === "invoice_posted") {
+    return { action: "record", reason: `${ev.event} queda en bandeja para Q7 / J5` };
   }
 
   return { action: "record", reason: `evento ${ev.event} registrado` };
