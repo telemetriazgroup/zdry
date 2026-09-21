@@ -133,8 +133,6 @@ export default function Account() {
     setDetail(q);
   }
 
-  const incomplete = profile && !profile.complete;
-
   return (
     <div className="site-page">
       <header className="topbar">
@@ -153,26 +151,17 @@ export default function Account() {
       <div className="page">
         <h2 className="section-title">Mi cuenta</h2>
         <p className="section-sub">
-          Empresa y persona de contacto son obligatorios para cotizar, pedir descuento al comercial y pagar.
-          El catálogo público solo deja ver stock y armar el carrito.
+          Crear cuenta no exige RUC. Para cotizar, negociar o pagar validamos el RUC en SUNAT (máximo 5 consultas; si se agotan, 3 horas de espera).
         </p>
         {error ? <div className="err">{error}</div> : null}
         {notice ? <div className="ok-msg">{notice}</div> : null}
-        {incomplete ? (
-          <div className="err">Faltan datos: {(profile.missing || []).join(", ")}. Complétalos para negociar o adjuntar el voucher.</div>
+        {profile && !profile.quoteReady ? (
+          <div className="err">Para cotizar falta: {(profile.missing || []).join(", ")}.</div>
         ) : null}
 
         <div className="panel" style={{ marginBottom: 18 }}>
-          <h3>Empresa y contacto</h3>
+          <h3>Contacto</h3>
           <form className="form-grid" onSubmit={saveProfile}>
-            <div>
-              <label>Empresa</label>
-              <input value={form.companyName} onChange={(e) => setForm({ ...form, companyName: e.target.value })} required />
-            </div>
-            <div>
-              <label>RUC / DNI</label>
-              <input value={form.rucDni} onChange={(e) => setForm({ ...form, rucDni: e.target.value })} required />
-            </div>
             <div>
               <label>Persona de contacto</label>
               <input value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} required />
@@ -181,7 +170,42 @@ export default function Account() {
               <label>Teléfono</label>
               <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} required />
             </div>
-            <button className="btn-primary" type="submit">Guardar datos</button>
+            <button className="btn-primary" type="submit">Guardar contacto</button>
+          </form>
+        </div>
+
+        <div className="panel" style={{ marginBottom: 18 }}>
+          <h3>RUC / empresa (SUNAT)</h3>
+          {profile?.quoteReady ? (
+            <p className="ok-msg">
+              {profile.customer?.rucDni} · {profile.customer?.companyName}
+              {profile.customer?.street ? ` · ${profile.customer.street}` : ""}
+            </p>
+          ) : null}
+          <p className="section-sub">
+            Consultas restantes: {profile?.rucLookup?.remaining ?? 5}/5
+            {profile?.rucLookup?.lockedUntil ? ` · bloqueado hasta ${new Date(profile.rucLookup.lockedUntil).toLocaleString("es-PE")}` : ""}.
+          </p>
+          <form
+            className="form-grid"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setError("");
+              try {
+                await api("/account/ruc-lookup", { method: "POST", body: { ruc: form.rucDni } });
+                load();
+                setNotice("RUC validado con SUNAT.");
+              } catch (err) {
+                setError(err instanceof ApiError ? err.message : err.message);
+                load();
+              }
+            }}
+          >
+            <div>
+              <label>RUC (11 dígitos)</label>
+              <input value={form.rucDni} onChange={(e) => setForm({ ...form, rucDni: e.target.value })} inputMode="numeric" required />
+            </div>
+            <button className="btn-primary" type="submit">Consultar en SUNAT</button>
           </form>
         </div>
 

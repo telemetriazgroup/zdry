@@ -18,6 +18,7 @@ import { AuditService } from "../audit/audit.service";
 import { StorageService } from "../storage/storage.service";
 import { YardLockService } from "../redis/yard-lock.service";
 import { DealCloseService } from "../deal-close/deal-close.service";
+import { SunatRucService } from "./sunat-ruc.service";
 import { AuthUser } from "../auth/auth.types";
 import { type DealStatus, holdClockPaused } from "../deal-close/deal-close.types";
 import { applyShowPrice, DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
@@ -52,9 +53,9 @@ import { buildQuotePdf } from "../domain/quote-pdf";
 import { extForMime, sniffPurchaseDocMime } from "../domain/purchase-docs";
 import {
   DEFAULT_PAYMENT_ACCOUNTS,
-  missingProfileFields,
   type PaymentAccount,
 } from "../domain/payment-accounts";
+import { missingAccountFields, missingQuoteFields } from "../domain/ruc-sunat";
 
 const HOLD_MS = 48 * 60 * 60 * 1000;
 const PAGE_SIZE = 12;
@@ -107,6 +108,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     private readonly storage: StorageService,
     private readonly locks: YardLockService,
     private readonly deals: DealCloseService,
+    private readonly sunat: SunatRucService,
   ) {}
 
   onModuleInit() {
@@ -464,7 +466,10 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     if (!user.customerId) {
       return {
         complete: false,
-        missing: ["empresa"],
+        quoteReady: false,
+        missing: ["RUC validado en SUNAT", "persona de contacto"],
+        missingAccount: ["empresa"],
+        rucLookup: { remaining: 5, max: 5, lockedUntil: null, validated: false },
         customer: null,
         contact: { name: user.name, email: user.email },
         paymentAccounts: await this.paymentAccounts(),
@@ -474,21 +479,33 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     const snapshot = {
       companyName: customer?.companyName,
       rucDni: customer?.rucDni,
+      rucValidatedAt: customer?.rucValidatedAt,
       contactName: user.name,
       email: user.email || customer?.email,
       phone: customer?.phone,
     };
-    const missing = missingProfileFields(snapshot);
+    const missingAccount = missingAccountFields(snapshot);
+    const missingQuote = missingQuoteFields(snapshot);
     return {
-      complete: missing.length === 0,
-      missing,
+      complete: missingQuote.length === 0,
+      quoteReady: missingQuote.length === 0,
+      missing: missingQuote,
+      missingAccount,
+      rucLookup: customer
+        ? this.sunat.lookupStatus(customer)
+        : { remaining: 5, max: 5, lockedUntil: null, validated: false },
       customer: customer
         ? {
             id: customer.id,
             companyName: customer.companyName,
             rucDni: customer.rucDni,
+            street: customer.street,
+            district: customer.district,
+            province: customer.province,
+            sunatState: customer.sunatState,
             email: customer.email,
             phone: customer.phone,
+            rucValidatedAt: customer.rucValidatedAt,
           }
         : null,
       contact: { name: user.name, email: user.email, phone: customer?.phone },
@@ -502,16 +519,21 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     ip?: string,
   ) {
     if (!user.customerId) throw new UnprocessableEntityException("No hay empresa asociada a esta cuenta.");
-    const companyName = (body.companyName || "").trim();
-    const rucDni = (body.rucDni || "").trim();
+    const current = await this.prisma.customer.findUnique({ where: { id: user.customerId } });
     const contactName = (body.contactName || "").trim();
     const phone = (body.phone || "").trim();
-    if (!companyName || !rucDni || !contactName || !phone) {
-      throw new BadRequestException("Empresa, RUC/DNI, persona de contacto y teléfono son obligatorios.");
+    if (!contactName || !phone) {
+      throw new BadRequestException("Persona de contacto y teléfono son obligatorios.");
     }
+    const companyName = (body.companyName || "").trim();
+    const sunatLocked = Boolean(current?.rucValidatedAt);
     await this.prisma.customer.update({
       where: { id: user.customerId },
-      data: { companyName, rucDni, phone, email: (body.email || user.email).trim() },
+      data: {
+        phone,
+        email: (body.email || user.email).trim(),
+        ...(companyName && !sunatLocked ? { companyName } : {}),
+      },
     });
     if (contactName !== user.name) {
       await this.prisma.user.update({ where: { id: user.id }, data: { name: contactName } });
@@ -521,12 +543,16 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     return this.clientProfile(user);
   }
 
+  lookupRuc(user: AuthUser, ruc: string) {
+    return this.sunat.lookupForCustomer(user, ruc);
+  }
+
   private async assertClientProfile(user: AuthUser) {
     if (user.role !== "cliente") return;
     const profile = await this.clientProfile(user);
-    if (!profile.complete) {
+    if (!profile.quoteReady) {
       throw new UnprocessableEntityException(
-        `Completa los datos de tu empresa y de la persona de contacto (${profile.missing.join(", ")}) para cotizar, negociar o pagar.`,
+        `Valida el RUC en SUNAT para cotizar (${profile.missing.join(", ")}).`,
       );
     }
   }

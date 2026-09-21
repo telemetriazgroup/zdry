@@ -231,6 +231,11 @@ export class AccountController {
   ) {
     return this.quotes.updateClientProfile(user, body, req.ip);
   }
+
+  @Post("ruc-lookup")
+  lookupRuc(@Body() body: { ruc?: string }, @CurrentUser() user: AuthUser) {
+    return this.quotes.lookupRuc(user, body.ruc || "");
+  }
 }
 
 @Controller("admin")

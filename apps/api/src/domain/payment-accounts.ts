@@ -33,10 +33,9 @@ export type ClientProfile = {
   phone?: string | null;
 };
 
+/** Cuenta: contacto. El RUC se exige al cotizar (missingQuoteFields), no al registrarse. */
 export function missingProfileFields(p: ClientProfile): string[] {
   const miss: string[] = [];
-  if (!String(p.companyName || "").trim()) miss.push("empresa");
-  if (!String(p.rucDni || "").trim()) miss.push("RUC/DNI");
   if (!String(p.contactName || "").trim()) miss.push("persona de contacto");
   if (!String(p.email || "").trim()) miss.push("correo");
   if (!String(p.phone || "").trim()) miss.push("teléfono");

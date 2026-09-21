@@ -137,8 +137,10 @@ export default function Catalog() {
   const [quoteOpen, setQuoteOpen] = useState(false);
   const [kind, setKind] = useState("venta");
   const [authMode, setAuthMode] = useState("register");
-  const [reg, setReg] = useState({ companyName: "", rucDni: "", name: "", email: "", phone: "", password: "" });
+  const [reg, setReg] = useState({ name: "", email: "", phone: "", password: "" });
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
+  const [accountProfile, setAccountProfile] = useState(null);
+  const [rucInput, setRucInput] = useState("");
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [dispatchPlace, setDispatchPlace] = useState("");
@@ -224,6 +226,24 @@ export default function Catalog() {
     };
   }, [routeIso]);
 
+  const loadAccount = useCallback(() => {
+    if (!user || user.role !== "cliente") {
+      setAccountProfile(null);
+      return Promise.resolve(null);
+    }
+    return api("/account")
+      .then((p) => {
+        setAccountProfile(p);
+        if (p.customer?.rucDni) setRucInput(p.customer.rucDni);
+        return p;
+      })
+      .catch(() => null);
+  }, [user]);
+
+  useEffect(() => {
+    if (quoteOpen) loadAccount();
+  }, [quoteOpen, loadAccount]);
+
   const pdpSlots = publishedSlots(pdp);
   const pdpSlotKey = pdpSlots.join(",");
   const markSrc = apiUrl("/catalog/watermark");
@@ -275,11 +295,16 @@ export default function Catalog() {
     setError("");
     setMsg("");
     if (!user) {
-      setError("Crea tu cuenta (empresa + persona de contacto) o entra para solicitar la cotización.");
+      setError("Crea tu cuenta (correo, contacto y teléfono) o entra para solicitar la cotización.");
       return;
     }
     if (user.role !== "cliente") {
       setError("El catálogo cotiza con una cuenta de cliente. Cierra la sesión de staff y entra o crea una cuenta de cliente.");
+      return;
+    }
+    const prof = accountProfile || (await loadAccount());
+    if (!prof?.quoteReady) {
+      setError("Valida el RUC en SUNAT para emitir la cotización.");
       return;
     }
     try {
@@ -299,18 +324,14 @@ export default function Catalog() {
     if (!cart.length) return;
     try {
       await register({
-        companyName: reg.companyName,
-        rucDni: reg.rucDni,
         name: reg.name,
         email: reg.email,
         phone: reg.phone,
         password: reg.password,
       });
-      const q = await api("/catalog/quotes", { method: "POST", body: { isos: cart, kind, dispatchPlace } });
-      setCart([]);
-      setQuoteOpen(false);
-      nav("/mi-cuenta");
-      setMsg(`Solicitud ${q.number} enviada.`);
+      const p = await api("/account");
+      setAccountProfile(p);
+      setMsg("Cuenta creada. Valida el RUC en SUNAT para pedir la cotización.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "No se pudo crear la cuenta o cotizar");
     }
@@ -625,7 +646,7 @@ export default function Catalog() {
                 ))}</ul>
               )}
               <p className="section-sub" style={{ marginTop: 8 }}>
-                Ver el stock es público. Para <b>solicitar, reservar, negociar o pagar</b> necesitas una cuenta con datos de tu empresa y una persona de contacto. Ahí verás las cuentas de ZDRY para transferir y adjuntar el voucher.
+                Ver el stock es público. Crear cuenta no exige RUC. Para <b>solicitar la cotización</b> validamos el RUC en SUNAT (máximo 5 consultas; luego 3 horas de espera).
               </p>
               {error ? <div className="err">{error}</div> : null}
               <label>Lugar de despacho (referencial)</label>
@@ -645,7 +666,35 @@ export default function Catalog() {
               {user?.role === "cliente" ? (
                 <form className="quote-form" onSubmit={submitQuote}>
                   <div className="ok-msg">Cuenta: {user.name} · {user.email}</div>
-                  <button className="btn-primary" type="submit" disabled={!cart.length}>Solicitar cotización</button>
+                  {accountProfile?.quoteReady ? (
+                    <p className="section-sub">RUC {accountProfile.customer?.rucDni} · {accountProfile.customer?.companyName}</p>
+                  ) : (
+                    <>
+                      <label>RUC (11 dígitos)</label>
+                      <input value={rucInput} onChange={(e) => setRucInput(e.target.value)} placeholder="20XXXXXXXXX" inputMode="numeric" />
+                      <p className="muted">
+                        Consultas SUNAT restantes: {accountProfile?.rucLookup?.remaining ?? 5}/5
+                        {accountProfile?.rucLookup?.lockedUntil ? ` · bloqueado hasta ${new Date(accountProfile.rucLookup.lockedUntil).toLocaleString("es-PE")}` : ""}
+                      </p>
+                      <button
+                        className="btn-ghost"
+                        type="button"
+                        onClick={async () => {
+                          setError("");
+                          try {
+                            await api("/account/ruc-lookup", { method: "POST", body: { ruc: rucInput } });
+                            await loadAccount();
+                          } catch (err) {
+                            setError(err instanceof ApiError ? err.message : "No se pudo validar el RUC");
+                            loadAccount();
+                          }
+                        }}
+                      >
+                        Consultar RUC en SUNAT
+                      </button>
+                    </>
+                  )}
+                  <button className="btn-primary" type="submit" disabled={!cart.length || !accountProfile?.quoteReady}>Solicitar cotización</button>
                 </form>
               ) : user ? (
                 <div className="locked-note">Estás en una sesión de staff. Cierra sesión y entra o crea una <b>cuenta de cliente</b> para cotizar.</div>
@@ -657,15 +706,13 @@ export default function Catalog() {
                   </div>
                   {authMode === "register" ? (
                     <form className="quote-form" onSubmit={createAccountAndQuote}>
-                      <div className="box-kicker">Empresa</div>
-                      <input placeholder="Razón social" value={reg.companyName} onChange={(e) => setReg({ ...reg, companyName: e.target.value })} required />
-                      <input placeholder="RUC / DNI" value={reg.rucDni} onChange={(e) => setReg({ ...reg, rucDni: e.target.value })} required />
                       <div className="box-kicker">Persona de contacto</div>
                       <input placeholder="Nombre y apellido" value={reg.name} onChange={(e) => setReg({ ...reg, name: e.target.value })} required />
                       <input type="email" placeholder="Correo" value={reg.email} onChange={(e) => setReg({ ...reg, email: e.target.value })} required />
                       <input placeholder="Teléfono" value={reg.phone} onChange={(e) => setReg({ ...reg, phone: e.target.value })} required />
                       <input type="password" placeholder="Contraseña (mín. 8)" value={reg.password} onChange={(e) => setReg({ ...reg, password: e.target.value })} required minLength={8} />
-                      <button className="btn-primary" type="submit" disabled={!cart.length}>Crear cuenta y solicitar</button>
+                      <p className="muted">El RUC se valida después, al pedir la cotización (SUNAT).</p>
+                      <button className="btn-primary" type="submit" disabled={!cart.length}>Crear cuenta</button>
                     </form>
                   ) : (
                     <form className="quote-form" onSubmit={loginAndStay}>

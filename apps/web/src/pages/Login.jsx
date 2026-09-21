@@ -16,8 +16,6 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
-  const [companyName, setCompanyName] = useState("");
-  const [rucDni, setRucDni] = useState("");
   const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -28,7 +26,7 @@ export default function Login() {
     setPending(true);
     try {
       const user = mode === "register"
-        ? await register({ email, password, name, companyName, rucDni, phone })
+        ? await register({ email, password, name, phone })
         : await login(email, password);
       nav(safeNext(params.get("next"), user));
     } catch (err) {
@@ -45,12 +43,8 @@ export default function Login() {
         {mode === "register" ? (
           <>
             <p className="section-sub" style={{ textAlign: "left" }}>
-              El catálogo es público. Para reservar, negociar o pagar necesitas empresa + persona de contacto.
+              El catálogo es público. Para cotizar validaremos tu RUC en SUNAT; crear la cuenta solo pide contacto y correo.
             </p>
-            <label>Empresa / razón social</label>
-            <input value={companyName} onChange={(e) => setCompanyName(e.target.value)} required />
-            <label>RUC / DNI</label>
-            <input value={rucDni} onChange={(e) => setRucDni(e.target.value)} required />
             <label>Persona de contacto</label>
             <input value={name} onChange={(e) => setName(e.target.value)} required />
             <label>Teléfono</label>

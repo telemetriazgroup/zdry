@@ -126,18 +126,16 @@ export class AuthService {
     const password = input.password || "";
     const name = (input.name || "").trim();
     const companyName = (input.companyName || "").trim();
-    const rucDni = (input.rucDni || "").trim();
     const phone = (input.phone || "").trim();
     if (!email || !password || password.length < 8) throw new BadRequestException("Correo y clave de al menos 8 caracteres.");
-    if (!companyName || !rucDni) throw new BadRequestException("Empresa y RUC/DNI son obligatorios.");
     if (!name || !phone) throw new BadRequestException("Persona de contacto y teléfono son obligatorios.");
     const exists = await this.prisma.user.findUnique({ where: { email } });
     if (exists) throw new ConflictException("Ya existe una cuenta con ese correo.");
     const hash = await argon2.hash(password);
-    let customer = await this.prisma.customer.findFirst({ where: { OR: [{ email }, { rucDni }] } });
+    let customer = await this.prisma.customer.findFirst({ where: { email } });
     if (!customer) {
       customer = await this.prisma.customer.create({
-        data: { rucDni, companyName, email, phone, risk: "B" },
+        data: { rucDni: "", companyName: companyName || name, email, phone, risk: "B" },
       });
     }
     const user = await this.prisma.user.create({

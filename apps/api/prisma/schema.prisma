@@ -293,20 +293,29 @@ model Category {
 }
 
 model Customer {
-  id               String      @id @default(uuid())
-  rucDni           String
-  companyName      String
-  email            String
-  phone            String
-  risk             RiskGrade   @default(B)
-  demo             Boolean     @default(false)
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
-  ownedContainers  Container[] @relation("OwnedContainers")
-  users            User[]
-  quotes           Quote[]
+  id                   String      @id @default(uuid())
+  rucDni               String      @default("")
+  companyName          String      @default("")
+  email                String
+  phone                String      @default("")
+  street               String      @default("")
+  district             String      @default("")
+  province             String      @default("")
+  sunatState           String      @default("")
+  sunatCondition       String      @default("")
+  rucValidatedAt       DateTime?
+  rucLookupAttempts    Int         @default(0)
+  rucLookupLockedUntil DateTime?
+  risk                 RiskGrade   @default(B)
+  demo                 Boolean     @default(false)
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+  ownedContainers      Container[] @relation("OwnedContainers")
+  users                User[]
+  quotes               Quote[]
 
   @@index([demo])
+  @@index([rucDni])
 }
 
 model InspectionPhoto {
