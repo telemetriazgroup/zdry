@@ -6,6 +6,7 @@ export default function Profile() {
   const { user, refreshUser, avatarUrl } = useAuth();
   const [name, setName] = useState(user?.name || "");
   const [email, setEmail] = useState(user?.email || "");
+  const [whatsapp, setWhatsapp] = useState(user?.whatsapp || "");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [error, setError] = useState("");
@@ -16,7 +17,7 @@ export default function Profile() {
     e.preventDefault();
     setError("");
     try {
-      const u = await api("/auth/profile", { method: "PUT", body: { name, email } });
+      const u = await api("/auth/profile", { method: "PUT", body: { name, email, whatsapp } });
       await refreshUser(u);
       setMsg("Datos guardados.");
     } catch (err) {
@@ -95,6 +96,7 @@ export default function Profile() {
         <form className="form-grid" onSubmit={save}>
           <div><label>Nombre</label><input value={name} onChange={(e) => setName(e.target.value)} required /></div>
           <div><label>Correo</label><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></div>
+          <div><label>WhatsApp (clientes te escriben aquí)</label><input value={whatsapp} onChange={(e) => setWhatsapp(e.target.value)} placeholder="51 9XX XXX XXX" /></div>
           <button className="btn-primary" type="submit">Guardar</button>
         </form>
       </div>

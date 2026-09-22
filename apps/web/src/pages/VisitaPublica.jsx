@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, apiUpload, apiUrl, ApiError, publicUrl } from "../api.js";
-import { useAuth } from "../auth.jsx";
+import { hasRole, useAuth } from "../auth.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 import {
   VISIT_FIELDS,
@@ -75,7 +75,7 @@ export default function VisitaPublica() {
   const [ticket, setTicket] = useState(null);
   const [qrSrc, setQrSrc] = useState("");
 
-  const staffVisitas = user?.role === "admin" || user?.role === "coordinador";
+  const staffVisitas = hasRole(user, "admin", "coordinador");
 
   function applyVisit(v, lockedNow, found) {
     setLocked(!!lockedNow);

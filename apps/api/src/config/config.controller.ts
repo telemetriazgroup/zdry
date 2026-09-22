@@ -9,17 +9,22 @@ import { AuditService } from "../audit/audit.service";
 import { LayoutRules, normalizeLayoutRules } from "../domain/yard";
 import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
 import { ACQUISITION_REFS_KEY, DEFAULT_ACQUISITION_REFS, effectiveAcquisitionRefs, normalizeAcquisitionRefs } from "../domain/pricing";
+import { normalizeOverlayConcepts } from "../domain/acquisition-overlay";
+import { ODOO_WAREHOUSE_LABELS, ODOO_WAREHOUSE_PIURA, ODOO_WAREHOUSE_ZGROU } from "../domain/odoo-warehouse";
+import { loadOverlayConcepts, refreshRulePrices, saveOverlayConcepts } from "../odoo-import/acquisition-overlay.store";
 import { DRY_REFERENTIAL_KEY, normalizeDryReferential } from "../domain/dry-referential";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { EvaluationService } from "../evaluation/evaluation.service";
 import { ACTIVE_MASTER } from "../domain/masters";
+import { CatalogSharesService } from "../catalog-shares/catalog-shares.service";
 
 export const CONFIG_SECTIONS = [
   { id: "catalog-copy", title: "Textos del catálogo", blurb: "Editor de la página pública: hero, pasos, pie y legales. Así lo ve el cliente." },
   { id: "watermark", title: "Marca de agua del catálogo", blurb: "Logo que se repite sobre las fotos públicas. Si no subes uno, se usa zg_marca.png." },
   { id: "visibility", title: "Visibilidad de precios", blurb: "Reglas jerárquicas global → tipo → fabricante → unidad." },
   { id: "acquisition-refs", title: "Costos de referencia", blurb: "Base USD por tipo y condición para calcular la lista (neto + margen)." },
-  { id: "dry-referential", title: "Precio referencial DRY", blurb: "Costo que usa un DRY que entró por ajuste o por fabricación (MO), sin OC del SKU actual." },
+  { id: "acquisition-overlays", title: "Extras de costo (almacén / proveedor)", blurb: "Conceptos que se suman a la OC o al referencial según plaza Odoo (ZGROU/Piura) o proveedor. No pisan el fobCif." },
+  { id: "dry-referential", title: "Precio referencial DRY", blurb: "Promedio de OC por tipo, uso y plaza. Si el tipo no tiene OC, cae al promedio general (o al monto admin)." },
   { id: "freight", title: "Tarifario de fletes", blurb: "Zonas, terrenos, márgenes min/rec/premium, vehículos." },
   { id: "rentals", title: "Reglas de alquiler", blurb: "Depreciación, márgenes, descuento por plazo y riesgo A–D." },
   { id: "providers", title: "Proveedores", blurb: "Lectura; el alta vive en Personas." },
@@ -40,14 +45,28 @@ export class ConfigController {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly evaluation: EvaluationService,
+    private readonly shares: CatalogSharesService,
   ) {}
 
+  @Get("catalog-commerce")
+  @Roles("superadmin")
+  catalogCommerce() {
+    return this.shares.commerce();
+  }
+
+  @Put("catalog-commerce")
+  @Roles("superadmin")
+  putCatalogCommerce(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.shares.saveCommerce(body, user, req.ip);
+  }
+
   @Get("sections")
+  @Roles("admin", "gerente", "superadmin")
   sections() {
     return {
       sections: CONFIG_SECTIONS.map((s) => ({
         ...s,
-        status: ["catalog-copy", "watermark", "yard-columns", "visibility", "acquisition-refs", "dry-referential", "commercial-services", "depot-services", "evaluation"].includes(s.id)
+        status: ["catalog-copy", "watermark", "yard-columns", "visibility", "acquisition-refs", "acquisition-overlays", "dry-referential", "commercial-services", "depot-services", "evaluation"].includes(s.id)
           ? ("live" as const)
           : s.id === "freight"
             ? ("partial" as const)
@@ -58,14 +77,14 @@ export class ConfigController {
   }
 
   @Get("catalog-copy")
-  @Roles("admin", "gerente", "superadmin")
+  @Roles("superadmin")
   async getCatalogCopy() {
     const row = await this.prisma.appSetting.findUnique({ where: { key: CATALOG_COPY_KEY } });
     return normalizeCatalogCopy(row?.value);
   }
 
   @Put("catalog-copy")
-  @Roles("admin", "gerente", "superadmin")
+  @Roles("superadmin")
   async putCatalogCopy(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser, @Req() req: Request) {
     const value = normalizeCatalogCopy(body);
     await this.prisma.appSetting.upsert({
@@ -169,6 +188,56 @@ export class ConfigController {
     return this.getAcquisitionRefs();
   }
 
+  @Get("acquisition-overlays")
+  async getAcquisitionOverlays() {
+    const [concepts, vendorsRaw] = await Promise.all([
+      loadOverlayConcepts(this.prisma),
+      this.prisma.odooLotCandidate.findMany({
+        where: { odooVendorName: { not: null } },
+        select: { odooVendorName: true },
+        distinct: ["odooVendorName"],
+      }),
+    ]);
+    const extra = await this.prisma.container.findMany({
+      where: { odooVendorName: { not: null } },
+      select: { odooVendorName: true },
+      distinct: ["odooVendorName"],
+    });
+    const vendors = [...new Set([
+      ...vendorsRaw.map((v) => String(v.odooVendorName || "").trim()),
+      ...extra.map((v) => String(v.odooVendorName || "").trim()),
+    ])].filter(Boolean).sort((a, b) => a.localeCompare(b, "es"));
+    return {
+      concepts,
+      warehouses: [
+        { code: ODOO_WAREHOUSE_ZGROU, label: ODOO_WAREHOUSE_LABELS[ODOO_WAREHOUSE_ZGROU] },
+        { code: ODOO_WAREHOUSE_PIURA, label: ODOO_WAREHOUSE_LABELS[ODOO_WAREHOUSE_PIURA] },
+      ],
+      vendors,
+    };
+  }
+
+  @Put("acquisition-overlays")
+  async putAcquisitionOverlays(
+    @Body() body: { concepts?: unknown[] },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const concepts = normalizeOverlayConcepts(body.concepts);
+    await saveOverlayConcepts(this.prisma, concepts);
+    const recalc = await refreshRulePrices(this.prisma);
+    await this.audit.log({
+      user,
+      action: "update",
+      entity: "AppSetting",
+      entityId: "acquisition_overlays",
+      after: { count: concepts.length, recalculated: recalc.updated },
+      ip: req.ip,
+    });
+    const out = await this.getAcquisitionOverlays();
+    return { ...out, recalculated: recalc.updated };
+  }
+
   @Get("dry-referential")
   dryReferential() {
     return presentDryReferential(this.prisma);
@@ -194,6 +263,7 @@ export class ConfigController {
       after: value as object,
       ip: req.ip,
     });
+    await refreshRulePrices(this.prisma);
     return presentDryReferential(this.prisma);
   }
 

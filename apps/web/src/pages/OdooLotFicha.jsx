@@ -389,14 +389,18 @@ function ExpedientePanel({ id }) {
   );
 }
 
-export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved }) {
+export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved, initialTab = "ficha", hideAssimilate = false }) {
   const [row, setRow] = useState(null);
   const [photos, setPhotos] = useState([]);
   const [form, setForm] = useState({});
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState("ficha");
+  const [tab, setTab] = useState(initialTab);
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
 
   async function load() {
     const d = await api(`/odoo-import/candidates/${id}`);
@@ -442,7 +446,7 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
   if (!row) {
     return (
       <div className="odoo-ficha">
-        <button className="btn-ghost" type="button" onClick={onClose}>← Lista</button>
+        {hideAssimilate ? null : <button className="btn-ghost" type="button" onClick={onClose}>← Lista</button>}
         {error ? <div className="err">{error}</div> : <p className="section-sub">Cargando ficha…</p>}
       </div>
     );
@@ -453,7 +457,7 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
   return (
     <div className="odoo-ficha">
       <div className="odoo-ficha-bar">
-        <button className="btn-ghost" type="button" onClick={onClose}>← Lista</button>
+        {hideAssimilate ? null : <button className="btn-ghost" type="button" onClick={onClose}>← Lista</button>}
         <SyncIcon status={row.odooSyncStatus} />
         {row.odooSyncError ? <span className="err" style={{ margin: 0 }}>{row.odooSyncError}</span> : null}
         <button
@@ -501,10 +505,12 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
             </div>
           </div>
 
+          {hideAssimilate ? null : (
           <div className="action-row" style={{ margin: "10px 0 14px" }}>
             <button className={tab === "ficha" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setTab("ficha")}>Ficha</button>
             <button className={tab === "expediente" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setTab("expediente")}>Expediente</button>
           </div>
+          )}
 
           {tab === "expediente" ? <ExpedientePanel id={id} /> : null}
 
@@ -655,7 +661,9 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
 
           <div className="action-row" style={{ marginTop: 14 }}>
             <button className="btn-primary" type="button" disabled={saving || !!busy} onClick={save}>Guardar</button>
-            {status ? (
+            {hideAssimilate ? (
+              <span className="section-sub">Los cambios de ficha se escriben en Odoo. No se publican al cliente.</span>
+            ) : status ? (
               <button
                 className="btn-ghost"
                 type="button"
@@ -706,4 +714,4 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
   );
 }
 
-export { SyncIcon };
+export { SyncIcon, ExpedientePanel };

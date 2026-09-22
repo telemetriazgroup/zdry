@@ -17,49 +17,49 @@ export class DemoController {
   }
 
   @Get()
-  @Roles("admin")
+  @Roles("superadmin")
   status() {
     return this.demo.status();
   }
 
   @Post("activate")
-  @Roles("admin")
+  @Roles("superadmin")
   activate(@CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.demo.activate(user, req.ip);
   }
 
   @Post("production")
-  @Roles("admin")
+  @Roles("superadmin")
   production(@CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.demo.toProduction(user, req.ip);
   }
 
   @Post("reload")
-  @Roles("admin")
+  @Roles("superadmin")
   reload(@CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.demo.reload(user, req.ip);
   }
 
   @Post("purge")
-  @Roles("admin")
+  @Roles("superadmin")
   purge(@CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.demo.purge(user, req.ip);
   }
 
   @Get("backups")
-  @Roles("admin")
+  @Roles("superadmin")
   backups() {
     return this.demo.listBackups();
   }
 
   @Post("backups")
-  @Roles("admin")
+  @Roles("superadmin")
   createBackup(@CurrentUser() user: AuthUser) {
     return this.demo.createBackup("Respaldo manual", "manual", user);
   }
 
   @Post("backups/:id/restore")
-  @Roles("admin")
+  @Roles("superadmin")
   restore(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.demo.restore(id, user, req.ip);
   }

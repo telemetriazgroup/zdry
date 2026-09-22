@@ -20,6 +20,30 @@ export type MatchProposal = {
   isoNormalized: string;
 };
 
+export const PENDING_VALUATION_EXCLUDE = ["ajuste_odoo", "fabricacion_odoo", "almacenaje_cliente"] as const;
+
+/** Reentrega (u OC sin valor) pendiente de conciliar con una OC para tener precio y proveedor. */
+export function isPendingValuation(c: {
+  odooPoId?: number | null;
+  status?: string | null;
+  invoicePending?: boolean | null;
+  intakeType?: string | null;
+}): boolean {
+  if (c.status === "Vendido") return false;
+  if (c.odooPoId != null) return false;
+  if (!c.invoicePending && c.intakeType !== "pendiente_factura") return false;
+  return !PENDING_VALUATION_EXCLUDE.includes((c.intakeType || "") as (typeof PENDING_VALUATION_EXCLUDE)[number]);
+}
+
+export function pendingValuationWhere() {
+  return {
+    odooPoId: null,
+    status: { not: "Vendido" as const },
+    OR: [{ invoicePending: true }, { intakeType: "pendiente_factura" }],
+    NOT: { intakeType: { in: [...PENDING_VALUATION_EXCLUDE] } },
+  };
+}
+
 export function isPickingDone(state?: string | null): boolean {
   const s = String(state || "").trim().toLowerCase();
   if (!s) return true;

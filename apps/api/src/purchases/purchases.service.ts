@@ -32,8 +32,9 @@ import {
 import { StorageService } from "../storage/storage.service";
 import { randomUUID } from "crypto";
 import { inspectOdooIso } from "../domain/odoo-lot-map";
-import { assertConfirmMatch, proposeMatch, reconcileContainerPatch } from "../domain/odoo-reconcile";
+import { assertConfirmMatch, pendingValuationWhere, proposeMatch, reconcileContainerPatch } from "../domain/odoo-reconcile";
 import { ACQUISITION_REFS_KEY, computeListPrices, DEFAULT_PRICING_RULES, normalizeAcquisitionRefs } from "../domain/pricing";
+import { loadOverlayConcepts, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 
 export type InvoiceLineInput = {
@@ -91,10 +92,7 @@ export class PurchasesService {
       }),
       this.prisma.container.count({
         where: {
-          odooPoId: null,
-          status: { not: "Vendido" },
-          OR: [{ invoicePending: true }, { intakeType: "pendiente_factura" }],
-          NOT: { intakeType: { in: ["ajuste_odoo", "fabricacion_odoo", "almacenaje_cliente"] } },
+          ...pendingValuationWhere(),
           ...live,
         },
       }),
@@ -324,10 +322,7 @@ export class PurchasesService {
     const live = await this.prisma.liveContainers();
     const leftRows = await this.prisma.container.findMany({
       where: {
-        odooPoId: null,
-        status: { not: "Vendido" },
-        OR: [{ invoicePending: true }, { intakeType: "pendiente_factura" }],
-        NOT: { intakeType: { in: ["ajuste_odoo", "fabricacion_odoo", "almacenaje_cliente"] } },
+        ...pendingValuationWhere(),
         ...live,
       },
       include: { depot: { select: { name: true } } },
@@ -511,10 +506,11 @@ export class PurchasesService {
   private async refreshAcquisitionPrices(iso: string) {
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c || c.priceSource === "manual") return;
-    const [rules, refsRow, dry] = await Promise.all([
+    const [rules, refsRow, dry, overlays] = await Promise.all([
       this.prisma.pricingRule.findMany(),
       this.prisma.appSetting.findUnique({ where: { key: ACQUISITION_REFS_KEY } }),
       presentDryReferential(this.prisma),
+      loadOverlayConcepts(this.prisma),
     ]);
     const pricing = rules.length
       ? rules.map((r) => ({
@@ -526,17 +522,10 @@ export class PurchasesService {
         }))
       : DEFAULT_PRICING_RULES;
     const computed = computeListPrices(
-      {
-        iso: c.iso,
-        type: c.type,
-        cat: c.cat,
-        manufacturer: c.manufacturer,
-        fobCif: Number(c.fobCif),
-        costSource: c.costSource,
-        dryReferential: dry.effective,
-      },
+      overlayUnitFrom(c, dry),
       pricing,
       normalizeAcquisitionRefs(refsRow?.value),
+      overlays,
     );
     await this.prisma.container.update({
       where: { iso },

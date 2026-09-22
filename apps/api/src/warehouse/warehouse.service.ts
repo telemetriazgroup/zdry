@@ -28,6 +28,14 @@ import { canApplyGateIn, GATE_IN_KEY, presentDepotCost } from "../domain/depot-c
 import { visitPhotoStatus } from "../domain/gate-visit";
 import { EvaluationService } from "../evaluation/evaluation.service";
 import {
+  isZgrouAssignablePatio,
+  needsPatioChoice,
+  warehouseFromLocation,
+  warehouseLabel,
+  zgrouPatioCodes,
+} from "../domain/odoo-warehouse";
+import { ensureOperationalDepots } from "../odoo-import/depot-map.store";
+import {
   extForInspectionMime,
   MAX_INSPECTION_PHOTO_BYTES,
   MAX_INSPECTION_VIDEO_BYTES,
@@ -58,7 +66,8 @@ import {
 } from "../domain/yard";
 import { PHOTO_STATUS_ACTIVE, PHOTO_STATUS_REJECTED } from "../domain/catalog-media";
 import { OdooClient } from "../odoo/odoo.client";
-import { limaDayRange, listOdooLotChatter, listOdooLotNotes, openOdooLotPhoto } from "../odoo/odoo-lot-photos";
+import { limaDayRange, listOdooLotNotes } from "../odoo/odoo-lot-photos";
+import { listOrCacheOdooPhotos, openOrCacheOdooPhoto } from "../odoo-import/odoo-photo-cache.store";
 import { ExpedienteStore } from "../odoo-events/expediente.store";
 import { receptionOwnedPatch } from "../domain/odoo-lot-map";
 import { OdooImportService } from "../odoo-import/odoo-import.service";
@@ -174,10 +183,18 @@ export class WarehouseService {
     const years: number[] = [];
     for (let y = maxY; y >= YEAR_MIN; y--) years.push(y);
     const hideRates = user ? hideRatesFor(user.role) : false;
+    const zgrouPatios = depots
+      .filter((d) => zgrouPatioCodes().includes((d.code || "") as "principal" | "gambeta_1" | "gambeta_2"))
+      .map((d) => ({ id: d.id, code: d.code, name: d.name, city: d.city }));
     return {
       types,
       categories,
-      depots,
+      depots: depots.map((d) => ({
+        ...d,
+        pending: d.code === "callao_pendiente",
+        zgrouChoice: zgrouPatioCodes().includes((d.code || "") as "principal" | "gambeta_1" | "gambeta_2"),
+      })),
+      zgrouPatios,
       customers,
       manufacturers: mergeCatalogOptions(MANUFACTURERS, mfrRow?.value),
       colors: mergeCatalogOptions(CONTAINER_COLORS, colorRow?.value),
@@ -285,7 +302,11 @@ export class WarehouseService {
           intakeLabel: intakeTypeLabel(c.intakeType),
           intakeOrigin: c.intakeOrigin,
           isoException: c.isoException,
-          odooLocation: user?.role === "admin" ? c.odooLocation : null,
+          odooLocation: user?.role === "admin" || user?.role === "superadmin" || user?.role === "coordinador" ? c.odooLocation : null,
+          odooWarehouse: c.odooWarehouse || warehouseFromLocation(c.odooLocation),
+          odooWarehouseLabel: warehouseLabel(c.odooWarehouse || warehouseFromLocation(c.odooLocation)),
+          needsPatioChoice: needsPatioChoice(c.odooWarehouse || warehouseFromLocation(c.odooLocation), c.depot.code),
+          depotCode: c.depot.code,
           status: c.status,
           registeredByName: c.registeredByName || "—",
           createdAt: c.createdAt,
@@ -607,9 +628,10 @@ export class WarehouseService {
   async listOdooPhotos(iso: string) {
     const c = await this.loadUnit(iso);
     if (!c.odooLotId) return [];
-    const chatter = await listOdooLotChatter(this.odoo, c.odooLotId);
-    await this.expediente.importOdooNotes(c.iso, chatter.notes, { containerIso: c.iso });
-    return chatter.photos;
+    return listOrCacheOdooPhotos(this.prisma, this.storage, this.odoo, {
+      odooLotId: c.odooLotId,
+      containerIso: c.iso,
+    });
   }
 
   async listOdooNotes(iso: string) {
@@ -624,7 +646,10 @@ export class WarehouseService {
   async openOdooPhoto(iso: string, attId: string) {
     const c = await this.loadUnit(iso);
     if (!c.odooLotId) throw new NotFoundException("Esta unidad no tiene lote Odoo.");
-    return openOdooLotPhoto(this.odoo, c.odooLotId, attId);
+    return openOrCacheOdooPhoto(this.prisma, this.storage, this.odoo, {
+      odooLotId: c.odooLotId,
+      containerIso: c.iso,
+    }, attId);
   }
 
   async assignOdooPhoto(iso: string, attId: string, slotRaw: string, user: AuthUser, ip?: string) {
@@ -636,7 +661,10 @@ export class WarehouseService {
     if (!Number.isInteger(slot) || slot < 0 || slot > 8) {
       throw new BadRequestException("Slot de foto inválido (0–8).");
     }
-    const obj = await openOdooLotPhoto(this.odoo, c.odooLotId, attId);
+    const obj = await openOrCacheOdooPhoto(this.prisma, this.storage, this.odoo, {
+      odooLotId: c.odooLotId,
+      containerIso: c.iso,
+    }, attId);
     await this.storeInspectionPhoto(
       c,
       slot,
@@ -1041,20 +1069,34 @@ export class WarehouseService {
     return this.registerActivity(iso, { conceptKey: key, note: "" }, user, ip);
   }
 
-  async enableCampo(iso: string, user: AuthUser, ip?: string) {
+  async enableCampo(iso: string, user: AuthUser, ip?: string, depotId?: string) {
     if (user.role === "almacen") {
       throw new ForbiddenException("Solo el coordinador o el administrador envían unidades a campo.");
     }
-    return this.applyCampoEnable(iso, user, ip);
+    return this.applyCampoEnable(iso, user, ip, false, depotId);
   }
 
-  private async applyCampoEnable(iso: string, user: AuthUser, ip?: string, emergency = false) {
+  private async applyCampoEnable(iso: string, user: AuthUser, ip?: string, emergency = false, depotId?: string) {
     const c = await this.loadUnit(iso);
     if (c.campoEnabledAt) return this.presentFor(c.iso, user);
+    await ensureOperationalDepots(this.prisma);
+    const warehouse = c.odooWarehouse || warehouseFromLocation(c.odooLocation);
+    let nextDepotId = c.depotId;
+    if (needsPatioChoice(warehouse, c.depot.code)) {
+      if (!depotId) {
+        throw new BadRequestException("Esta unidad viene de ZGROU/Existencias. Elige patio: Principal, Gambeta 1 o Gambeta 2.");
+      }
+      const chosen = await this.prisma.depot.findUnique({ where: { id: depotId } });
+      if (!chosen || !isZgrouAssignablePatio(chosen.code)) {
+        throw new BadRequestException("El patio debe ser Principal, Gambeta 1 o Gambeta 2.");
+      }
+      nextDepotId = chosen.id;
+    }
     const nextStatus = c.status === "Pendiente de ingreso" ? "Disponible" : c.status;
     await this.prisma.container.update({
       where: { iso: c.iso },
       data: {
+        depotId: nextDepotId,
         campoEnabledAt: new Date(),
         campoEnabledByName: user.name,
         physicallyReceived: true,
@@ -1076,7 +1118,7 @@ export class WarehouseService {
       action: emergency ? "emergency_campo" : "enable_campo",
       entity: "Container",
       entityId: c.iso,
-      after: { campoEnabledAt: true, emergency },
+      after: { campoEnabledAt: true, emergency, depotId: nextDepotId },
       ip,
     });
     await this.applyGateInOnce(c.iso, user);
@@ -1867,6 +1909,10 @@ export class WarehouseService {
       manufacturer: c.manufacturer,
       depotId: c.depotId,
       depotName: c.depot.name,
+      depotCode: c.depot.code,
+      odooWarehouse: hideOdoo ? null : c.odooWarehouse || warehouseFromLocation(c.odooLocation),
+      odooWarehouseLabel: hideOdoo ? null : warehouseLabel(c.odooWarehouse || warehouseFromLocation(c.odooLocation)),
+      needsPatioChoice: needsPatioChoice(c.odooWarehouse || warehouseFromLocation(c.odooLocation), c.depot.code),
       lado: c.lado,
       ruma: c.ruma,
       columna: c.columna,

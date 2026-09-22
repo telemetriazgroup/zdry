@@ -1,4 +1,4 @@
-import { applyOdooEvent, mapLotPayloadToOwned, normalizeIncomingEvent, webhookSecretOk } from "./odoo-event";
+import { applyOdooEvent, labelOdooEvent, mapLotPayloadToOwned, normalizeIncomingEvent, webhookSecretOk } from "./odoo-event";
 
 describe("normalizeIncomingEvent", () => {
   it("normaliza snake_case y origen por defecto odoo", () => {
@@ -114,6 +114,14 @@ describe("applyOdooEvent", () => {
     expect(r.action).toBe("record");
     const inv = applyOdooEvent({ event: { event: "invoice_posted", payload: { move_type: "out_invoice" } } });
     expect(inv.action).toBe("record");
+  });
+});
+
+describe("labelOdooEvent", () => {
+  it("nombra los cambios detectados en Odoo", () => {
+    expect(labelOdooEvent("lot_write")).toBe("Cambio de ficha");
+    expect(labelOdooEvent("po_confirm")).toBe("OC confirmada");
+    expect(labelOdooEvent("otro")).toBe("otro");
   });
 });
 

@@ -86,6 +86,8 @@ export default function App() {
       <ImpersonationBar />
       <Routes>
         <Route path="/" element={<Catalog />} />
+        <Route path="/c/:shareToken" element={<Catalog />} />
+        <Route path="/c/:shareToken/u/:iso" element={<Catalog />} />
         <Route path="/visita" element={<VisitaPublica />} />
         <Route path="/visita/:token" element={<VisitaPublica />} />
         <Route path="/u/:iso" element={<Catalog />} />

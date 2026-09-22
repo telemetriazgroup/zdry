@@ -156,6 +156,12 @@ export class OdooImportController {
     return this.svc.resetModule(user, body.confirm || "", req.ip);
   }
 
+  @Post("resync")
+  @Roles("superadmin", "admin")
+  resync(@Body() body: { confirm?: string }, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.svc.resyncAssimilated(user, body.confirm || "", req.ip);
+  }
+
   @Post("candidates/:id/ignore")
   ignore(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.svc.ignore(id, user, req.ip);

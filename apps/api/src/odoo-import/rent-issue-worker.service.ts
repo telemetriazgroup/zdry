@@ -4,8 +4,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { OdooClient } from "../odoo/odoo.client";
 import { QuotePdfService } from "./quote-pdf.service";
 import { QuoteIssueWorker } from "./quote-issue-worker.service";
-import { loadQuoteIssueConfig } from "./quote-issue.store";
-import { normalizeOdooConfig, envOdooConfig, ODOO_CONFIG_KEY } from "../domain/odoo-config";
+import { normalizeOdooConfig, envOdooConfig, ODOO_CONFIG_KEY, odooQuoteSyncReady } from "../domain/odoo-config";
 import { ZDRY_SYNC_CONTEXT, amountsMatchOdoo, many2oneId, odooFormUrl } from "../domain/quote-issue-draft";
 import {
   RENT_ISSUE_EVENT,
@@ -47,7 +46,7 @@ export class RentIssueWorker implements OnModuleInit, OnModuleDestroy {
   async tick() {
     if (this.busy) return;
     const cfg = await this.odoo.readConfig();
-    if (!cfg.enabled || !cfg.url) return;
+    if (!odooQuoteSyncReady(cfg)) return;
     this.busy = true;
     try {
       const jobs = await this.prisma.odooSyncJob.findMany({
@@ -126,10 +125,11 @@ export class RentIssueWorker implements OnModuleInit, OnModuleDestroy {
     });
     if (!q) throw new Error("Cotización no encontrada.");
     if (q.odooSaleId) {
+      await this.saleIssue.remitIssuedQuote(quoteId);
       return { saleId: q.odooSaleId, saleName: q.odooSaleName, skipped: "already_issued" };
     }
 
-    const issueCfg = await loadQuoteIssueConfig(this.prisma);
+    const issueCfg = await this.saleIssue.ensureIssueReady();
     const draftIn: RentDraftInput[] = q.lines.map((l) => ({ iso: l.iso, type: l.type, cat: l.cat }));
     const rentPrice = q.rentPriceNet != null ? Number(q.rentPriceNet) : 0;
     let lines;
@@ -272,6 +272,7 @@ export class RentIssueWorker implements OnModuleInit, OnModuleDestroy {
           data: { quoteId: q.id, type: "odoo_cronograma_error", detail: ((cronErr as Error).message || "").slice(0, 280) },
         });
       }
+      await this.saleIssue.remitIssuedQuote(q.id);
       return {
         saleId,
         saleName,

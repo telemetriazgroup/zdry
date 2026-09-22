@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api.js";
-import { homeFor, ROLE_LABELS, useAuth } from "../auth.jsx";
+import { homeFor, isSuperadmin, ROLE_LABELS, useAuth } from "../auth.jsx";
 
 const RISK = ["A", "B", "C", "D"];
 const ROLES = [
@@ -23,7 +23,7 @@ export default function People() {
   const [error, setError] = useState("");
   const [cForm, setCForm] = useState({ rucDni: "", companyName: "", email: "", phone: "", risk: "B" });
   const [pForm, setPForm] = useState({ name: "", type: "Transporte", rate: "0", unit: "viaje" });
-  const emptyUserForm = { email: "", name: "", role: "vendedor", password: "Zdry123!", active: true };
+  const emptyUserForm = { email: "", name: "", role: "vendedor", password: "Zdry123!", active: true, whatsapp: "" };
   const [uForm, setUForm] = useState(emptyUserForm);
   const [editId, setEditId] = useState(null);
   const [resetId, setResetId] = useState(null);
@@ -69,6 +69,7 @@ export default function People() {
       role: u.role,
       password: "",
       active: !!u.active,
+      whatsapp: u.whatsapp || "",
     });
   }
 
@@ -84,7 +85,7 @@ export default function People() {
       if (editId) {
         const updated = await api(`/people/collaborators/${editId}`, {
           method: "PUT",
-          body: { name: uForm.name, email: uForm.email, role: uForm.role, active: uForm.active },
+          body: { name: uForm.name, email: uForm.email, role: uForm.role, active: uForm.active, whatsapp: uForm.whatsapp },
         });
         if (updated.id === user.id) await refreshUser();
         cancelEdit();
@@ -122,7 +123,10 @@ export default function People() {
   return (
     <>
       <h2 className="section-title">Personas</h2>
-      <p className="section-sub">Clientes (riesgo A–D), proveedores y colaboradores. Como administrador puedes corregir datos, cambiar permisos, ver la interfaz de otro usuario y restablecer su clave.</p>
+      <p className="section-sub">
+        Clientes (riesgo A–D), proveedores y colaboradores. Puedes corregir datos, cambiar permisos y restablecer claves.
+        {isSuperadmin(user) ? " Solo el superusuario puede entrar como otro usuario." : ""}
+      </p>
       {error ? <div className="err">{error}</div> : null}
       <div className="subtab-row">
         <button type="button" className={`subtab ${tab === "customers" ? "active" : ""}`} onClick={() => setTab("customers")}>Clientes</button>
@@ -177,6 +181,7 @@ export default function People() {
           <form className="form-grid" onSubmit={saveCollab}>
             <div><label>Nombre</label><input value={uForm.name} onChange={(e) => setUForm({ ...uForm, name: e.target.value })} required /></div>
             <div><label>Email</label><input type="email" value={uForm.email} onChange={(e) => setUForm({ ...uForm, email: e.target.value })} required /></div>
+            <div><label>WhatsApp</label><input value={uForm.whatsapp || ""} onChange={(e) => setUForm({ ...uForm, whatsapp: e.target.value })} placeholder="51 9XX XXX XXX" /></div>
             <div>
               <label>Rol / permiso</label>
               <select value={uForm.role} onChange={(e) => setUForm({ ...uForm, role: e.target.value })}>
@@ -205,18 +210,19 @@ export default function People() {
           ) : null}
           <div className="tablewrap">
           <table className="data">
-            <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Activo</th><th></th></tr></thead>
+            <thead><tr><th>Nombre</th><th>Email</th><th>WhatsApp</th><th>Rol</th><th>Activo</th><th></th></tr></thead>
             <tbody>
               {collabs.map((u) => (
                 <tr key={u.id} style={editId === u.id ? { outline: "2px solid var(--orange)", outlineOffset: -2 } : undefined}>
                   <td>{u.name}{u.demo ? <span className="demo-chip">DEMO</span> : null}</td>
                   <td>{u.email}</td>
+                  <td>{u.whatsapp || "—"}</td>
                   <td>{ROLE_LABELS[u.role] || u.role}</td>
                   <td>{u.active ? "sí" : "no"}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button type="button" className="btn-ghost" onClick={() => startEdit(u)}>Editar</button>
-                    {u.id !== user.id && u.active ? (
-                      <button type="button" className="btn-ghost" onClick={() => viewAs(u.id)}>Ver como</button>
+                    {isSuperadmin(user) && u.id !== user.id && u.active ? (
+                      <button type="button" className="btn-ghost" onClick={() => viewAs(u.id)}>Entrar como</button>
                     ) : null}
                     <button type="button" className="btn-ghost" onClick={() => { setResetId(u.id); setResetPw(""); cancelEdit(); }}>Clave</button>
                   </td>

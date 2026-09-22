@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, apiUpload, ApiError, apiUrl, formatWhen } from "../api.js";
-import { useAuth } from "../auth.jsx";
+import { hasRole, useAuth } from "../auth.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 import VideoMarks, { videoSilenceProps } from "../video-marks.jsx";
 import { EvalGrid } from "../eval-ratings.jsx";
+import OdooLotFicha, { ExpedientePanel } from "./OdooLotFicha.jsx";
+import { downloadCatalogStockExcel } from "../catalog-export.js";
 
-const PAGE_SIZE = 20;
+function usd(n) {
+  if (n == null || n === "" || !Number.isFinite(Number(n))) return "—";
+  return "$" + Math.round(Number(n)).toLocaleString("en-US");
+}
+
+const PAGE_SIZE = 10;
 
 const GRADES = [
   { value: "", label: "—" },
@@ -31,8 +38,9 @@ function firstPreview(unit) {
 
 export default function CatalogMedia() {
   const { user } = useAuth();
-  const canApprove = user.role === "admin" || user.role === "gerente";
+  const canApprove = hasRole(user, "admin", "gerente");
   const canPrice = canApprove;
+  const canSeeExpediente = hasRole(user, "admin");
   const lb = useLightbox();
   const [meta, setMeta] = useState({ photoLabels: [] });
   const [rows, setRows] = useState([]);
@@ -55,6 +63,12 @@ export default function CatalogMedia() {
   const [priceBusy, setPriceBusy] = useState(false);
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
+  const [draftPrice, setDraftPrice] = useState({});
+  const [listBusy, setListBusy] = useState("");
+  const [sheet, setSheet] = useState(null);
+  const [odooPhotos, setOdooPhotos] = useState([]);
+  const [pickedAtt, setPickedAtt] = useState(null);
+  const [assigning, setAssigning] = useState(false);
 
   async function loadOffer(nextIso) {
     if (!canPrice || !nextIso) {
@@ -102,7 +116,23 @@ export default function CatalogMedia() {
     setPreview(firstPreview(u));
     setHistPreview(null);
     setRejectingSlot(null);
+    setSheet(null);
+    setPickedAtt(null);
     await loadOffer(nextIso);
+    loadOdooPhotos(nextIso);
+  }
+
+  async function loadOdooPhotos(nextIso) {
+    if (!canApprove || !nextIso) {
+      setOdooPhotos([]);
+      return;
+    }
+    try {
+      const photos = await api(`/catalog-media/${nextIso}/odoo-photos`);
+      setOdooPhotos(Array.isArray(photos) ? photos : []);
+    } catch {
+      setOdooPhotos([]);
+    }
   }
 
   async function applyUnit(u, text) {
@@ -112,6 +142,76 @@ export default function CatalogMedia() {
     setRejectingSlot(null);
     setRejectNote("");
     loadList();
+  }
+
+  async function commitListPrice(row) {
+    if (!canPrice || !row?.iso) return;
+    const raw = draftPrice[row.iso];
+    const next = Number(raw);
+    if (raw == null || raw === "" || !Number.isFinite(next) || next <= 0) return;
+    if (Math.round(next) === Math.round(Number(row.priceList) || 0)) return;
+    setListBusy(row.iso);
+    setError("");
+    try {
+      const o = await api(`/catalog-media/${row.iso}/price`, {
+        method: "PATCH",
+        body: { priceNet: next },
+      });
+      setDraftPrice((d) => {
+        const copy = { ...d };
+        delete copy[row.iso];
+        return copy;
+      });
+      setMsg(`Precio de ${row.iso} fijado en ${usd(o.priceList)}. Queda listo para publicar.`);
+      loadList();
+      if (iso === row.iso) {
+        setOffer(o);
+        setPriceNet(String(o.priceList ?? ""));
+      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    } finally {
+      setListBusy("");
+    }
+  }
+
+  async function publishIso(nextIso, photoCount, fromList = false) {
+    if (photoCount < 1) return;
+    setError("");
+    if (fromList) setListBusy(nextIso);
+    try {
+      const u = await api(`/catalog-media/${nextIso}/approve`, { method: "POST", body: {} });
+      if (iso === nextIso) {
+        await applyUnit(u, "Visible en el catálogo. Las fotos horizontales cubren todo el ancho. El original de patio no se toca.");
+      } else {
+        setMsg(`${nextIso} publicada en el catálogo.`);
+        loadList();
+      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    } finally {
+      if (fromList) setListBusy("");
+    }
+  }
+
+  async function assignOdoo(attId, slot) {
+    if (!iso) return;
+    setAssigning(true);
+    setError("");
+    try {
+      const u = await api(`/catalog-media/${iso}/odoo-photos/${attId}/assign`, {
+        method: "POST",
+        body: { slot },
+      });
+      setPickedAtt(null);
+      setPreview({ type: "photo", slot });
+      await applyUnit(u, "Foto de Odoo asignada a la casilla. No se publica al cliente hasta que pulses Publicar.");
+      await loadOdooPhotos(iso);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    } finally {
+      setAssigning(false);
+    }
   }
 
   async function saveOffer(recompute = false) {
@@ -197,12 +297,7 @@ export default function CatalogMedia() {
       );
       if (!ok) return;
     }
-    try {
-      const u = await api(`/catalog-media/${iso}/approve`, { method: "POST", body: {} });
-      await applyUnit(u, "Visible en el catálogo. Las fotos horizontales cubren todo el ancho. El original de patio no se toca.");
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : e.message);
-    }
+    await publishIso(iso, photoCount);
   }
 
   async function hide() {
@@ -289,18 +384,22 @@ export default function CatalogMedia() {
   }
 
   return (
-    <>
+    <div className="catalog-media-page">
       <h2 className="section-title">Ficha multimedia del catálogo</h2>
-      <p className="section-sub">Fotos de inspección, evaluación interna (piso / techo / puertas / pintura) y publicación. La marca de agua se aplica a la copia pública, no al original.</p>
+      <p className="section-sub">
+        Primero el precio: costo de compra o referencial, extras y rango de venta. Expediente y extras son internos; el cliente no los ve.
+        Publicar sigue deshabilitado si no hay fotos.
+      </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
 
-      <div className="dash-grid">
-        <div className="panel">
+      <div className="dash-grid catalog-media-grid">
+        <div className="panel catalog-stock-panel">
           <h3>Unidades en stock</h3>
           {canApprove ? (
             <p className="section-sub">
-              La marca de agua y el recorte de la ficha pública se configuran en{" "}
+              Edita el precio a vender en la lista para fijarlo sin abrir la unidad. Publicar queda listo si ya hay fotos.
+              La marca de agua se configura en{" "}
               <Link to="/app/configuracion">Configuración</Link>
               {meta.watermarkName ? ` (ahora: ${meta.watermarkName}).` : "."}
             </p>
@@ -314,28 +413,88 @@ export default function CatalogMedia() {
               placeholder="Buscar ISO, tipo, depósito o quien ingresó…"
               aria-label="Buscar unidades del catálogo"
             />
+            {canApprove ? (
+              <button
+                className="btn-ghost"
+                type="button"
+                disabled={!filteredRows.length}
+                onClick={() => downloadCatalogStockExcel(filteredRows)}
+              >
+                Descargar Excel
+              </button>
+            ) : null}
           </div>
           <p className="section-sub">
             {filteredRows.length} unidad{filteredRows.length === 1 ? "" : "es"}
-            {q.trim() ? ` de ${rows.length}` : ""}. Se listan de {PAGE_SIZE} en {PAGE_SIZE}.
+            {q.trim() ? ` de ${rows.length}` : ""}. Máximo {PAGE_SIZE} por página.
           </p>
           <div className="tablewrap">
             <table className="data">
               <thead>
-                <tr><th>ISO</th><th>Tipo</th><th>Ingreso</th><th>Fotos</th><th>Historial</th><th>Video</th><th>Catálogo</th></tr>
+                <tr>
+                  <th>ISO</th>
+                  <th>Tipo</th>
+                  <th>Costo</th>
+                  <th>Extras</th>
+                  <th>Venta sug.</th>
+                  <th>Rango</th>
+                  <th>Precio</th>
+                  <th>Fotos</th>
+                  {canApprove ? <th></th> : null}
+                </tr>
               </thead>
               <tbody>
                 {pageRows.map((r) => (
-                  <tr key={r.iso} className="expandable" onClick={() => open(r.iso)}>
+                  <tr key={r.iso} className={`expandable${iso === r.iso ? " on" : ""}`} onClick={() => open(r.iso)}>
                     <td className="card-iso">{r.iso}{r.demo ? <span className="demo-chip">DEMO</span> : null}</td>
-                    <td>{r.type}</td>
-                    <td className="recv-who">{r.registeredByName || "—"}<br />{formatWhen(r.createdAt)}</td>
-                    <td>{r.photoCount}</td>
-                    <td>{r.historyCount || "—"}</td>
-                    <td>{r.hasVideo ? "sí" : "—"}</td>
-                    <td style={{ color: (STATUS[r.mediaStatus] || STATUS.pendiente).color, fontWeight: 700 }}>
-                      {(STATUS[r.mediaStatus] || STATUS.pendiente).label}
+                    <td>{r.type}{r.cat ? ` · ${r.cat}` : ""}</td>
+                    <td title={r.baseKind === "fobCif" ? "FOB/CIF de OC" : "Referencial DRY / tipo"}>
+                      {usd(r.rawBase)}
                     </td>
+                    <td title={(r.overlayLines || []).map((l) => `${l.label} ${usd(l.amount)}`).join(" · ") || "Sin extras"}>
+                      {r.overlayTotal ? usd(r.overlayTotal) : "—"}
+                    </td>
+                    <td>{usd(r.suggestedList)}</td>
+                    <td>{usd(r.suggestedMin)}–{usd(r.suggestedList)}</td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      {canPrice ? (
+                        <input
+                          className="catalog-price-input"
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={draftPrice[r.iso] ?? String(Math.round(Number(r.priceList) || 0) || "")}
+                          disabled={listBusy === r.iso}
+                          onChange={(e) => setDraftPrice((d) => ({ ...d, [r.iso]: e.target.value }))}
+                          onBlur={() => commitListPrice(r)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              e.currentTarget.blur();
+                            }
+                          }}
+                          aria-label={`Precio a vender ${r.iso}`}
+                        />
+                      ) : (
+                        usd(r.priceList)
+                      )}
+                    </td>
+                    <td style={{ color: (STATUS[r.mediaStatus] || STATUS.pendiente).color }} title={(STATUS[r.mediaStatus] || STATUS.pendiente).label}>
+                      {r.photoCount}
+                    </td>
+                    {canApprove ? (
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <button
+                          className="btn-primary"
+                          type="button"
+                          disabled={r.photoCount < 1 || listBusy === r.iso}
+                          title={r.photoCount < 1 ? "Carga al menos una foto para publicar" : "Publicar en catálogo"}
+                          onClick={() => publishIso(r.iso, r.photoCount, true)}
+                        >
+                          Publicar
+                        </button>
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>
@@ -352,12 +511,114 @@ export default function CatalogMedia() {
         </div>
 
         {unit ? (
-          <div className="panel">
+          <div className="panel catalog-detail-panel">
             <h3>{unit.iso}</h3>
             <p className="section-sub">{unit.type} · {unit.cat} · {unit.depotName} · {unit.manufacturer} {unit.year || ""}</p>
             <p className="recv-who">Ingresó {unit.registeredByName || "—"} · {formatWhen(unit.createdAt)}</p>
             <div style={{ color: st.color, fontWeight: 800, marginBottom: 10 }}>{st.label}</div>
             <p className="section-sub">{photoCount} foto{photoCount === 1 ? "" : "s"} activa{photoCount === 1 ? "" : "s"}{unit.hasVideo ? " · video 360°" : ""}{(unit.history || []).length ? ` · ${(unit.history || []).length} en historial` : ""}.</p>
+
+            {canPrice && offer ? (
+              <div className="offer-box offer-priority">
+                <h4>Precio de oferta</h4>
+                <p className="section-sub"><b>{offer.title}</b></p>
+                <p className="section-sub">{offer.detail}</p>
+                {offer.overlayLines?.length ? (
+                  <ul className="section-sub" style={{ margin: "4px 0 8px 18px" }}>
+                    <li>Costo Odoo {usd(offer.rawBase)}</li>
+                    {offer.overlayLines.map((l) => (
+                      <li key={l.key}>+ {l.label} ({l.scope}) {usd(l.amount)}</li>
+                    ))}
+                    <li>Base ajustada {usd(offer.base)}</li>
+                  </ul>
+                ) : (
+                  <p className="section-sub">Costo {usd(offer.rawBase)} · venta sugerida {usd(offer.suggestedList)} · rango {usd(offer.suggestedMin)}–{usd(offer.suggestedList)}</p>
+                )}
+                <p className="section-sub">{offer.visibilityLabel}</p>
+                <div className="offer-kpis">
+                  <div className="offer-kpi"><span>Costo</span><b>{usd(offer.rawBase)}</b></div>
+                  <div className="offer-kpi"><span>Extras</span><b>{offer.overlayTotal ? usd(offer.overlayTotal) : "—"}</b></div>
+                  <div className="offer-kpi"><span>Venta sugerida</span><b>{usd(offer.suggestedList)}</b></div>
+                  <div className="offer-kpi"><span>Rango</span><b>{usd(offer.suggestedMin)}–{usd(offer.suggestedList)}</b></div>
+                </div>
+                <div className="form-grid">
+                  <div>
+                    <label>Neto USD (sin IGV)</label>
+                    <input type="number" min="1" step="1" value={priceNet} onChange={(e) => setPriceNet(e.target.value)} />
+                  </div>
+                  <div>
+                    <label>IGV 18%</label>
+                    <input readOnly value={priceNet ? Math.round(Number(priceNet) * 0.18) : ""} />
+                  </div>
+                  <div>
+                    <label>Con IGV</label>
+                    <input readOnly value={priceNet ? Math.round(Number(priceNet) * 1.18) : ""} />
+                  </div>
+                  <div>
+                    <label>Qué ve el cliente</label>
+                    <select value={showMode} onChange={(e) => setShowMode(e.target.value)}>
+                      <option value="show">Mostrar este precio</option>
+                      <option value="request">No mostrar — solicitar precio</option>
+                      <option value="inherit">Según reglas (CIMC visible, resto consulta)</option>
+                    </select>
+                  </div>
+                </div>
+                <label>Nota del cambio (opcional)</label>
+                <input value={priceNote} onChange={(e) => setPriceNote(e.target.value)} placeholder="Ej. ajuste por 1-trip 2025" maxLength={240} />
+                <div className="action-row" style={{ marginTop: 8 }}>
+                  <button className="btn-primary" type="button" disabled={priceBusy} onClick={() => saveOffer(false)}>Guardar precio</button>
+                  <button className="btn-ghost" type="button" disabled={priceBusy} onClick={() => saveOffer(true)}>Recalcular por reglas</button>
+                </div>
+                {(offer.history || []).length ? (
+                  <div className="offer-hist">
+                    <b>Historial de precio</b>
+                    <ul>
+                      {offer.history.map((h) => (
+                        <li key={h.id}>
+                          {formatWhen(h.createdAt)} · {h.changedByName} · neto ${Math.round(Number(h.priceList))}
+                          {h.source === "manual" ? " (oferta)" : " (regla)"}
+                          {h.showPrice ? " · visible" : " · solicitar precio"}
+                          {h.note ? ` — ${h.note}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="section-sub" style={{ marginTop: 8 }}>Aún no hay cambios guardados. El primer ajuste queda aquí.</p>
+                )}
+              </div>
+            ) : null}
+
+            {canApprove ? (
+              <div className="action-row" style={{ marginTop: 16 }}>
+                <button className="btn-primary" type="button" onClick={publish} disabled={photoCount < 1} title={photoCount < 1 ? "Carga al menos una foto para publicar" : ""}>
+                  Publicar en catálogo
+                </button>
+                <button className="btn-ghost" type="button" onClick={hide} disabled={unit.mediaStatus !== "aprobado"}>Ocultar del catálogo</button>
+                {canSeeExpediente && unit.candidateId ? (
+                  <button
+                    className={sheet === "expediente" ? "btn-primary" : "btn-ghost"}
+                    type="button"
+                    onClick={() => setSheet(sheet === "expediente" ? null : "expediente")}
+                  >
+                    Expediente
+                  </button>
+                ) : null}
+                <button
+                  className={sheet === "extras" ? "btn-primary" : "btn-ghost"}
+                  type="button"
+                  onClick={() => {
+                    const next = sheet === "extras" ? null : "extras";
+                    setSheet(next);
+                    if (next === "extras" && !odooPhotos.length) loadOdooPhotos(unit.iso);
+                  }}
+                >
+                  Extras
+                </button>
+              </div>
+            ) : (
+              <div className="locked-note">Tú cargas las fotos. Administrador o Gerencia publican, ocultan o rechazan foto a foto.</div>
+            )}
 
             <div className={`media-stage ${histPreview || previewingVideo || previewingPhoto ? "has-media" : ""}`}>
               {histPreview ? (
@@ -562,78 +823,111 @@ export default function CatalogMedia() {
             />
             <button className="btn-ghost" type="button" style={{ marginTop: 8 }} onClick={saveNotes}>Guardar evaluación y descripción</button>
 
-            {canPrice && offer ? (
-              <div className="offer-box">
-                <h4>Precio de oferta</h4>
-                <p className="section-sub"><b>{offer.title}</b></p>
-                <p className="section-sub">{offer.detail}</p>
-                <p className="section-sub">{offer.visibilityLabel}</p>
-                <div className="form-grid">
-                  <div>
-                    <label>Neto USD (sin IGV)</label>
-                    <input type="number" min="1" step="1" value={priceNet} onChange={(e) => setPriceNet(e.target.value)} />
-                  </div>
-                  <div>
-                    <label>IGV 18%</label>
-                    <input readOnly value={priceNet ? Math.round(Number(priceNet) * 0.18) : ""} />
-                  </div>
-                  <div>
-                    <label>Con IGV</label>
-                    <input readOnly value={priceNet ? Math.round(Number(priceNet) * 1.18) : ""} />
-                  </div>
-                  <div>
-                    <label>Qué ve el cliente</label>
-                    <select value={showMode} onChange={(e) => setShowMode(e.target.value)}>
-                      <option value="show">Mostrar este precio</option>
-                      <option value="request">No mostrar — solicitar precio</option>
-                      <option value="inherit">Según reglas (CIMC visible, resto consulta)</option>
-                    </select>
-                  </div>
-                </div>
-                <label>Nota del cambio (opcional)</label>
-                <input value={priceNote} onChange={(e) => setPriceNote(e.target.value)} placeholder="Ej. ajuste por 1-trip 2025" maxLength={240} />
-                <div className="action-row" style={{ marginTop: 8 }}>
-                  <button className="btn-primary" type="button" disabled={priceBusy} onClick={() => saveOffer(false)}>Guardar precio</button>
-                  <button className="btn-ghost" type="button" disabled={priceBusy} onClick={() => saveOffer(true)}>Recalcular por reglas</button>
-                </div>
-                {(offer.history || []).length ? (
-                  <div className="offer-hist">
-                    <b>Historial de precio</b>
-                    <ul>
-                      {offer.history.map((h) => (
-                        <li key={h.id}>
-                          {formatWhen(h.createdAt)} · {h.changedByName} · neto ${Math.round(Number(h.priceList))}
-                          {h.source === "manual" ? " (oferta)" : " (regla)"}
-                          {h.showPrice ? " · visible" : " · solicitar precio"}
-                          {h.note ? ` — ${h.note}` : ""}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : (
-                  <p className="section-sub" style={{ marginTop: 8 }}>Aún no hay cambios guardados. El primer ajuste queda aquí.</p>
-                )}
-              </div>
-            ) : null}
-
             {Object.values(portrait).some(Boolean) ? (
               <div className="warn-inline" style={{ marginTop: 14 }}>
                 Hay fotos verticales. En la web no cubren el ancho (bandas a los lados). Cámbialas por tomas horizontales del contenedor antes de publicar.
               </div>
             ) : null}
 
-            {canApprove ? (
-              <div className="action-row" style={{ marginTop: 16 }}>
-                <button className="btn-primary" type="button" onClick={publish} disabled={photoCount < 1}>Publicar en catálogo</button>
-                <button className="btn-ghost" type="button" onClick={hide} disabled={unit.mediaStatus !== "aprobado"}>Ocultar del catálogo</button>
-              </div>
+          </div>
+        ) : (
+          <div className="panel catalog-detail-empty">
+            <h3>Detalle del equipo</h3>
+            <p className="section-sub">Elige una unidad a la izquierda. Aquí ves primero el precio y luego las fotos para publicar.</p>
+          </div>
+        )}
+      </div>
+
+      {unit && sheet === "expediente" && unit.candidateId ? (
+        <div className="panel catalog-internal-sheet">
+          <p className="section-sub">Expediente interno. No se publica a clientes: OC, MO, facturas, notas y evolución de campos.</p>
+          <ExpedientePanel id={unit.candidateId} />
+        </div>
+      ) : null}
+
+      {unit && sheet === "extras" ? (
+        <div className="panel catalog-internal-sheet">
+          <h3>Control previo a la publicación</h3>
+          <p className="section-sub">
+            Fotos de Odoo ya copiadas a ZDRY al asimilar. Elige una y asígnala a una casilla. Corregir campos escribe en Odoo. El cliente no ve esta sección.
+          </p>
+          <div className="odoo-web-photos">
+            <h4>Fotos de Odoo no consideradas</h4>
+            {(unit.history || []).length ? (
+              <p className="section-sub">
+                {unit.history.length} foto{unit.history.length === 1 ? "" : "s"} rechazada{unit.history.length === 1 ? "" : "s"} o reemplazada{unit.history.length === 1 ? "" : "s"} están en el historial de casillas, arriba. El cliente no las ve.
+              </p>
+            ) : null}
+            {!odooPhotos.length ? (
+              <p className="section-sub">Esta unidad no tiene fotos de Odoo en ZDRY. Si se asimiló antes, el primer uso las copia; si Odoo no respondió, no hay adjuntos.</p>
             ) : (
-              <div className="locked-note">Tú cargas las fotos. Administrador o Gerencia publican, ocultan o rechazan foto a foto.</div>
+              <>
+                <div className="odoo-assign-thumbs">
+                  {odooPhotos.map((p, idx) => (
+                    <div key={p.id} className={`odoo-assign-thumb ${pickedAtt === p.id ? "on" : ""}`}>
+                      <button
+                        type="button"
+                        className="thumb-zoom"
+                        onClick={() => lb.open(
+                          odooPhotos.map((x) => ({
+                            src: apiUrl(`/catalog-media/${unit.iso}/odoo-photos/${x.id}`),
+                            type: "image",
+                            label: x.name,
+                          })),
+                          idx,
+                        )}
+                      >
+                        <img src={apiUrl(`/catalog-media/${unit.iso}/odoo-photos/${p.id}`)} alt={p.name} />
+                      </button>
+                      <button
+                        type="button"
+                        className="thumb-pick"
+                        onClick={() => setPickedAtt(pickedAtt === p.id ? null : p.id)}
+                      >
+                        {p.kind === "zdry_ref" ? "Cara ZDRY · " : ""}{p.name} · Elegir
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                {pickedAtt ? (
+                  <div className="odoo-assign-slots">
+                    <b>Asignar a casilla</b>
+                    {labels.slice(0, 9).map((lab, i) => (
+                      <button
+                        key={lab}
+                        type="button"
+                        className="btn-ghost"
+                        disabled={assigning}
+                        onClick={() => assignOdoo(pickedAtt, i)}
+                      >
+                        {i + 1}. {lab}{unit.photoSlots?.[i] ? " (reemplazar)" : ""}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="section-sub">Toca la imagen para verla. Pulsa «Elegir» y luego la casilla donde debe quedar.</p>
+                )}
+              </>
             )}
           </div>
-        ) : null}
-      </div>
+          {canSeeExpediente && unit.candidateId ? (
+            <div style={{ marginTop: 16 }}>
+              <h4>Corregir ficha (se escribe en Odoo)</h4>
+              <p className="section-sub">Cualquier campo de la ficha. Guardar pisa Odoo, igual que en regularización.</p>
+              <OdooLotFicha
+                id={unit.candidateId}
+                initialTab="ficha"
+                hideAssimilate
+                onClose={() => setSheet(null)}
+                onSaved={() => loadList()}
+              />
+            </div>
+          ) : !unit.candidateId ? (
+            <p className="section-sub">Esta unidad no tiene expediente Odoo. Puedes cambiar fotos y evaluación en el detalle.</p>
+          ) : null}
+        </div>
+      ) : null}
       {lb.node}
-    </>
+    </div>
   );
 }

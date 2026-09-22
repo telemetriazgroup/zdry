@@ -14,8 +14,19 @@ export const ROLE_LABELS = {
   cliente: "Cliente",
 };
 
+export function isSuperadmin(user) {
+  return user?.role === "superadmin";
+}
+
+/** Superadmin puede todo. El resto solo si su rol está en la lista. */
+export function hasRole(user, ...roles) {
+  if (!user) return false;
+  if (user.role === "superadmin") return true;
+  return roles.includes(user.role);
+}
+
 export const ROLE_DESC = {
-  superadmin: "Integraciones, estadística DRY de Odoo (venta/alquiler), textos del catálogo, respaldos y vaciado.",
+  superadmin: "Acceso total. Único que puede entrar como otro usuario. También integra Odoo, textos, demo, auditoría y respaldos.",
   admin: "Ve inventario con costo real, personas, maestros, configuración, regularización Odoo y publicación del catálogo.",
   gerente: "Define reglas de precio y visibilidad. No ve FOB ni C_T.",
   vendedor: "Cotiza, valida comprobantes y confirma asignación. Nunca ve el costo real.",
@@ -32,6 +43,8 @@ export const ROLE_NAV = {
     { to: "/app/estadistica-dry", label: "Estadística DRY" },
     { to: "/app/almacen/odoo", label: "Odoo — regularizar" },
     { to: "/app/catalogo-textos", label: "Textos del catálogo" },
+    { to: "/app/configuracion", label: "Configuración" },
+    { to: "/app/auditoria", label: "Auditoría" },
     { to: "/app/respaldo", label: "Respaldo y recuperación" },
   ],
   admin: [
@@ -40,22 +53,21 @@ export const ROLE_NAV = {
     { to: "/app/personas", label: "Personas" },
     { to: "/app/maestros", label: "Maestros" },
     { to: "/app/configuracion", label: "Configuración" },
-    { to: "/app/catalogo-textos", label: "Textos del catálogo" },
-    { to: "/app/auditoria", label: "Auditoría" },
     { to: "/app/compras/facturas", label: "Compras" },
     { to: "/app/almacen/recepcion", label: "Recepción" },
     { to: "/app/almacen/odoo", label: "Odoo — regularizar" },
     { to: "/app/almacen/campo", label: "Patio — campo" },
     { to: "/app/almacen/patio", label: "Patio" },
     { to: "/app/catalogo-media", label: "Ficha catálogo" },
+    { to: "/app/enlaces-catalogo", label: "Enlaces catálogo" },
   ],
   gerente: [
     { to: "/app", label: "Inicio", end: true },
     { to: "/app/precios", label: "Reglas de precio" },
     { to: "/app/equipo", label: "Equipo" },
     { to: "/app/configuracion", label: "Configuración" },
-    { to: "/app/catalogo-textos", label: "Textos del catálogo" },
     { to: "/app/catalogo-media", label: "Ficha catálogo" },
+    { to: "/app/enlaces-catalogo", label: "Enlaces catálogo" },
   ],
   vendedor: [
     { to: "/app", label: "Inicio", end: true },
@@ -64,6 +76,7 @@ export const ROLE_NAV = {
     { to: "/app/negociacion", label: "Negociación" },
     { to: "/app/pagos", label: "Pagos por validar" },
     { to: "/app/seguimiento", label: "Seguimiento" },
+    { to: "/app/enlaces-catalogo", label: "Enlaces catálogo" },
     { to: "/app/alquileres", label: "Alquileres" },
   ],
   compras: [
@@ -90,6 +103,29 @@ export const ROLE_NAV = {
   ],
   cliente: [],
 };
+
+function uniqueNav(lists) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    for (const item of list || []) {
+      if (seen.has(item.to)) continue;
+      seen.add(item.to);
+      out.push(item);
+    }
+  }
+  return out;
+}
+
+ROLE_NAV.superadmin = uniqueNav([
+  ROLE_NAV.superadmin,
+  ROLE_NAV.admin,
+  ROLE_NAV.gerente,
+  ROLE_NAV.vendedor,
+  ROLE_NAV.compras,
+  ROLE_NAV.coordinador,
+  ROLE_NAV.almacen,
+]);
 
 export function homeFor(user) {
   if (!user) return "/";

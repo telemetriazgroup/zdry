@@ -13,21 +13,38 @@ export type RucLookupGate =
   | { ok: false; remaining: 0; lockedUntil: Date; retryAt: string; message: string };
 
 export type SunatRucPayload = {
+  ok?: boolean;
+  source?: string | null;
   vat?: string | null;
+  ruc?: string | null;
+  Ruc?: string | null;
   name?: string | null;
   street?: string | null;
   district?: string | null;
   province?: string | null;
   department?: string | null;
+  ubigeo?: string | null;
   taxpayer_state?: string | null;
   taxpayer_condition?: string | null;
+  data?: SunatRucPayload | null;
+  result?: SunatRucPayload | null;
   RazonSocial?: string | null;
+  razonSocial?: string | null;
+  nombre?: string | null;
   Direccion?: string | null;
+  direccion?: string | null;
+  domicilio_fiscal?: string | null;
   Distrito?: string | null;
+  distrito?: string | null;
   Provincia?: string | null;
+  provincia?: string | null;
   Departamento?: string | null;
+  departamento?: string | null;
+  Ubigeo?: string | null;
   EstadoContribuyente?: string | null;
+  estado?: string | null;
   CondicionContribuyente?: string | null;
+  condicion?: string | null;
 };
 
 export type MappedSunatRuc = {
@@ -36,9 +53,35 @@ export type MappedSunatRuc = {
   street: string;
   district: string;
   province: string;
+  department: string;
+  ubigeo: string;
   sunatState: string;
   sunatCondition: string;
+  source: string;
 };
+
+const PLACEHOLDER_STATES = /^(SIN_ODOO|SIN_METODO)$/i;
+
+function asText(v: unknown): string {
+  return String(v ?? "").replace(/\s+/g, " ").trim();
+}
+
+function firstText(src: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const t = asText(src[key]);
+    if (t) return t;
+  }
+  return "";
+}
+
+export function unwrapSunatPayload(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const src = raw as Record<string, unknown>;
+  const nested = [src.data, src.result, src.sunat, src.contribuyente].find(
+    (n) => n && typeof n === "object" && !Array.isArray(n),
+  ) as Record<string, unknown> | undefined;
+  return nested ? { ...src, ...nested } : src;
+}
 
 export function digitsOnly(raw: unknown): string {
   return String(raw || "").replace(/\D/g, "");
@@ -47,6 +90,17 @@ export function digitsOnly(raw: unknown): string {
 export function normalizeRuc(raw: unknown): string | null {
   const d = digitsOnly(raw);
   return d.length === 11 ? d : null;
+}
+
+/** Dígito verificador SUNAT (RUC 11). */
+export function isValidPeruRuc(raw: unknown): boolean {
+  const ruc = normalizeRuc(raw);
+  if (!ruc) return false;
+  const w = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
+  const sum = w.reduce((s, f, i) => s + f * Number(ruc[i]), 0);
+  const mod = 11 - (sum % 11);
+  const chk = mod === 10 ? 0 : mod === 11 ? 1 : mod;
+  return chk === Number(ruc[10]);
 }
 
 export function lockRemainingMs(lockedUntil: Date | string | null | undefined, now = new Date()): number {
@@ -98,21 +152,71 @@ export function nextRucLookupState(state: RucLookupState, now = new Date()): { a
 }
 
 export function mapSunatRuc(raw: SunatRucPayload | null | undefined, fallbackRuc: string): MappedSunatRuc | null {
-  const src = raw && typeof raw === "object" ? raw : {};
-  const ruc = normalizeRuc(src.vat || fallbackRuc);
-  const companyName = String(src.name || src.RazonSocial || "").trim();
+  const src = unwrapSunatPayload(raw);
+  const ruc = normalizeRuc(src.vat || src.ruc || src.Ruc || fallbackRuc);
+  const companyName = firstText(src, ["name", "RazonSocial", "razonSocial", "nombre", "nombre_o_razon_social"]);
   if (!ruc || !companyName) return null;
-  const street = String(src.street || src.Direccion || "").trim();
-  const district = String(src.district || src.Distrito || "").trim();
-  const province = String(src.province || src.Provincia || src.department || src.Departamento || "").trim();
+  const street = firstText(src, ["street", "Direccion", "direccion", "domicilio_fiscal", "address"]);
+  const district = firstText(src, ["district", "Distrito", "distrito"]);
+  const province = firstText(src, ["province", "Provincia", "provincia"]);
+  const department = firstText(src, ["department", "Departamento", "departamento"]);
   return {
     ruc,
     companyName,
     street,
     district,
     province,
-    sunatState: String(src.taxpayer_state || src.EstadoContribuyente || "").trim(),
-    sunatCondition: String(src.taxpayer_condition || src.CondicionContribuyente || "").trim(),
+    department,
+    ubigeo: firstText(src, ["ubigeo", "Ubigeo"]),
+    sunatState: firstText(src, ["taxpayer_state", "EstadoContribuyente", "estado", "estado_del_contribuyente"]),
+    sunatCondition: firstText(src, ["taxpayer_condition", "CondicionContribuyente", "condicion", "condicion_de_domicilio"]),
+    source: firstText(src, ["source"]) || "sunat",
+  };
+}
+
+export function sunatAddressLine(p: {
+  street?: string | null;
+  district?: string | null;
+  province?: string | null;
+  department?: string | null;
+}): string {
+  return [p.street, p.district, p.province, p.department].map((x) => asText(x)).filter(Boolean).join(", ");
+}
+
+export function sunatNeedsRefresh(p: {
+  rucDni?: string | null;
+  street?: string | null;
+  sunatState?: string | null;
+}): boolean {
+  if (!normalizeRuc(p.rucDni)) return false;
+  if (PLACEHOLDER_STATES.test(String(p.sunatState || ""))) return true;
+  return !asText(p.street) || !asText(p.sunatState);
+}
+
+export function presentSunat(p: {
+  rucDni?: string | null;
+  companyName?: string | null;
+  street?: string | null;
+  district?: string | null;
+  province?: string | null;
+  department?: string | null;
+  sunatState?: string | null;
+  sunatCondition?: string | null;
+  sunatUbigeo?: string | null;
+}) {
+  const state = asText(p.sunatState);
+  const fake = PLACEHOLDER_STATES.test(state);
+  return {
+    ruc: normalizeRuc(p.rucDni) || asText(p.rucDni),
+    companyName: asText(p.companyName),
+    street: asText(p.street),
+    district: asText(p.district),
+    province: asText(p.province),
+    department: asText(p.department),
+    ubigeo: asText(p.sunatUbigeo),
+    sunatState: fake ? "" : state,
+    sunatCondition: asText(p.sunatCondition),
+    address: sunatAddressLine(p),
   };
 }
 

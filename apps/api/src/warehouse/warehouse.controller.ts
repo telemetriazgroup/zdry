@@ -146,8 +146,13 @@ export class WarehouseController {
 
   @Post("units/:iso/enable-campo")
   @Roles("admin", "coordinador")
-  enableCampo(@Param("iso") iso: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    return this.warehouse.enableCampo(iso, user, req.ip);
+  enableCampo(
+    @Param("iso") iso: string,
+    @Body() body: { depotId?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.enableCampo(iso, user, req.ip, body?.depotId);
   }
 
   @Post("units/:iso/photos")

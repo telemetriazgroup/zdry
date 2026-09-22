@@ -15,6 +15,23 @@ export const ODOO_BRIDGE_EVENT_TYPES = [
 
 export type OdooBridgeEventType = (typeof ODOO_BRIDGE_EVENT_TYPES)[number];
 
+export const ODOO_EVENT_LABELS: Record<OdooBridgeEventType, string> = {
+  lot_write: "Cambio de ficha",
+  quant_change: "Cambio de existencia",
+  picking_in_done: "Ingreso IN",
+  picking_out_done: "Salida",
+  po_confirm: "OC confirmada",
+  bill_posted: "Factura de compra",
+  sale_state: "Estado de venta",
+  invoice_posted: "Factura de venta",
+  lot_note: "Nota en serie",
+  mo_done: "Fabricación terminada",
+};
+
+export function labelOdooEvent(event: string): string {
+  return ODOO_EVENT_LABELS[event as OdooBridgeEventType] || event || "Evento Odoo";
+}
+
 export const ODOO_WEBHOOK_SECRET_KEY = "odoo_webhook_secret";
 
 export type IncomingOdooEvent = {

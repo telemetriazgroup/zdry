@@ -53,9 +53,11 @@ import { isMediaApproved, PHOTO_STATUS_ACTIVE } from "../domain/catalog-media";
 import { loadDefaultWatermark } from "../domain/watermark";
 import { Readable } from "stream";
 import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
+import { CATALOG_COMMERCE_KEY, normalizeCatalogCommerce, publicQuotesBlockedMessage } from "../domain/catalog-commerce";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { isOwnSaleStock } from "../domain/iso6346";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
+import { loadOverlayConcepts, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import {
   ACQUISITION_REFS_KEY,
   assertPriceFloor,
@@ -82,7 +84,7 @@ import {
   DEFAULT_PAYMENT_ACCOUNTS,
   type PaymentAccount,
 } from "../domain/payment-accounts";
-import { missingAccountFields, missingQuoteFields } from "../domain/ruc-sunat";
+import { missingAccountFields, missingQuoteFields, presentSunat } from "../domain/ruc-sunat";
 
 const HOLD_MS = 48 * 60 * 60 * 1000;
 const PAGE_SIZE = 12;
@@ -187,19 +189,12 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     }
     const pricing = rules || (await this.loadPricing());
     const acquisition = refs || (await this.loadAcquisitionRefs());
-    const dry = await presentDryReferential(this.prisma);
+    const [dry, overlays] = await Promise.all([presentDryReferential(this.prisma), loadOverlayConcepts(this.prisma)]);
     const computed = computeListPrices(
-      {
-        iso: c.iso,
-        type: c.type,
-        cat: c.cat,
-        manufacturer: c.manufacturer,
-        fobCif: n(c.fobCif),
-        costSource: c.costSource,
-        dryReferential: dry.effective,
-      },
+      overlayUnitFrom(c, dry),
       pricing,
       acquisition,
+      overlays,
     );
     await this.prisma.container.update({
       where: { iso },
@@ -231,9 +226,25 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  async catalogCommerce() {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: CATALOG_COMMERCE_KEY } });
+    return normalizeCatalogCommerce(row?.value);
+  }
+
   async catalogCopy() {
-    const row = await this.prisma.appSetting.findUnique({ where: { key: CATALOG_COPY_KEY } });
-    return normalizeCatalogCopy(row?.value);
+    const [copyRow, commerce] = await Promise.all([
+      this.prisma.appSetting.findUnique({ where: { key: CATALOG_COPY_KEY } }),
+      this.catalogCommerce(),
+    ]);
+    const copy = normalizeCatalogCopy(copyRow?.value);
+    return {
+      ...copy,
+      mode: commerce.mode,
+      quotesEnabled: commerce.quotesEnabled,
+      accountsEnabled: commerce.accountsEnabled,
+      whatsapp: commerce.whatsapp || copy.whatsapp,
+      coordinatorName: commerce.coordinatorName,
+    };
   }
 
   async catalogMeta() {
@@ -537,7 +548,11 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
             street: customer.street,
             district: customer.district,
             province: customer.province,
+            department: customer.department,
+            sunatUbigeo: customer.sunatUbigeo,
             sunatState: customer.sunatState,
+            sunatCondition: customer.sunatCondition,
+            address: presentSunat(customer).address,
             email: customer.email,
             phone: customer.phone,
             rucValidatedAt: customer.rucValidatedAt,
@@ -607,10 +622,16 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     user: AuthUser | undefined,
     ip?: string,
   ) {
+    const staff = user && ["admin", "gerente", "vendedor", "superadmin"].includes(user.role);
+    if (!staff) {
+      const commerce = await this.catalogCommerce();
+      if (!commerce.quotesEnabled) throw new ForbiddenException(publicQuotesBlockedMessage());
+    }
     const isos = [...new Set((body.isos || []).map((s) => s.trim().toUpperCase()).filter(Boolean))];
     if (!isos.length) throw new BadRequestException("Selecciona al menos una unidad.");
     const kind = body.kind === "alquiler" ? "alquiler" : "venta";
     const customerId = await this.resolveCustomer(user, { customerId: body.customerId });
+    if (customerId) await this.sunat.hydrateIfNeeded(customerId);
     const vendorId = await this.defaultVendorId();
     const [pricing, acquisition] = await Promise.all([this.loadPricing(), this.loadAcquisitionRefs()]);
 
@@ -663,9 +684,11 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       include: QUOTE_INCLUDE,
     });
     if (kind === "venta" && !anyDemo) {
-      await this.quoteIssue.enqueue(quote.id);
+      const job = await this.quoteIssue.enqueue(quote.id);
+      await this.quoteIssue.runJob(job.id);
     } else if (kind === "alquiler" && !anyDemo) {
-      await this.rentIssue.enqueue(quote.id);
+      const job = await this.rentIssue.enqueue(quote.id);
+      await this.rentIssue.runJob(job.id);
     }
     await this.audit.log({
       user,
@@ -675,7 +698,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       after: { number, isos, kind },
       ip,
     });
-    return this.presentQuote(quote, user?.role);
+    return this.presentQuote(await this.getQuoteOrThrow(quote.id), user?.role);
   }
 
   private async getQuoteOrThrow(id: string): Promise<QuoteFull> {
@@ -695,7 +718,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   }
 
   presentQuote(q: QuoteFull, role?: Role | string) {
-    const staff = role === "admin" || role === "gerente" || role === "vendedor";
+    const staff = role === "superadmin" || role === "admin" || role === "gerente" || role === "vendedor";
     const extraNet = q.extras.filter((e) => e.accepted || staff).reduce((s, e) => s + n(e.amount), 0);
     const rentNet = q.kind === "alquiler" ? n(q.rentPriceNet) : null;
     const net = (rentNet != null ? rentNet : q.lines.reduce((s, l) => s + n(l.priceNet), 0)) + extraNet;
@@ -722,10 +745,10 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       createdAt: q.createdAt,
       customer: {
         id: q.customer.id,
-        companyName: q.customer.companyName,
-        rucDni: q.customer.rucDni,
         email: q.customer.email,
         phone: q.customer.phone,
+        rucDni: q.customer.rucDni,
+        ...presentSunat(q.customer),
       },
       vendor: q.vendor,
       lines: q.lines.map((l) => ({
@@ -796,7 +819,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         job: issueJob ? { status: issueJob.status, error: issueJob.lastError, attempts: issueJob.attempts } : null,
         closeJob: closeJob ? { status: closeJob.status, error: closeJob.lastError, attempts: closeJob.attempts } : null,
         pdf: {
-          ready: Boolean(q.pdfStorageKey && q.pdfSource === "odoo"),
+          ready: Boolean(q.pdfStorageKey && (q.pdfSource === "odoo" || q.pdfSource === "zdry")),
           source: q.pdfSource || null,
           renderedAt: q.pdfRenderedAt,
           cronogramaReady: Boolean(q.cronogramaStorageKey),
@@ -858,7 +881,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       order: {
         displayNumber: clientOrderDisplay(q.odooSaleName, q.number),
         odooSaleName: q.odooSaleName || null,
-        pdfReady: Boolean(q.pdfStorageKey && q.pdfSource === "odoo"),
+        pdfReady: Boolean(q.pdfStorageKey && (q.pdfSource === "odoo" || q.pdfSource === "zdry")),
         voucherCount: q.vouchers.length,
         registered: pedidoRegistered(q.vouchers.length),
       },
@@ -920,25 +943,25 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async send(id: string, user: AuthUser, ip?: string) {
-    const q = await this.getQuoteOrThrow(id);
+    let q = await this.getQuoteOrThrow(id);
     this.assertAccess(q, user, true);
-    const now = new Date();
-    await this.prisma.quoteLine.updateMany({ where: { quoteId: id }, data: { frozenAt: now } });
-    if (q.odooSaleId) {
-      try {
-        await this.quotePdf.capture(id);
-        await this.quotePdf.postToSale(id);
-        await this.prisma.quoteEvent.create({
-          data: { quoteId: id, type: "odoo_mail", detail: `PDF Perú v2 publicado en Odoo ${q.odooSaleName}.` },
-        });
-      } catch (e) {
-        this.log.warn(`enviar PDF ${q.number}: ${(e as Error).message}`);
-        await this.prisma.quoteEvent.create({
-          data: { quoteId: id, type: "odoo_mail_error", detail: ((e as Error).message || "").slice(0, 280) },
-        });
+    if (!q.demo && !q.odooSaleId) {
+      if (q.kind === "alquiler") {
+        const job = await this.rentIssue.enqueue(q.id);
+        await this.rentIssue.runJob(job.id);
+      } else {
+        const job = await this.quoteIssue.enqueue(q.id);
+        await this.quoteIssue.runJob(job.id);
+      }
+      q = await this.getQuoteOrThrow(id);
+      if (!q.odooSaleId) {
+        const fail = q.odooJobs.find((j) => j.event === (q.kind === "alquiler" ? RENT_ISSUE_EVENT : QUOTE_ISSUE_EVENT));
+        throw new UnprocessableEntityException(fail?.lastError || "No se pudo emitir la cotización en Odoo.");
       }
     }
-    const updated = await this.setStatus(await this.getQuoteOrThrow(id), "cotizada");
+    await this.quoteIssue.remitIssuedQuote(id);
+    q = await this.getQuoteOrThrow(id);
+    const updated = q.dealStatus === "nueva" ? await this.setStatus(q, "cotizada") : q;
     await this.audit.log({ user, action: "send_quote", entity: "Quote", entityId: id, ip });
     return this.presentQuote(updated, user.role);
   }
@@ -1010,7 +1033,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     await this.assertOdooAmendable(id);
     const line = q.lines.find((l) => l.iso === iso);
     if (!line) throw new NotFoundException("Línea no encontrada.");
-    const override = user.role === "gerente" || user.role === "admin";
+    const override = user.role === "gerente" || user.role === "admin" || user.role === "superadmin";
     const floor = assertPriceFloor(priceNet, n(line.minPrice), override);
     if (!floor.ok) throw new UnprocessableEntityException(floor.message);
     await this.prisma.quoteLine.update({
@@ -1159,7 +1182,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Informa movimientos después de validar el pago.");
     }
     const m = Math.max(0, Math.floor(Number(moves) || 0));
-    const canWaive = waive && (user.role === "admin" || user.role === "gerente");
+    const canWaive = waive && (user.role === "admin" || user.role === "gerente" || user.role === "superadmin");
     const amount = canWaive ? 0 : Math.max(0, m - FREE_MOVES) * MOVEMENT_RATE;
     await this.prisma.quoteExtra.deleteMany({ where: { quoteId: id, kind: "movement" } });
     await this.prisma.quoteExtra.create({
@@ -1406,13 +1429,11 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   async pdf(id: string, user: AuthUser) {
     const q = await this.getQuoteOrThrow(id);
     this.assertAccess(q, user);
-    if (q.odooSaleId) {
-      try {
-        const odooPdf = await this.quotePdf.capture(id);
-        if (odooPdf) return odooPdf;
-      } catch (e) {
-        this.log.warn(`PDF Odoo ${q.number}: ${(e as Error).message}`);
-      }
+    try {
+      const replica = await this.quotePdf.capture(id);
+      if (replica) return replica;
+    } catch (e) {
+      this.log.warn(`PDF réplica ${q.number}: ${(e as Error).message}`);
     }
     if (q.pdfStorageKey) {
       try {
@@ -1420,7 +1441,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         return {
           buffer: stored.buffer,
           filename: presupuestoFilename(q.odooSaleName, q.number),
-          source: (q.pdfSource === "odoo" ? "odoo" : "prototype") as "odoo" | "prototype",
+          source: (q.pdfSource === "odoo" ? "odoo" : q.pdfSource === "zdry" ? "zdry" : "prototype") as "odoo" | "zdry" | "prototype",
           storageKey: q.pdfStorageKey,
         };
       } catch {

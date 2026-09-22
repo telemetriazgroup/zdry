@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, apiUpload, apiUrl, formatWhen } from "../api.js";
-import { useAuth } from "../auth.jsx";
+import { hasRole, useAuth } from "../auth.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 import { EvalGrid } from "../eval-ratings.jsx";
 
@@ -56,7 +56,7 @@ function VisitItem({ visit, onClick, showPendingPhoto, extra }) {
 
 export default function PatioCampo() {
   const { user } = useAuth();
-  const canReview = user.role === "admin" || user.role === "coordinador";
+  const canReview = hasRole(user, "admin", "coordinador");
   const lb = useLightbox();
   const [meta, setMeta] = useState({ photoLabels: [], categories: [], depots: [] });
   const [rows, setRows] = useState([]);

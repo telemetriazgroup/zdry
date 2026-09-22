@@ -37,6 +37,10 @@ export const DEFAULT_CATALOG_COPY = {
   whatsappCta: "WhatsApp",
   whatsappMessage: "Hola, me interesa el contenedor {iso} ({type}, {cat}) — {price}. ¿Sigue disponible?",
   whatsappCartMessage: "Hola, quiero cotizar estas unidades: {isos}. ¿Siguen disponibles?",
+  quotesEnabled: false,
+  accountsEnabled: false,
+  coordinatorName: "",
+  mode: "whatsapp",
   emptyStock: "No hay unidades publicadas con esos filtros. Prueba otro tipo, condición o depósito.",
   cartLabel: "Cotización",
   loginLabel: "Entrar",
@@ -86,6 +90,10 @@ export function mergeCatalogCopy(raw) {
       title: text(rawSteps[i]?.title, def.title),
       body: text(rawSteps[i]?.body, def.body),
     })),
+    quotesEnabled: src.quotesEnabled === true,
+    accountsEnabled: src.accountsEnabled === true,
+    coordinatorName: text(src.coordinatorName, d.coordinatorName),
+    mode: src.mode === "full" ? "full" : "whatsapp",
   };
 }
 
@@ -105,10 +113,11 @@ export function whatsappUrl(copy, message) {
   return n ? `https://wa.me/${n}${q}` : `https://wa.me/${q}`;
 }
 
-function withDispatchPlace(message, place) {
+function withDispatchPlace(message, place, copy) {
   const dest = String(place || "").trim();
-  if (!dest) return message;
-  return `${message}\nLugar de despacho (referencia): ${dest}`;
+  const who = String(copy?.coordinatorName || "").trim();
+  const extra = [dest ? `Lugar de despacho (referencia): ${dest}` : "", who ? `Coordinar con ${who}` : ""].filter(Boolean);
+  return extra.length ? `${message}\n${extra.join("\n")}` : message;
 }
 
 export function unitWhatsAppMessage(copy, unit, place) {
@@ -121,13 +130,13 @@ export function unitWhatsAppMessage(copy, unit, place) {
     .replaceAll("{type}", unit?.typeLabel || unit?.type || "")
     .replaceAll("{cat}", unit?.catLabel || "")
     .replaceAll("{price}", price);
-  return withDispatchPlace(msg, place);
+  return withDispatchPlace(msg, place, copy);
 }
 
 export function cartWhatsAppMessage(copy, isos, place) {
   const tpl = copy?.whatsappCartMessage || DEFAULT_CATALOG_COPY.whatsappCartMessage;
   const list = (isos || []).filter(Boolean).join(", ") || "unidades del catálogo";
-  return withDispatchPlace(tpl.replaceAll("{isos}", list), place);
+  return withDispatchPlace(tpl.replaceAll("{isos}", list), place, copy);
 }
 
 export function legalParagraphs(body) {

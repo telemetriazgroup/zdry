@@ -61,7 +61,7 @@ export class AuthController {
 
   @Put("profile")
   updateProfile(
-    @Body() body: { name?: string; email?: string },
+    @Body() body: { name?: string; email?: string; whatsapp?: string },
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
@@ -77,7 +77,7 @@ export class AuthController {
   }
 
   @Post("impersonate")
-  @Roles("admin")
+  @Roles("superadmin")
   impersonate(
     @Body() body: { userId?: string },
     @CurrentUser() user: AuthUser,

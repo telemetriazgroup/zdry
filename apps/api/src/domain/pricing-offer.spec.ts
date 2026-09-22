@@ -88,4 +88,20 @@ describe("origen y visibilidad de oferta", () => {
     expect(overrideFromVisibilityMode("request")).toBe(false);
     expect(applyShowPrice({ ...unit, priceVisibilityOverride: false }, DEFAULT_VISIBILITY_RULES)).toBe(false);
   });
+
+  it("lista de ficha recibe costo, extras, sugerido y rango", () => {
+    const d = describeOffer(
+      { ...unit, odooWarehouse: "PIURA", overlayExtras: [{ label: "Flete patio", amount: 120 }] },
+      DEFAULT_PRICING_RULES,
+      DEFAULT_VISIBILITY_RULES,
+      { priceList: null, priceMin: null, priceSource: "rule" },
+    );
+    expect(d.rawBase).toBe(2800);
+    expect(d.overlayTotal).toBe(120);
+    expect(d.base).toBe(2920);
+    expect(d.suggestedList).toBeGreaterThan(d.rawBase);
+    expect(d.suggestedMin).toBeLessThanOrEqual(d.suggestedList);
+    expect(d.priceList).toBe(d.suggestedList);
+    expect(d.priceMin).toBe(d.suggestedMin);
+  });
 });

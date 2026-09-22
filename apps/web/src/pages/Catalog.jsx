@@ -77,9 +77,9 @@ function WaIcon() {
   );
 }
 
-function WhatsAppLink({ href, children, className = "btn-whatsapp" }) {
+function WhatsAppLink({ href, children, className = "btn-whatsapp", onClick }) {
   return (
-    <a className={className} href={href} target="_blank" rel="noopener noreferrer">
+    <a className={className} href={href} target="_blank" rel="noopener noreferrer" onClick={onClick}>
       <WaIcon />
       <span>{children}</span>
     </a>
@@ -123,7 +123,7 @@ function loadCart() {
 }
 
 export default function Catalog() {
-  const { iso: routeIso } = useParams();
+  const { iso: routeIso, shareToken } = useParams();
   const { user, logout, login, register } = useAuth();
   const nav = useNavigate();
   const [meta, setMeta] = useState(null);
@@ -143,8 +143,11 @@ export default function Catalog() {
   const [rucInput, setRucInput] = useState("");
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  const [quoting, setQuoting] = useState(false);
   const [dispatchPlace, setDispatchPlace] = useState("");
   const [copy, setCopy] = useState(DEFAULT_CATALOG_COPY);
+  const [share, setShare] = useState(null);
+  const [shareErr, setShareErr] = useState("");
   const [splash, setSplash] = useState(() => (routeIso ? "detail" : "list"));
   const listSplashDone = useRef(false);
   const lb = useLightbox();
@@ -182,7 +185,27 @@ export default function Catalog() {
   useEffect(() => {
     api("/catalog/meta").then(setMeta).catch(() => {});
     api("/catalog/copy").then((d) => setCopy(mergeCatalogCopy(d))).catch(() => {});
-  }, []);
+    if (!shareToken) {
+      setShare(null);
+      setShareErr("");
+      return;
+    }
+    api(`/catalog/share/${shareToken}`)
+      .then((s) => {
+        setShare(s);
+        setShareErr("");
+        setCopy((cur) => ({
+          ...cur,
+          whatsapp: s.vendorWhatsapp || cur.whatsapp,
+          coordinatorName: s.vendorName || cur.coordinatorName,
+        }));
+        api(`/catalog/share/${shareToken}/events`, { method: "POST", body: { kind: "open" } }).catch(() => {});
+      })
+      .catch((e) => {
+        setShare(null);
+        setShareErr(e.message || "Este enlace no es válido.");
+      });
+  }, [shareToken]);
 
   useEffect(() => {
     const lock = Boolean(pdp || quoteOpen || splash);
@@ -211,6 +234,9 @@ export default function Catalog() {
         setPdp(u);
         setThumb(slots[0] ?? (u.hasVideo ? "video" : 0));
         setGalleryPaused(false);
+        if (shareToken) {
+          api(`/catalog/share/${shareToken}/events`, { method: "POST", body: { kind: "view_unit", iso: u.iso } }).catch(() => {});
+        }
       })
       .catch(() => {
         if (!cancelled) setPdp(null);
@@ -278,17 +304,43 @@ export default function Catalog() {
     return () => clearInterval(id);
   }, [pdp, galleryPaused, pdpSlotKey]);
 
+  function catalogHome() {
+    return shareToken ? `/c/${shareToken}` : "/";
+  }
+
+  function trackShare(kind, iso, detail) {
+    if (!shareToken) return;
+    api(`/catalog/share/${shareToken}/events`, { method: "POST", body: { kind, iso, detail } }).catch(() => {});
+  }
+
   function openUnit(iso) {
-    nav(`/u/${iso}`);
+    nav(shareToken ? `/c/${shareToken}/u/${iso}` : `/u/${iso}`);
   }
 
   function closeUnit() {
-    goCatalogHome(nav);
+    if (shareToken) nav(`/c/${shareToken}`);
+    else goCatalogHome(nav);
   }
 
   function removeFromCart(iso) {
     setCart((c) => c.filter((x) => x !== iso));
   }
+
+  function addToCart(iso) {
+    if (!iso) return;
+    setCart((c) => (c.includes(iso) ? c : [...c, iso]));
+    trackShare("cart", iso);
+  }
+
+  function startFormalQuote(iso) {
+    setError("");
+    setMsg("");
+    if (iso) addToCart(iso);
+    setQuoteOpen(true);
+  }
+
+  const quotesOn = copy.quotesEnabled === true;
+  const accountsOn = copy.accountsEnabled === true;
 
   async function submitQuote(e) {
     e.preventDefault();
@@ -307,14 +359,23 @@ export default function Catalog() {
       setError("Valida el RUC en SUNAT para emitir la cotización.");
       return;
     }
+    setQuoting(true);
     try {
       const q = await api("/catalog/quotes", { method: "POST", body: { isos: cart, kind, dispatchPlace } });
       setCart([]);
       setQuoteOpen(false);
       nav("/mi-cuenta");
-      setMsg(`Solicitud ${q.number} enviada.`);
+      setMsg(
+        q.odoo?.saleName
+          ? `Cotización Odoo ${q.odoo.saleName} emitida.`
+          : q.odoo?.job?.error
+            ? `Solicitud ${q.number} creada, pero Odoo no emitió: ${q.odoo.job.error}`
+            : `Solicitud ${q.number} enviada. Se está emitiendo en Odoo.`,
+      );
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "No se pudo cotizar");
+    } finally {
+      setQuoting(false);
     }
   }
 
@@ -357,7 +418,7 @@ export default function Catalog() {
       {splash ? <CatalogSplash mode={splash} /> : null}
       <header className="topbar">
         <div className="topbar-inner topbar-public">
-          <Link to="/" className="brand"><img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" /></Link>
+          <Link to={catalogHome()} className="brand"><img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" /></Link>
           {user ? (
             <nav className="navtabs">
               {user.role === "cliente" ? <Link to="/mi-cuenta" className="navtab">Mi cuenta</Link> : null}
@@ -372,9 +433,9 @@ export default function Catalog() {
               <button className="btn-ghost btn-salir-ghost" type="button" onClick={async () => { await logout(); goAppRoot(); }}>
                 {copy.logoutLabel}
               </button>
-            ) : (
+            ) : quotesOn || accountsOn ? (
               <Link to="/login" className="navtab">{copy.loginLabel}</Link>
-            )}
+            ) : null}
           </div>
         </div>
       </header>
@@ -420,6 +481,12 @@ export default function Catalog() {
       </div>
 
       <div className="view active catalog-wrap">
+        {shareErr ? <div className="err">{shareErr}</div> : null}
+        {share ? (
+          <div className="ok-msg">
+            Hola {share.clientName}. {share.vendorName} te comparte el stock. El enlace vence {new Date(share.expiresAt).toLocaleString("es-PE")}.
+          </div>
+        ) : null}
         {error ? <div className="err">{error}</div> : null}
         {msg ? <div className="ok-msg">{msg}</div> : null}
         <div className="stock-bar">
@@ -475,13 +542,17 @@ export default function Catalog() {
                   {u.showPrice ? (
                     <div className="card-price">{money(u.gross)} <small>oferta · IGV incl. · neto {money(u.priceList)}</small></div>
                   ) : (
-                    <WhatsAppLink className="price-cta price-cta-wa" href={whatsappUrl(copy, unitWhatsAppMessage(copy, u, dispatchPlace))}>
-                      {copy.requestPrice}
+                    <span className="price-cta">{copy.requestPrice}</span>
+                  )}
+                  {quotesOn ? (
+                    <button className="link-btn" type="button" onClick={() => startFormalQuote(u.iso)}>
+                      {u.showPrice ? copy.requestQuote : copy.requestPrice}
+                    </button>
+                  ) : (
+                    <WhatsAppLink className="link-btn" href={whatsappUrl(copy, unitWhatsAppMessage(copy, u, dispatchPlace))} onClick={() => trackShare("whatsapp", u.iso)}>
+                      {copy.whatsappCta}
                     </WhatsAppLink>
                   )}
-                  <WhatsAppLink className="link-btn" href={whatsappUrl(copy, unitWhatsAppMessage(copy, u, dispatchPlace))}>
-                    {u.showPrice ? copy.requestQuote : copy.whatsappCta}
-                  </WhatsAppLink>
                 </div>
               </div>
             </article>
@@ -608,17 +679,38 @@ export default function Catalog() {
                   {pdp.reserved ? (
                     <button className="btn-primary" style={{ marginTop: 16, width: "100%" }} type="button" disabled>Reservado</button>
                   ) : (
-                    <WhatsAppLink href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp, dispatchPlace))}>
-                      {pdp.showPrice ? copy.requestQuote : copy.requestPrice}
-                    </WhatsAppLink>
+                    <>
+                      {quotesOn ? (
+                        <button
+                          className="btn-primary"
+                          style={{ marginTop: 16, width: "100%" }}
+                          type="button"
+                          onClick={() => startFormalQuote(pdp.iso)}
+                        >
+                          {pdp.showPrice ? copy.requestQuote : copy.requestPrice}
+                        </button>
+                      ) : null}
+                      <WhatsAppLink className={quotesOn ? "link-btn" : "btn-whatsapp"} href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp, dispatchPlace))} onClick={() => trackShare("whatsapp", pdp.iso)}>
+                        {copy.whatsappCta}
+                      </WhatsAppLink>
+                    </>
                   )}
                 </div>
               </div>
             </div>
             {pdp.reserved ? null : (
               <div className="pdp-cta-bar">
-                <WhatsAppLink href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp, dispatchPlace))}>
-                  {pdp.showPrice ? copy.requestQuote : copy.requestPrice}
+                {quotesOn ? (
+                  <button
+                    className="btn-primary"
+                    type="button"
+                    onClick={() => startFormalQuote(pdp.iso)}
+                  >
+                    {pdp.showPrice ? copy.requestQuote : copy.requestPrice}
+                  </button>
+                ) : null}
+                <WhatsAppLink className={quotesOn ? "link-btn" : "btn-whatsapp"} href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp, dispatchPlace))} onClick={() => trackShare("whatsapp", pdp.iso)}>
+                  {copy.whatsappCta}
                 </WhatsAppLink>
               </div>
             )}
@@ -630,14 +722,13 @@ export default function Catalog() {
         <div className="overlay open" onClick={(e) => { if (e.target === e.currentTarget) setQuoteOpen(false); }}>
           <div className="modal quote-modal">
             <div className="modal-head">
-              <h3>Solicitar cotización</h3>
+              <h3>{quotesOn ? "Solicitar cotización" : "Coordinar por WhatsApp"}</h3>
               <button className="modal-close" type="button" onClick={() => setQuoteOpen(false)}>✕</button>
             </div>
             <div className="modal-body single">
-              <WhatsAppLink href={whatsappUrl(copy, cart.length ? cartWhatsAppMessage(copy, cart, dispatchPlace) : cartWhatsAppMessage(copy, [], dispatchPlace))}>
-                {copy.whatsappCta} · {copy.requestQuote}
-              </WhatsAppLink>
-              {cart.length === 0 ? <p className="section-sub" style={{ marginTop: 12 }}>O arma una lista y te llevamos esas unidades al chat.</p> : (
+              {cart.length === 0 ? (
+                <p className="section-sub">Elige una unidad en el catálogo o pulsa «Solicitar cotización» en la ficha.</p>
+              ) : (
                 <ul>{cart.map((iso) => (
                   <li key={iso} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0" }}>
                     <span className="card-iso">{iso}</span>
@@ -646,7 +737,9 @@ export default function Catalog() {
                 ))}</ul>
               )}
               <p className="section-sub" style={{ marginTop: 8 }}>
-                Ver el stock es público. Crear cuenta no exige RUC. Para <b>solicitar la cotización</b> validamos el RUC en SUNAT (máximo 5 consultas; luego 3 horas de espera).
+                {quotesOn
+                  ? "Ver el stock es público. Crear cuenta no exige RUC. Para solicitar la cotización validamos el RUC en SUNAT."
+                  : "La cotización en línea está en modo promoción. El comercial recibe tu interés por WhatsApp y arma la cotización."}
               </p>
               {error ? <div className="err">{error}</div> : null}
               <label>Lugar de despacho (referencial)</label>
@@ -656,6 +749,8 @@ export default function Catalog() {
                 placeholder="Ej. Ate, Callao, Ica…"
                 maxLength={200}
               />
+              {quotesOn ? (
+              <>
               <label>Tipo</label>
               <select value={kind} onChange={(e) => setKind(e.target.value)}>
                 <option value="venta">Venta</option>
@@ -694,7 +789,9 @@ export default function Catalog() {
                       </button>
                     </>
                   )}
-                  <button className="btn-primary" type="submit" disabled={!cart.length || !accountProfile?.quoteReady}>Solicitar cotización</button>
+                  <button className="btn-primary" type="submit" disabled={!cart.length || !accountProfile?.quoteReady || quoting}>
+                    {quoting ? "Emitiendo cotización Odoo…" : "Solicitar cotización"}
+                  </button>
                 </form>
               ) : user ? (
                 <div className="locked-note">Estás en una sesión de staff. Cierra sesión y entra o crea una <b>cuenta de cliente</b> para cotizar.</div>
@@ -724,6 +821,13 @@ export default function Catalog() {
                   )}
                 </>
               )}
+              </>
+              ) : null}
+              <p className="muted" style={{ marginTop: 16 }}>
+                <WhatsAppLink className="btn-whatsapp" href={whatsappUrl(copy, cart.length ? cartWhatsAppMessage(copy, cart, dispatchPlace) : cartWhatsAppMessage(copy, [], dispatchPlace))} onClick={() => trackShare("whatsapp", cart[0])}>
+                  {copy.whatsappCta}
+                </WhatsAppLink>
+              </p>
             </div>
           </div>
         </div>

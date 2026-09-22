@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/commo
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { OdooClient } from "../odoo/odoo.client";
+import { odooQuoteSyncReady } from "../domain/odoo-config";
 import { many2oneId } from "../domain/quote-issue-draft";
 import {
   QuoteSaleCloseError,
@@ -44,7 +45,7 @@ export class RentCloseWorker implements OnModuleInit, OnModuleDestroy {
   async tick() {
     if (this.busy) return;
     const cfg = await this.odoo.readConfig();
-    if (!cfg.enabled || !cfg.url) return;
+    if (!odooQuoteSyncReady(cfg)) return;
     this.busy = true;
     try {
       const jobs = await this.prisma.odooSyncJob.findMany({

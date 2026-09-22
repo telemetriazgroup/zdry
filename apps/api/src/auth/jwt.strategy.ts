@@ -45,10 +45,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       role: user.role,
       customerId: user.customerId,
       hasAvatar: !!user.avatarKey,
+      whatsapp: user.whatsapp || "",
     };
     if (payload.act && payload.act !== user.id) {
       const actor = await this.prisma.user.findUnique({ where: { id: payload.act } });
-      if (!actor || !actor.active || actor.role !== "admin") {
+      if (!actor || !actor.active || actor.role !== "superadmin") {
         throw new UnauthorizedException("La sesión asistida ya no es válida.");
       }
       auth.impersonator = { id: actor.id, email: actor.email, name: actor.name, role: actor.role };

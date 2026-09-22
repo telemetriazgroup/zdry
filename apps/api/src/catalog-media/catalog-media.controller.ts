@@ -26,12 +26,13 @@ export class CatalogMediaController {
   constructor(private readonly media: CatalogMediaService) {}
 
   @Get("meta")
+  @Roles("admin", "almacen", "compras", "gerente", "superadmin")
   meta() {
     return this.media.meta();
   }
 
   @Get("watermark")
-  @Roles("admin", "gerente")
+  @Roles("superadmin")
   async getWatermark() {
     const obj = await this.media.openWatermark();
     return new StreamableFile(obj.stream, {
@@ -42,7 +43,7 @@ export class CatalogMediaController {
   }
 
   @Post("watermark")
-  @Roles("admin", "gerente")
+  @Roles("superadmin")
   @UseInterceptors(FileInterceptor("file", { storage: memoryStorage(), limits: { fileSize: 4 * 1024 * 1024 } }))
   putWatermark(
     @UploadedFile() file: Express.Multer.File | undefined,
@@ -53,7 +54,7 @@ export class CatalogMediaController {
   }
 
   @Delete("watermark")
-  @Roles("admin", "gerente")
+  @Roles("superadmin")
   resetWatermark(@CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.media.resetWatermark(user, req.ip);
   }
@@ -81,6 +82,34 @@ export class CatalogMediaController {
       length: obj.contentLength,
       disposition: "inline",
     });
+  }
+
+  @Get(":iso/odoo-photos")
+  @Roles("admin", "gerente")
+  listOdooPhotos(@Param("iso") iso: string) {
+    return this.media.listOdooPhotos(iso);
+  }
+
+  @Get(":iso/odoo-photos/:attId")
+  @Roles("admin", "gerente")
+  async openOdooPhoto(@Param("iso") iso: string, @Param("attId") attId: string) {
+    const obj = await this.media.openOdooPhoto(iso, attId);
+    return new StreamableFile(obj.buffer, {
+      type: obj.contentType,
+      disposition: `inline; filename="${obj.name.replace(/"/g, "")}"`,
+    });
+  }
+
+  @Post(":iso/odoo-photos/:attId/assign")
+  @Roles("admin", "gerente")
+  assignOdooPhoto(
+    @Param("iso") iso: string,
+    @Param("attId") attId: string,
+    @Body() body: { slot?: string | number },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.media.assignOdooPhoto(iso, attId, String(body.slot ?? ""), user, req.ip);
   }
 
   @Get(":iso/price")

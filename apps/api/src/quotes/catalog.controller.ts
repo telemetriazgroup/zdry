@@ -5,10 +5,14 @@ import { Roles } from "../auth/roles.decorator";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
 import { QuotesService } from "./quotes.service";
+import { CatalogSharesService } from "../catalog-shares/catalog-shares.service";
 
 @Controller("catalog")
 export class CatalogController {
-  constructor(private readonly quotes: QuotesService) {}
+  constructor(
+    private readonly quotes: QuotesService,
+    private readonly shares: CatalogSharesService,
+  ) {}
 
   @Public()
   @Get()
@@ -35,6 +39,18 @@ export class CatalogController {
   @Get("copy")
   copy() {
     return this.quotes.catalogCopy();
+  }
+
+  @Public()
+  @Get("share/:token")
+  share(@Param("token") token: string) {
+    return this.shares.publicByToken(token);
+  }
+
+  @Public()
+  @Post("share/:token/events")
+  shareEvent(@Param("token") token: string, @Body() body: Record<string, unknown>) {
+    return this.shares.recordEvent(token, body);
   }
 
   @Public()

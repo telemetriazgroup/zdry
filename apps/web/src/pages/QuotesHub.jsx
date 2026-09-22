@@ -137,6 +137,14 @@ export default function QuotesHub() {
           <div className="panel">
             <h3>{q.order?.displayNumber || q.odoo?.saleName || q.number}{q.demo ? <span className="demo-chip">DEMO</span> : null}</h3>
             <p className="section-sub">{q.customer.companyName} · {STATUS_LABEL[q.dealStatus]} {q.holdPaused ? "· hold en pausa" : ""} · ZDRY {q.number}</p>
+            {q.customer.address || q.customer.sunatState ? (
+              <p className="section-sub">
+                RUC {q.customer.rucDni || q.customer.ruc}
+                {q.customer.address ? ` · ${q.customer.address}` : ""}
+                {q.customer.sunatState ? ` · ${q.customer.sunatState}` : ""}
+                {q.customer.sunatCondition ? ` / ${q.customer.sunatCondition}` : ""}
+              </p>
+            ) : null}
             {q.order?.registered ? (
               <p className="ok-msg">Pedido registrado en ZDRY sobre {q.odoo?.saleName || q.number}. El voucher no confirma la SO.</p>
             ) : null}
@@ -184,7 +192,9 @@ export default function QuotesHub() {
             ) : null}
 
             {q.dealStatus === "nueva" ? (
-              <button className="btn-primary" type="button" onClick={() => act(`/quotes/${q.id}/send`)}>Enviar cotización (PDF Odoo)</button>
+              <button className="btn-primary" type="button" onClick={() => act(`/quotes/${q.id}/send`)}>
+                {q.odoo?.saleName ? "Remitir PDF Odoo" : "Emitir y remitir cotización Odoo"}
+              </button>
             ) : null}
             {q.dealStatus === "cotizada" ? (
               <button className="btn-primary" type="button" onClick={() => act(`/quotes/${q.id}/reserve`)}>Reservar 48 h</button>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, apiUpload, apiUrl, formatWhen } from "../api.js";
-import { useAuth } from "../auth.jsx";
+import { hasRole, useAuth } from "../auth.jsx";
 import SearchCreate from "../search-create.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 import { parseIso6346 } from "../iso6346.js";
@@ -99,7 +99,7 @@ function ArchiveForm({ iso, onDone, onCancel }) {
 }
 
 function pendingSearchText(u) {
-  return [u.iso, u.typeLabel, u.catLabel, u.depotName, u.intakeLabel, u.registeredByName, u.odooLocation, ...(u.missing || [])]
+  return [u.iso, u.typeLabel, u.catLabel, u.depotName, u.intakeLabel, u.registeredByName, u.odooLocation, u.odooWarehouseLabel, ...(u.missing || [])]
     .filter(Boolean)
     .join(" ")
     .toUpperCase();
@@ -139,9 +139,9 @@ function OriginBadges({ u }) {
 export default function Recepcion() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const canSeeOdoo = user.role === "admin";
+  const canSeeOdoo = hasRole(user, "admin");
   const isCoord = user.role === "coordinador";
-  const canCoord = user.role === "admin" || user.role === "coordinador";
+  const canCoord = hasRole(user, "admin", "coordinador");
   const lb = useLightbox();
   const [meta, setMeta] = useState(null);
   const [pending, setPending] = useState([]);
@@ -172,6 +172,7 @@ export default function Recepcion() {
   const [pickedAtt, setPickedAtt] = useState(null);
   const [assigning, setAssigning] = useState(false);
   const [visits, setVisits] = useState([]);
+  const [patioChoice, setPatioChoice] = useState("");
   const [visitForm, setVisitForm] = useState(EMPTY_VISIT);
   const [visitMode, setVisitMode] = useState("pick");
   const [editingVisitId, setEditingVisitId] = useState("");
@@ -389,9 +390,13 @@ export default function Recepcion() {
   async function enableCampo() {
     if (!inspectIso) return;
     try {
-      const next = await api(`/warehouse/units/${inspectIso}/enable-campo`, { method: "POST" });
+      const next = await api(`/warehouse/units/${inspectIso}/enable-campo`, {
+        method: "POST",
+        body: { depotId: patioChoice || undefined },
+      });
       setUnit(next);
-      setMsg(`✓ ${next.iso} enviado a campo.`);
+      setPatioChoice("");
+      setMsg(`✓ ${next.iso} enviado a campo${next.depotName ? ` · ${next.depotName}` : ""}.`);
       await loadPending();
     } catch (e) {
       setError(e.message);
@@ -1395,11 +1400,28 @@ export default function Recepcion() {
         ) : null}
         <div className="recv-confirm-bar">
           {!unit.campoEnabledAt ? (
-            <button className="btn-primary" type="button" onClick={enableCampo}>Enviar a campo</button>
+            <>
+              {unit.needsPatioChoice ? (
+                <div style={{ marginBottom: 8 }}>
+                  <p className="section-sub">Viene de ZGROU/Existencias. Elige el patio físico antes de enviar a campo.</p>
+                  <select value={patioChoice} onChange={(e) => setPatioChoice(e.target.value)}>
+                    <option value="">Principal / Gambeta 1 / Gambeta 2…</option>
+                    {(meta.zgrouPatios || []).map((d) => (
+                      <option key={d.id} value={d.id}>{d.name}</option>
+                    ))}
+                  </select>
+                </div>
+              ) : unit.odooWarehouseLabel ? (
+                <p className="section-sub">Plaza Odoo: {unit.odooWarehouseLabel} · patio {unit.depotName}</p>
+              ) : null}
+              <button className="btn-primary" type="button" onClick={enableCampo} disabled={unit.needsPatioChoice && !patioChoice}>
+                Enviar a campo
+              </button>
+            </>
           ) : (
             <p className="recv-confirm-hint">Ya está en la lista de Patio — campo. La posición en layout es opcional.</p>
           )}
-          {user.role === "admin" ? (
+          {canSeeOdoo ? (
             <button className="btn-ghost" type="button" style={{ marginTop: 8 }} onClick={confirm}>Confirmar recepción → Patio</button>
           ) : null}
           <p className="recv-confirm-hint">Año, fabricante y fotos no son requisito para habilitar campo.</p>
@@ -1471,7 +1493,7 @@ export default function Recepcion() {
           <div className="tablewrap recv-table">
             <table className="data">
               <thead>
-                <tr><th>ISO</th><th>Tipo</th><th>Condición</th><th>Depósito</th><th>Origen</th><th>Registró</th><th>Motivo pendiente</th></tr>
+                <tr><th>ISO</th><th>Tipo</th><th>Condición</th><th>Depósito</th><th>Plaza Odoo</th><th>Origen</th><th>Registró</th><th>Motivo pendiente</th></tr>
               </thead>
               <tbody>
                 {pagePending.map((u) => (
@@ -1494,7 +1516,8 @@ export default function Recepcion() {
                     </td>
                     <td>{u.typeLabel}</td>
                     <td style={{ color: u.catColor }}>{u.catLabel}</td>
-                    <td>{u.depotName}</td>
+                    <td>{u.depotName}{u.needsPatioChoice ? " · elegir patio" : ""}</td>
+                    <td>{u.odooWarehouseLabel || "—"}</td>
                     <td><span className="badge-scope" style={{ background: intakeColor(u.intakeType) }}>{u.intakeLabel}</span></td>
                     <td className="recv-who">{u.registeredByName || "—"}<br />{formatWhen(u.createdAt)}</td>
                     <td>{u.missing.map((r) => <span key={r} className="badge-scope" style={{ background: "#c9720b", marginRight: 4 }}>{r}</span>)}</td>
@@ -1526,7 +1549,7 @@ export default function Recepcion() {
                   onClick={() => { setInspectIso(u.iso); setMode("inspect"); setError(""); }}
                 >
                   <div className="recv-card-meta">{u.typeLabel} · <span style={{ color: u.catColor }}>{u.catLabel}</span></div>
-                  <div className="recv-card-meta">{u.depotName}</div>
+                  <div className="recv-card-meta">{u.depotName}{u.odooWarehouseLabel ? ` · ${u.odooWarehouseLabel}` : ""}{u.needsPatioChoice ? " · elegir patio" : ""}</div>
                   <div className="recv-who">{whoLine(u)}</div>
                   <div className="recv-card-missing">
                     {u.missing.map((r) => <span key={r} className="badge-scope" style={{ background: "#c9720b" }}>{r}</span>)}

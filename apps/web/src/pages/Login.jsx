@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { homeFor, useAuth } from "../auth.jsx";
-import { ApiError, publicUrl } from "../api.js";
+import { api, ApiError, publicUrl } from "../api.js";
 
 function safeNext(raw, user) {
   if (raw && raw.startsWith("/") && !raw.startsWith("//")) return raw;
@@ -12,7 +12,8 @@ export default function Login() {
   const { login, register } = useAuth();
   const nav = useNavigate();
   const [params] = useSearchParams();
-  const [mode, setMode] = useState(params.get("intent") === "quote" ? "register" : "login");
+  const [accountsOn, setAccountsOn] = useState(false);
+  const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -20,12 +21,22 @@ export default function Login() {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
 
+  useEffect(() => {
+    api("/catalog-shares/commerce")
+      .then((c) => {
+        const on = c?.accountsEnabled === true;
+        setAccountsOn(on);
+        if (on && params.get("intent") === "quote") setMode("register");
+      })
+      .catch(() => setAccountsOn(false));
+  }, [params]);
+
   async function submit(e) {
     e.preventDefault();
     setError("");
     setPending(true);
     try {
-      const user = mode === "register"
+      const user = mode === "register" && accountsOn
         ? await register({ email, password, name, phone })
         : await login(email, password);
       nav(safeNext(params.get("next"), user));
@@ -40,7 +51,7 @@ export default function Login() {
     <div className="login-wrap">
       <form className="login-card" onSubmit={submit}>
         <Link to="/"><img className="logo" src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" /></Link>
-        {mode === "register" ? (
+        {mode === "register" && accountsOn ? (
           <>
             <p className="section-sub" style={{ textAlign: "left" }}>
               El catálogo es público. Para cotizar validaremos tu RUC en SUNAT; crear la cuenta solo pide contacto y correo.
@@ -57,11 +68,15 @@ export default function Login() {
         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
         {error ? <div className="err">{error}</div> : null}
         <button className="btn-primary" type="submit" disabled={pending}>
-          {pending ? "…" : mode === "register" ? "Crear cuenta" : "Entrar"}
+          {pending ? "…" : mode === "register" && accountsOn ? "Crear cuenta" : "Entrar"}
         </button>
-        <button className="link-btn" type="button" onClick={() => setMode(mode === "login" ? "register" : "login")}>
-          {mode === "login" ? "¿No tienes cuenta? Regístrate" : "Ya tengo cuenta"}
-        </button>
+        {accountsOn ? (
+          <button className="link-btn" type="button" onClick={() => setMode(mode === "login" ? "register" : "login")}>
+            {mode === "login" ? "¿No tienes cuenta? Regístrate" : "Ya tengo cuenta"}
+          </button>
+        ) : (
+          <p className="muted">La creación de cuentas está desactivada. El comercial te comparte un enlace y coordinan por WhatsApp.</p>
+        )}
       </form>
     </div>
   );

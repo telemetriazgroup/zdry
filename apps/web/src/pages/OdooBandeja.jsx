@@ -51,6 +51,8 @@ export default function OdooBandeja() {
   const [openId, setOpenId] = useState(null);
   const [resetOn, setResetOn] = useState(false);
   const [resetText, setResetText] = useState("");
+  const [resyncOn, setResyncOn] = useState(false);
+  const [resyncText, setResyncText] = useState("");
   const [progress, setProgress] = useState(null);
   const [diary, setDiary] = useState({ runs: [], current: null, entries: [], total: 0, take: 5 });
   const [logLevel, setLogLevel] = useState("all");
@@ -111,7 +113,7 @@ export default function OdooBandeja() {
   }, [q, onlyReview, originFilter]);
 
   useEffect(() => {
-    if (busy !== "Buscando en Odoo" && busy !== "Asimilando") return undefined;
+    if (busy !== "Buscando en Odoo" && busy !== "Asimilando" && busy !== "Sincronizando") return undefined;
     let stop = false;
     const tick = () => {
       api("/odoo-import/progress")
@@ -125,7 +127,7 @@ export default function OdooBandeja() {
   }, [busy, logLevel]);
 
   async function waitForPass() {
-    for (let i = 0; i < 400; i += 1) {
+    for (let i = 0; i < 1800; i += 1) {
       const p = await api("/odoo-import/progress").catch(() => null);
       if (p) setProgress(p);
       await loadLog(p?.runId).catch(() => {});
@@ -139,11 +141,11 @@ export default function OdooBandeja() {
     setBusy(label);
     setError("");
     setMsg("");
-    if (label === "Buscando en Odoo" || label === "Asimilando") setLogTake(5);
+    if (label === "Buscando en Odoo" || label === "Asimilando" || label === "Sincronizando") setLogTake(5);
     try {
       const out = await fn();
       let p = null;
-      if (out?.running || label === "Buscando en Odoo") {
+      if (out?.running || label === "Buscando en Odoo" || label === "Asimilando" || label === "Sincronizando") {
         p = await waitForPass();
         if (p?.status === "error") setError(p.message || "La pasada terminó con error. Revisa el diario.");
         else setMsg(p?.message || out?.message || "Listo.");
@@ -193,7 +195,8 @@ export default function OdooBandeja() {
       <p className="section-sub">
         El puente J2 aplica cambios de Odoo solos (tara, IN, OC). «Buscar en Odoo» es un <b>forzar</b> completo.
         Clasifica si entraron por <b>ajuste</b>, <b>OC/IN</b> o <b>fabricación (MO)</b>.
-        Un ajuste o una MO no inventa factura; usa el precio referencial
+        Un ajuste o una MO no inventa factura; usa el promedio de OC del mismo tipo/plaza.
+        Si el tipo no tiene OC, cae al promedio general
         {referential?.effective != null ? ` (USD ${Number(referential.effective).toLocaleString("en-US")})` : ""}.
       </p>
       {probe && !probe.ok ? <div className="err">{probe.message}</div> : null}
@@ -317,11 +320,12 @@ export default function OdooBandeja() {
         </div>
       ) : null}
 
-      {progress && (busy === "Buscando en Odoo" || progress.status === "running") ? (
+      {progress && (busy === "Buscando en Odoo" || busy === "Asimilando" || busy === "Sincronizando" || progress.status === "running") ? (
         <div className="odoo-progress">
           <div className="odoo-progress-msg">
-            Asimilando · {progress.step || "…"}
+            {busy || "Progreso"} · {progress.step || "…"}
             {progress.iso ? ` · ${progress.iso}` : ""}
+            {progress.total ? ` · ${progress.current || 0}/${progress.total}` : ""}
           </div>
           <div className="odoo-progress-bar" aria-valuemin={0} aria-valuemax={progress.total || 5} aria-valuenow={progress.current || 0}>
             <i style={{ width: `${Math.min(100, ((progress.current || 0) / (progress.total || 5)) * 100)}%` }} />
@@ -381,12 +385,45 @@ export default function OdooBandeja() {
           </select>
         </label>
         {canReset ? (
-          <button className="btn-ghost" type="button" disabled={busy === "Reiniciando"} onClick={() => { setResetOn((v) => !v); setResetText(""); }}>
-            Reiniciar módulo
-          </button>
+          <>
+            <button className="btn-ghost" type="button" disabled={busy === "Reiniciando" || busy === "Sincronizando"} onClick={() => { setResyncOn((v) => !v); setResyncText(""); setResetOn(false); }}>
+              Re-sincronizar asimilados
+            </button>
+            <button className="btn-ghost" type="button" disabled={busy === "Reiniciando"} onClick={() => { setResetOn((v) => !v); setResetText(""); setResyncOn(false); }}>
+              Reiniciar módulo
+            </button>
+          </>
         ) : null}
         <Link className="btn-ghost" to="/app/almacen/recepcion">Ir a Recepción</Link>
       </div>
+
+      {resyncOn ? (
+        <div className="odoo-resync">
+          <b>Quitar solo lo asimilado y sincronizar</b>
+          <p className="section-sub">
+            Borra las unidades asimiladas desde Odoo (no vendidas) y sus candidatos. Conserva ventas y reentregas
+            manuales. Luego lanza Buscar en Odoo. Escribe SINCRONIZAR.
+          </p>
+          <div className="action-row">
+            <input value={resyncText} onChange={(e) => setResyncText(e.target.value)} placeholder="SINCRONIZAR" />
+            <button
+              className="btn-primary"
+              type="button"
+              disabled={!!busy || resyncText.trim().toUpperCase() !== "SINCRONIZAR"}
+              onClick={() =>
+                run("Sincronizando", () => api("/odoo-import/resync", { method: "POST", body: { confirm: "SINCRONIZAR" } })).then((out) => {
+                  if (out) {
+                    setResyncOn(false);
+                    setResyncText("");
+                  }
+                })
+              }
+            >
+              Borrar asimilados y buscar
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {resetOn ? (
         <div className="odoo-reset">
@@ -520,7 +557,10 @@ export default function OdooBandeja() {
                 </td>
                 <td>{costLabel(r, referential)}</td>
                 <td>{r.productCode ? `[${r.productCode}] ` : ""}{r.productName}</td>
-                <td>{r.locationName || "—"}</td>
+                <td>
+                  {r.odooWarehouse === "PIURA" ? "Piura" : r.odooWarehouse === "ZGROU" ? "ZGROU / Callao" : r.odooWarehouse || ""}
+                  {r.locationName ? <div className="muted">{r.locationName}</div> : "—"}
+                </td>
                 <td>{r.color || "—"}</td>
                 <td>{r.tareKg || "—"}</td>
                 <td>{r.dua || "—"}</td>

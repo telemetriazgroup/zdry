@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
-import { useAuth } from "../auth.jsx";
+import { hasRole, useAuth } from "../auth.jsx";
 
 export default function Inventory() {
   const { user } = useAuth();
@@ -17,7 +17,7 @@ export default function Inventory() {
 
   return (
     <>
-      <h2 className="section-title">{user.role === "admin" ? "Inventario y costos" : "Inventario disponible"}</h2>
+      <h2 className="section-title">{hasRole(user, "admin", "compras") ? "Inventario y costos" : "Inventario disponible"}</h2>
       <p className="section-sub">
         Unidades reales en BD. El servidor oculta FOB y C_T según el rol — el vendedor y el operador no reciben esos campos aunque inspeccionen la red.
       </p>

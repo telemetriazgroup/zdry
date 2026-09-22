@@ -30,9 +30,18 @@ export function normalizeOdooConfig(raw: unknown, fallback: OdooConfig = envOdoo
   };
 }
 
+export function odooCredentialsReady(cfg: OdooConfig): boolean {
+  return Boolean(cfg.url && cfg.db && cfg.user && cfg.apiKey);
+}
+
+/** Emisión de cotización: si hay URL y clave, opera. El flag enabled=false de S0 no debe dejar el job en cola. */
+export function odooQuoteSyncReady(cfg: OdooConfig): boolean {
+  return odooCredentialsReady(cfg);
+}
+
 export function publicOdooConfig(cfg: OdooConfig) {
   return {
-    enabled: cfg.enabled,
+    enabled: cfg.enabled || odooCredentialsReady(cfg),
     url: cfg.url,
     db: cfg.db,
     user: cfg.user,

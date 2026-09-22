@@ -24,13 +24,13 @@ import OdooBandeja from "./OdooBandeja.jsx";
 import SystemBackup from "./SystemBackup.jsx";
 import DryStats from "./DryStats.jsx";
 import Alquileres from "./Alquileres.jsx";
+import CatalogShares from "./CatalogShares.jsx";
 
 const SIDEBAR_KEY = "zdry.sidebarCollapsed";
 
 function allowed(nav, pathname, role) {
+  if (role === "superadmin" && pathname.startsWith("/app")) return true;
   if ((role === "admin" || role === "compras") && pathname.startsWith("/app/compras")) return true;
-  if (role === "superadmin" && pathname.startsWith("/app/estadistica-dry")) return true;
-  if ((role === "admin" || role === "superadmin") && pathname.startsWith("/app/almacen/odoo")) return true;
   if ((role === "admin" || role === "coordinador") && pathname.startsWith("/app/almacen/recepcion")) return true;
   if ((role === "admin" || role === "coordinador") && pathname.startsWith("/app/almacen/visitas")) return true;
   if ((role === "admin" || role === "almacen" || role === "coordinador") && (pathname.startsWith("/app/almacen/patio") || pathname.startsWith("/app/almacen/campo"))) return true;
@@ -164,6 +164,7 @@ export default function Shell() {
             <Route path="pagos" element={<Gate nav={nav} role={user.role} path="/app/pagos"><QuotesHub /></Gate>} />
             <Route path="seguimiento" element={<Gate nav={nav} role={user.role} path="/app/seguimiento"><QuotesHub /></Gate>} />
             <Route path="alquileres" element={<Gate nav={nav} role={user.role} path="/app/alquileres"><Alquileres /></Gate>} />
+            <Route path="enlaces-catalogo" element={<Gate nav={nav} role={user.role} path="/app/enlaces-catalogo"><CatalogShares /></Gate>} />
             <Route path="compras/facturas" element={<Gate nav={nav} role={user.role} path="/app/compras/facturas"><Compras /></Gate>} />
             <Route path="compras/conciliar" element={<Gate nav={nav} role={user.role} path="/app/compras/conciliar"><Compras /></Gate>} />
             <Route path="compras/odoo" element={<Gate nav={nav} role={user.role} path="/app/compras/odoo"><Compras /></Gate>} />

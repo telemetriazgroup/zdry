@@ -38,16 +38,19 @@ model User {
   customer         Customer?  @relation(fields: [customerId], references: [id])
   demo             Boolean    @default(false)
   avatarKey        String?
+  whatsapp         String     @default("")
   createdAt        DateTime   @default(now())
   updatedAt        DateTime   @updatedAt
   auditLogs        AuditLog[]
   quotesSold       Quote[]    @relation("QuoteVendor")
+  catalogShares    CatalogShare[]
 
   @@index([demo])
 }
 
 model Depot {
   id           String      @id @default(uuid())
+  code         String?     @unique
   name         String
   city         String
   address      String
@@ -124,6 +127,9 @@ model Container {
   intakeOrigin       String              @default("manual")
   odooLotId          Int?
   odooLocation       String?
+  odooWarehouse      String?
+  overlaySkipKeys    Json?
+  overlayExtras      Json?
   odooDua            String?
   odooPoName         String?
   odooPoId           Int?
@@ -169,9 +175,11 @@ model Container {
   priceChanges            ContainerPriceChange[]
   ratings                 ContainerRating[]
   ratingHistory           ContainerRatingHistory[]
+  odooCachedPhotos        OdooCachedPhoto[]
 
   @@index([depotId])
   @@index([odooLotId])
+  @@index([odooWarehouse])
   @@index([intakeOrigin])
   @@index([status])
   @@index([damNumber])
@@ -301,6 +309,8 @@ model Customer {
   street               String      @default("")
   district             String      @default("")
   province             String      @default("")
+  department           String      @default("")
+  sunatUbigeo          String      @default("")
   sunatState           String      @default("")
   sunatCondition       String      @default("")
   rucValidatedAt       DateTime?
@@ -621,6 +631,7 @@ model OdooLotCandidate {
   productName    String    @default("")
   productCode    String    @default("")
   locationName   String    @default("")
+  odooWarehouse  String?
   locationOdooId Int?
   qtyOnHand      Float     @default(0)
   color          String?
@@ -663,11 +674,34 @@ model OdooLotCandidate {
   updatedAt      DateTime  @updatedAt
   writebacks     OdooFieldWriteback[]
   conflicts      OdooFieldConflict[]
+  cachedPhotos   OdooCachedPhoto[]
 
   @@index([isoNormalized])
   @@index([status])
   @@index([lastSyncedAt])
   @@index([odooSyncStatus])
+}
+
+model OdooCachedPhoto {
+  id           String           @id @default(uuid())
+  odooLotId    Int
+  odooAttId    Int
+  containerIso String?
+  container    Container?       @relation(fields: [containerIso], references: [iso], onDelete: SetNull)
+  candidateId  String?
+  candidate    OdooLotCandidate? @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+  storageKey   String
+  mimeType     String
+  originalName String
+  sizeBytes    Int              @default(0)
+  kind         String           @default("inbox")
+  fetchedAt    DateTime         @default(now())
+  createdAt    DateTime         @default(now())
+
+  @@unique([odooLotId, odooAttId])
+  @@index([containerIso])
+  @@index([candidateId])
+  @@index([odooLotId])
 }
 
 model OdooFieldWriteback {
@@ -1155,4 +1189,37 @@ model OdooDryStatsMeta {
   baseline  Json?
   hydrate   Json?
   updatedAt DateTime @updatedAt
+}
+
+model CatalogShare {
+  id             String              @id @default(uuid())
+  token          String              @unique
+  vendorId       String
+  vendor         User                @relation(fields: [vendorId], references: [id])
+  vendorName     String
+  vendorWhatsapp String
+  clientName     String
+  clientCompany  String              @default("")
+  clientPhone    String              @default("")
+  clientNote     String              @default("")
+  hours          Int
+  expiresAt      DateTime
+  createdAt      DateTime            @default(now())
+  events         CatalogShareEvent[]
+
+  @@index([vendorId, createdAt])
+  @@index([expiresAt])
+}
+
+model CatalogShareEvent {
+  id        String       @id @default(uuid())
+  shareId   String
+  share     CatalogShare @relation(fields: [shareId], references: [id], onDelete: Cascade)
+  kind      String
+  iso       String?
+  detail    Json?
+  createdAt DateTime     @default(now())
+
+  @@index([shareId, createdAt])
+  @@index([iso])
 }

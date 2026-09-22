@@ -7,6 +7,7 @@ import { DEFAULT_PRICING_RULES, computeListPrices } from "../domain/pricing";
 import { DEFAULT_VISIBILITY_RULES } from "../domain/visibility";
 import { DEFAULT_PAYMENT_ACCOUNTS } from "../domain/payment-accounts";
 import { SYSTEM_DEPOT_CONCEPTS } from "../domain/depot-costs";
+import { backfillWarehouseAndDepots, ensureOperationalDepots } from "../odoo-import/depot-map.store";
 import { EvaluationService } from "../evaluation/evaluation.service";
 
 const PASSWORD = process.env.SEED_PASSWORD || "Zdry123!";
@@ -114,6 +115,8 @@ export class SeedService implements OnModuleInit {
     if (depotCount === 0) {
       await this.prisma.depot.createMany({ data: DEPOTS.map((d) => ({ ...d, protected: true })) });
     }
+    await ensureOperationalDepots(this.prisma);
+    await backfillWarehouseAndDepots(this.prisma).catch((e) => this.log.warn(`backfill almacenes: ${(e as Error).message}`));
 
     if (!initialized && (await this.prisma.customer.count()) === 0) {
       await this.prisma.customer.createMany({

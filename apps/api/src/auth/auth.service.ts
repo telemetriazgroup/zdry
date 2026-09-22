@@ -6,6 +6,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { StorageService } from "../storage/storage.service";
 import { AuthUser } from "./auth.types";
+import { CATALOG_COMMERCE_KEY, normalizeCatalogCommerce, publicAccountsBlockedMessage, whatsappDigits } from "../domain/catalog-commerce";
 import { extForInspectionMime, sniffInspectionPhotoMime } from "../domain/inspection-media";
 
 const MAX_AVATAR_BYTES = 4 * 1024 * 1024;
@@ -77,12 +78,13 @@ export class AuthService {
       role: user.role,
       customerId: user.customerId ?? null,
       hasAvatar: !!user.hasAvatar,
+      whatsapp: user.whatsapp || "",
       impersonator: user.impersonator ?? null,
     };
   }
 
   private asAuth(
-    user: { id: string; email: string; name: string; role: AuthUser["role"]; customerId?: string | null; avatarKey?: string | null },
+    user: { id: string; email: string; name: string; role: AuthUser["role"]; customerId?: string | null; avatarKey?: string | null; whatsapp?: string | null },
     impersonator?: AuthUser["impersonator"],
   ): AuthUser {
     return {
@@ -92,6 +94,7 @@ export class AuthService {
       role: user.role,
       customerId: user.customerId ?? null,
       hasAvatar: !!user.avatarKey,
+      whatsapp: user.whatsapp || "",
       impersonator: impersonator ?? null,
     };
   }
@@ -127,6 +130,10 @@ export class AuthService {
     const name = (input.name || "").trim();
     const companyName = (input.companyName || "").trim();
     const phone = (input.phone || "").trim();
+    const commerceRow = await this.prisma.appSetting.findUnique({ where: { key: CATALOG_COMMERCE_KEY } });
+    if (!normalizeCatalogCommerce(commerceRow?.value).accountsEnabled) {
+      throw new ForbiddenException(publicAccountsBlockedMessage());
+    }
     if (!email || !password || password.length < 8) throw new BadRequestException("Correo y clave de al menos 8 caracteres.");
     if (!name || !phone) throw new BadRequestException("Persona de contacto y teléfono son obligatorios.");
     const exists = await this.prisma.user.findUnique({ where: { email } });
@@ -168,7 +175,7 @@ export class AuthService {
         this.prisma.user.findUnique({ where: { id: payload.sub } }),
         this.prisma.user.findUnique({ where: { id: payload.act } }),
       ]);
-      if (!target?.active || !actor?.active || actor.role !== "admin") {
+      if (!target?.active || !actor?.active || actor.role !== "superadmin") {
         throw new UnauthorizedException("La sesión asistida ya no es válida.");
       }
       const actorAuth = this.asAuth(actor);
@@ -228,7 +235,7 @@ export class AuthService {
 
   async impersonate(admin: AuthUser, targetId: string, ip: string | undefined, res: Response) {
     if (admin.impersonator) throw new BadRequestException("Ya estás en una sesión asistida. Vuelve a tu usuario primero.");
-    if (admin.role !== "admin") throw new ForbiddenException("Solo el administrador puede ver la interfaz de otro usuario.");
+    if (admin.role !== "superadmin") throw new ForbiddenException("Solo el superusuario puede entrar como otro usuario.");
     if (!targetId || targetId === admin.id) throw new BadRequestException("Elige un usuario distinto.");
     const target = await this.prisma.user.findUnique({ where: { id: targetId } });
     if (!target) throw new BadRequestException("Usuario no encontrado.");
@@ -257,9 +264,9 @@ export class AuthService {
   async stopImpersonate(user: AuthUser, ip: string | undefined, res: Response) {
     if (!user.impersonator) throw new BadRequestException("No hay sesión asistida activa.");
     const admin = await this.prisma.user.findUnique({ where: { id: user.impersonator.id } });
-    if (!admin || !admin.active || admin.role !== "admin") {
+    if (!admin || !admin.active || admin.role !== "superadmin") {
       this.clearAuthCookies(res);
-      throw new UnauthorizedException("No se pudo restaurar la sesión del administrador.");
+      throw new UnauthorizedException("No se pudo restaurar la sesión del superusuario.");
     }
     const adminAuth = this.asAuth(admin);
     const access = this.signAccess(adminAuth);
@@ -280,23 +287,24 @@ export class AuthService {
     return { user: this.toPublic(adminAuth) };
   }
 
-  async updateProfile(user: AuthUser, body: { name?: string; email?: string }, ip?: string) {
+  async updateProfile(user: AuthUser, body: { name?: string; email?: string; whatsapp?: string }, ip?: string) {
     const name = (body.name || "").trim();
     const email = (body.email || "").trim().toLowerCase();
     if (!name) throw new BadRequestException("El nombre es obligatorio.");
     if (!email) throw new BadRequestException("El correo es obligatorio.");
     const clash = await this.prisma.user.findFirst({ where: { email, NOT: { id: user.id } } });
     if (clash) throw new ConflictException("Ya existe una cuenta con ese correo.");
+    const whatsapp = body.whatsapp !== undefined ? whatsappDigits(body.whatsapp) : undefined;
     const row = await this.prisma.user.update({
       where: { id: user.id },
-      data: { name, email },
+      data: { name, email, ...(whatsapp !== undefined ? { whatsapp } : {}) },
     });
     await this.audit.log({
       user,
       action: "update_profile",
       entity: "User",
       entityId: user.id,
-      after: { name: row.name, email: row.email },
+      after: { name: row.name, email: row.email, whatsapp: row.whatsapp },
       ip,
     });
     return this.toPublic(this.asAuth(row, user.impersonator));

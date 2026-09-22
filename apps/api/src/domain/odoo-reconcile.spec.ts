@@ -1,4 +1,4 @@
-import { assertConfirmMatch, proposeMatch, reconcileContainerPatch } from "./odoo-reconcile";
+import { assertConfirmMatch, isPendingValuation, proposeMatch, reconcileContainerPatch } from "./odoo-reconcile";
 
 const BMOU = { iso: "BMOU433548-9" };
 const IN_06302 = {
@@ -52,6 +52,15 @@ describe("assertConfirmMatch", () => {
 
   it("IN borrador → 400", () => {
     expect(assertConfirmMatch({ alreadyPoId: null, pickingState: "draft" }).ok).toBe(false);
+  });
+});
+
+describe("isPendingValuation", () => {
+  it("reentrega sin OC espera valor y proveedor", () => {
+    expect(isPendingValuation({ odooPoId: null, invoicePending: true, intakeType: "pendiente_factura", status: "Disponible" })).toBe(true);
+    expect(isPendingValuation({ odooPoId: 12, invoicePending: true, intakeType: "pendiente_factura" })).toBe(false);
+    expect(isPendingValuation({ odooPoId: null, invoicePending: true, intakeType: "ajuste_odoo" })).toBe(false);
+    expect(isPendingValuation({ odooPoId: null, invoicePending: false, intakeType: "compra" })).toBe(false);
   });
 });
 

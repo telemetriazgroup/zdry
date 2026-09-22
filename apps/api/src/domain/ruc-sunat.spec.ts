@@ -1,12 +1,16 @@
 import {
   RUC_LOOKUP_LOCK_MS,
   RUC_LOOKUP_MAX,
+  isValidPeruRuc,
   mapSunatRuc,
   missingAccountFields,
   missingQuoteFields,
   nextRucLookupState,
   normalizeRuc,
+  presentSunat,
   rucLookupGate,
+  sunatAddressLine,
+  sunatNeedsRefresh,
 } from "./ruc-sunat";
 
 describe("ruc-sunat Q1", () => {
@@ -14,6 +18,12 @@ describe("ruc-sunat Q1", () => {
     expect(normalizeRuc("20.421.360.121")).toBe("20421360121");
     expect(normalizeRuc("12345678")).toBeNull();
     expect(normalizeRuc("")).toBeNull();
+  });
+
+  it("valida dígito verificador SUNAT", () => {
+    expect(isValidPeruRuc("20100070970")).toBe(true);
+    expect(isValidPeruRuc("20100070971")).toBe(false);
+    expect(isValidPeruRuc("73144300")).toBe(false);
   });
 
   it("permite 5 consultas y a la 6.ª bloquea 3 horas", () => {
@@ -42,6 +52,55 @@ describe("ruc-sunat Q1", () => {
     const b = mapSunatRuc({ RazonSocial: "IMEXCAL S.R.L.", Direccion: "LIMA", Distrito: "ATE" }, "20603301234");
     expect(b?.district).toBe("ATE");
     expect(mapSunatRuc({ vat: "20413160121" }, "20413160121")).toBeNull();
+  });
+
+  it("jala domicilio, estado y condición de EYM/Odoo", () => {
+    const eym = mapSunatRuc(
+      {
+        ok: true,
+        source: "eym",
+        vat: "20521180774",
+        name: "ZGROUP S.A.C.",
+        street: "CAL. ORDONER VARGAS NRO 142",
+        district: "LOS OLIVOS",
+        province: "LIMA",
+        department: "LIMA",
+        taxpayer_state: "ACTIVO",
+        taxpayer_condition: "HABIDO",
+      },
+      "20521180774",
+    );
+    expect(eym).toMatchObject({
+      companyName: "ZGROUP S.A.C.",
+      street: "CAL. ORDONER VARGAS NRO 142",
+      district: "LOS OLIVOS",
+      department: "LIMA",
+      sunatState: "ACTIVO",
+      sunatCondition: "HABIDO",
+      source: "eym",
+    });
+    expect(sunatAddressLine(eym!)).toContain("LOS OLIVOS");
+    expect(sunatNeedsRefresh({ rucDni: "20521180774", street: "", sunatState: "SIN_ODOO" })).toBe(true);
+    expect(sunatNeedsRefresh({ rucDni: "20521180774", street: "CAL. X", sunatState: "ACTIVO" })).toBe(false);
+    expect(presentSunat({ ...eym!, rucDni: eym!.ruc }).address).toMatch(/ORDONER/);
+  });
+
+  it("desanida data/result de otras APIs SUNAT", () => {
+    const nested = mapSunatRuc(
+      {
+        data: {
+          ruc: "20100070970",
+          razonSocial: "SUPERMERCADOS PERUANOS",
+          direccion: "CAL. MORELLI 181",
+          distrito: "SAN BORJA",
+          estado: "ACTIVO",
+          condicion: "HABIDO",
+        },
+      },
+      "20100070970",
+    );
+    expect(nested?.street).toBe("CAL. MORELLI 181");
+    expect(nested?.sunatState).toBe("ACTIVO");
   });
 
   it("cotizar exige RUC validado; la cuenta no", () => {

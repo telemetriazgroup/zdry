@@ -1,6 +1,7 @@
 /** Reglas jerárquicas de precio — oráculo zdry_prototype_26.html (PRICING_RULES / resolveRule). */
 
 import { applyShowPrice, type VisibilityRule } from "./visibility";
+import { applyOverlays, type OverlayConcept } from "./acquisition-overlay";
 
 export type PricingScope = "global" | "category" | "manufacturer" | "container" | "type";
 
@@ -20,6 +21,10 @@ export type PricedUnit = {
   fobCif?: number | null;
   costSource?: string | null;
   dryReferential?: number | null;
+  odooWarehouse?: string | null;
+  odooVendorName?: string | null;
+  overlaySkipKeys?: string[] | null;
+  overlayExtras?: Array<{ key?: string; label: string; amount: number; note?: string }> | null;
 };
 
 export function pricingSpecificity(scope: string): number {
@@ -104,15 +109,37 @@ export function computeListPrices(
   unit: PricedUnit,
   rules: PricingRule[],
   refs?: AcquisitionRef[] | null,
-): { priceList: number; priceMin: number; marginPct: number; maxDiscountPct: number; base: number } {
+  overlays?: OverlayConcept[] | null,
+): {
+  priceList: number;
+  priceMin: number;
+  marginPct: number;
+  maxDiscountPct: number;
+  base: number;
+  rawBase: number;
+  overlayTotal: number;
+  overlayLines: ReturnType<typeof applyOverlays>["overlays"];
+  acqKind: string;
+} {
   const rule = resolvePricingRule(unit, rules) || { scope: "global", marginPct: 22, maxDiscountPct: 10 };
   const acq = resolveAcquisition(unit, refs);
-  const base = acq.amount;
+  const applied = applyOverlays(acq, unit, overlays);
+  const base = applied.base;
   const margin = Number(rule.marginPct) || 22;
   const maxDisc = Number(rule.maxDiscountPct) || 10;
   const priceList = Math.round(base / (1 - margin / 100));
   const priceMin = Math.round(priceList * (1 - maxDisc / 100));
-  return { priceList, priceMin, marginPct: margin, maxDiscountPct: maxDisc, base };
+  return {
+    priceList,
+    priceMin,
+    marginPct: margin,
+    maxDiscountPct: maxDisc,
+    base,
+    rawBase: applied.raw,
+    overlayTotal: applied.overlayTotal,
+    overlayLines: applied.overlays,
+    acqKind: acq.kind,
+  };
 }
 
 /** Regla 4 / 19: el neto no puede bajar del piso de lista salvo override de Gerente. */
@@ -185,23 +212,26 @@ export function describeOffer(
   visRules: VisibilityRule[],
   stored: OfferSnapshot,
   refs?: AcquisitionRef[] | null,
+  overlays?: OverlayConcept[] | null,
 ) {
-  const computed = computeListPrices(unit, rules, refs);
+  const computed = computeListPrices(unit, rules, refs, overlays);
   const source = stored.priceSource === "manual" ? "manual" : "rule";
   const priceList = stored.priceList != null && stored.priceList > 0 ? stored.priceList : computed.priceList;
   const priceMin = stored.priceMin != null && stored.priceMin > 0 ? stored.priceMin : computed.priceMin;
   const rule = resolvePricingRule(unit, rules) || { scope: "global", target: null, marginPct: 22, maxDiscountPct: 10 };
   const acq = resolveAcquisition(unit, refs);
-  const base = acq.amount;
   const baseKind = acq.kind;
+  const overlayBit = computed.overlayTotal
+    ? ` + extras ${moneyUsd(computed.overlayTotal)} = base ${moneyUsd(computed.base)}`
+    : "";
   const baseLabel =
     acq.kind === "fobCif"
-      ? `costo FOB/CIF ${moneyUsd(base)}`
+      ? `costo FOB/CIF ${moneyUsd(computed.rawBase)}${overlayBit}`
       : acq.kind === "referential"
-        ? `costo referencial DRY ${moneyUsd(base)}`
+        ? `costo referencial DRY ${moneyUsd(computed.rawBase)}${overlayBit}`
         : acq.kind === "refTypeCat"
-        ? `costo de referencia ${unit.type} · ${unit.cat} (${moneyUsd(base)})`
-        : `costo de referencia del tipo ${unit.type} (${moneyUsd(base)})`;
+        ? `costo de referencia ${unit.type} · ${unit.cat} (${moneyUsd(computed.rawBase)})${overlayBit}`
+        : `costo de referencia del tipo ${unit.type} (${moneyUsd(computed.rawBase)})${overlayBit}`;
   const ruleLabel = `${SCOPE_LABEL[rule.scope] || rule.scope}${rule.target ? ` ${rule.target}` : ""}`;
   const title = source === "manual"
     ? stored.adjustedByName
@@ -236,7 +266,10 @@ export function describeOffer(
     source,
     title,
     detail,
-    base,
+    base: computed.base,
+    rawBase: computed.rawBase,
+    overlayTotal: computed.overlayTotal,
+    overlayLines: computed.overlayLines,
     baseKind,
     ruleScope: rule.scope,
     ruleTarget: rule.target || null,

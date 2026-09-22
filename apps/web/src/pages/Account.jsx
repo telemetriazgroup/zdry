@@ -7,8 +7,8 @@ import FollowTimeline from "./FollowTimeline.jsx";
 
 const money = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
 const STATUS_LABEL = {
-  nueva: "Nueva — el comercial te enviará la cotización",
-  cotizada: "Cotizada — ya puedes pedir reserva o descuento",
+  nueva: "Emitiendo cotización Odoo…",
+  cotizada: "Cotizada — presupuesto Odoo listo",
   reservada: "Reservada 48 h — transfiere y adjunta el voucher",
   en_negociacion: "En negociación con tu comercial",
   comprobante_subido: "Comprobante recibido",
@@ -80,6 +80,13 @@ export default function Account() {
   }, [user.name]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const pending = quotes.some((q) => q.dealStatus === "nueva" && !q.odoo?.saleName);
+    if (!pending) return undefined;
+    const t = setInterval(() => load(), 5000);
+    return () => clearInterval(t);
+  }, [quotes, load]);
 
   async function saveProfile(e) {
     e.preventDefault();
@@ -178,10 +185,17 @@ export default function Account() {
         <div className="panel" style={{ marginBottom: 18 }}>
           <h3>RUC / empresa (SUNAT)</h3>
           {profile?.quoteReady ? (
-            <p className="ok-msg">
-              {profile.customer?.rucDni} · {profile.customer?.companyName}
-              {profile.customer?.street ? ` · ${profile.customer.street}` : ""}
-            </p>
+            <div className="ok-msg">
+              <div>{profile.customer?.rucDni} · {profile.customer?.companyName}</div>
+              {profile.customer?.address ? <div className="section-sub" style={{ marginTop: 6 }}>{profile.customer.address}</div> : null}
+              {profile.customer?.sunatState || profile.customer?.sunatCondition ? (
+                <div className="section-sub">
+                  {profile.customer.sunatState ? `Estado SUNAT: ${profile.customer.sunatState}` : ""}
+                  {profile.customer.sunatState && profile.customer.sunatCondition ? " · " : ""}
+                  {profile.customer.sunatCondition ? `Condición: ${profile.customer.sunatCondition}` : ""}
+                </div>
+              ) : null}
+            </div>
           ) : null}
           <p className="section-sub">
             Consultas restantes: {profile?.rucLookup?.remaining ?? 5}/5
@@ -273,6 +287,14 @@ export default function Account() {
                   {detail.order?.registered ? " · pedido registrado en ZDRY (voucher). No es una OC de Odoo." : "."}
                 </p>
               ) : null}
+              {detail.customer?.address || detail.customer?.sunatState ? (
+                <p className="section-sub">
+                  {detail.customer.companyName} · RUC {detail.customer.rucDni}
+                  {detail.customer.address ? ` · ${detail.customer.address}` : ""}
+                  {detail.customer.sunatState ? ` · ${detail.customer.sunatState}` : ""}
+                  {detail.customer.sunatCondition ? ` / ${detail.customer.sunatCondition}` : ""}
+                </p>
+              ) : null}
               {detail.odoo?.close?.quoted ? (
                 <p className="section-sub">
                   {detail.odoo.close.confirmed ? "Confirmada" : "Presupuesto"}
@@ -290,7 +312,7 @@ export default function Account() {
                     window.open(URL.createObjectURL(blob));
                   }}
                 >
-                  {detail.odoo?.pdf?.ready ? "Descargar PDF Perú v2" : "Descargar PDF"}
+                  {detail.odoo?.pdf?.ready ? "Descargar cotización (Perú v2)" : "Descargar PDF"}
                 </button>
               </p>
               {detail.dispatchNotes ? (
@@ -307,7 +329,9 @@ export default function Account() {
                 <div className="locked-note">
                   {detail.odoo?.saleName
                     ? `Tu cotización Odoo ${detail.odoo.saleName} está lista. Cuando el comercial reserve (hold 48 h) transfiere a las cuentas ZDRY y adjunta el voucher: eso registra tu pedido aquí (no es una orden de compra de Odoo).`
-                    : "Cuando tu comercial envíe/reserve la cotización (hold 48 h) podrás negociar descuento y transferir a las cuentas ZDRY."}
+                    : detail.odoo?.job?.error
+                      ? `Odoo no pudo emitir la cotización: ${detail.odoo.job.error}`
+                      : "Estamos creando tu cotización en Odoo. Si no aparece en unos segundos, recarga."}
                 </div>
               ) : null}
               <div style={{ maxHeight: 180, overflow: "auto", background: "var(--bg)", padding: 10, borderRadius: 8, margin: "12px 0" }}>

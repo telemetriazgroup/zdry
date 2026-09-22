@@ -10,7 +10,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { WarehouseService } from "../warehouse/warehouse.service";
 import { StorageService } from "../storage/storage.service";
-import { AuthUser } from "../auth/auth.types";
+import { AuthUser, isSuperadmin } from "../auth/auth.types";
 import { PHOTO_LABELS } from "../domain/yard";
 import { applyCatalogWatermark, loadDefaultWatermark } from "../domain/watermark";
 import { CONDITION_GRADES, parseCondition } from "../domain/odoo-purchase";
@@ -34,6 +34,7 @@ import {
 } from "../domain/pricing";
 import { EvaluationService } from "../evaluation/evaluation.service";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
+import { loadOverlayConcepts, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import { DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
 
 const ACTIVE_PHOTOS = { where: { status: PHOTO_STATUS_ACTIVE } };
@@ -73,9 +74,57 @@ export class CatalogMediaService {
       include: { depot: true, photos: { select: { slot: true, status: true } } },
       orderBy: { iso: "asc" },
     });
+    const isos = rows.map((c) => c.iso);
+    const lotIds = [...new Set(rows.map((c) => c.odooLotId).filter((id): id is number => id != null))];
+    const [pricing, vis, refs, dry, overlays, candidates] = await Promise.all([
+      this.loadPricing(),
+      this.loadVisibility(),
+      this.loadAcquisitionRefs(),
+      presentDryReferential(this.prisma),
+      loadOverlayConcepts(this.prisma),
+      isos.length
+        ? this.prisma.odooLotCandidate.findMany({
+            where: {
+              OR: [
+                { containerIso: { in: isos } },
+                ...(lotIds.length ? [{ odooLotId: { in: lotIds } }] : []),
+              ],
+            },
+            select: { id: true, containerIso: true, odooLotId: true, productCode: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const candByIso = new Map<string, { id: string; productCode: string | null }>();
+    const candByLot = new Map<number, { id: string; productCode: string | null }>();
+    for (const cand of candidates) {
+      const ref = { id: cand.id, productCode: cand.productCode || null };
+      if (cand.containerIso) candByIso.set(cand.containerIso, ref);
+      if (cand.odooLotId != null) candByLot.set(cand.odooLotId, ref);
+    }
     return rows.map((c) => {
       const active = c.photos.filter((p) => p.status === PHOTO_STATUS_ACTIVE);
       const rejected = c.photos.filter((p) => p.status === PHOTO_STATUS_REJECTED);
+      const cand = candByIso.get(c.iso) || (c.odooLotId != null ? candByLot.get(c.odooLotId) : undefined);
+      const unit = {
+        ...overlayUnitFrom({ ...c, productCode: cand?.productCode || null }, dry),
+        depotId: c.depotId,
+        status: c.status,
+      };
+      const offer = describeOffer(
+        unit,
+        pricing,
+        vis,
+        {
+          priceList: c.priceList != null ? Number(c.priceList) : null,
+          priceMin: c.priceMin != null ? Number(c.priceMin) : null,
+          priceSource: c.priceSource,
+          showPriceOverride: c.showPriceOverride,
+          adjustedByName: c.priceAdjustedByName,
+          adjustedAt: c.priceAdjustedAt,
+        },
+        refs,
+        overlays,
+      );
       return {
         iso: c.iso,
         type: c.type,
@@ -102,6 +151,22 @@ export class CatalogMediaService {
         demo: c.demo,
         registeredByName: c.registeredByName || "—",
         createdAt: c.createdAt,
+        odooLotId: c.odooLotId,
+        candidateId: cand?.id || null,
+        odooWarehouse: c.odooWarehouse,
+        odooVendorName: c.odooVendorName,
+        costSource: c.costSource,
+        rawBase: offer.rawBase,
+        overlayTotal: offer.overlayTotal,
+        overlayLines: offer.overlayLines,
+        base: offer.base,
+        baseKind: offer.baseKind,
+        suggestedList: offer.suggestedList,
+        suggestedMin: offer.suggestedMin,
+        priceList: offer.priceList,
+        priceMin: offer.priceMin,
+        priceSource: offer.source,
+        canPublish: active.length >= 1,
       };
     });
   }
@@ -115,6 +180,7 @@ export class CatalogMediaService {
     if (c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
     await this.evaluation.importLegacyForUnit(c.iso, c);
     const evalData = await this.evaluation.forUnit(c.iso);
+    const cand = await this.findCandidate(c.iso, c.odooLotId);
     const active = c.photos.filter((p) => p.status === PHOTO_STATUS_ACTIVE);
     const history = c.photos
       .filter((p) => p.status === PHOTO_STATUS_REJECTED)
@@ -158,7 +224,28 @@ export class CatalogMediaService {
       roofHole: c.roofHole,
       ratings: evalData.ratings,
       ratingHistory: evalData.ratingHistory,
+      odooLotId: c.odooLotId,
+      candidateId: cand?.id || null,
+      intakeOrigin: c.intakeOrigin,
+      odooWarehouse: c.odooWarehouse,
+      odooVendorName: c.odooVendorName,
     };
+  }
+
+  async listOdooPhotos(iso: string) {
+    await this.requireUnit(iso);
+    return this.warehouse.listOdooPhotos(iso);
+  }
+
+  async openOdooPhoto(iso: string, attId: string) {
+    await this.requireUnit(iso);
+    return this.warehouse.openOdooPhoto(iso, attId);
+  }
+
+  async assignOdooPhoto(iso: string, attId: string, slot: string, user: AuthUser, ip?: string) {
+    await this.requireUnit(iso);
+    await this.warehouse.assignOdooPhoto(iso, attId, slot, user, ip);
+    return this.get(iso);
   }
 
   async patchUnit(
@@ -470,20 +557,15 @@ export class CatalogMediaService {
     this.assertApprover(user);
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c || c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
-    const [pricing, vis, refs, dry] = await Promise.all([
+    const [pricing, vis, refs, dry, overlays] = await Promise.all([
       this.loadPricing(),
       this.loadVisibility(),
       this.loadAcquisitionRefs(),
       presentDryReferential(this.prisma),
+      loadOverlayConcepts(this.prisma),
     ]);
     const unit = {
-      iso: c.iso,
-      type: c.type,
-      cat: c.cat,
-      manufacturer: c.manufacturer,
-      fobCif: Number(c.fobCif),
-      costSource: c.costSource,
-      dryReferential: dry.effective,
+      ...overlayUnitFrom(c, dry),
       depotId: c.depotId,
       status: c.status,
     };
@@ -494,6 +576,7 @@ export class CatalogMediaService {
         unit,
         pricing,
         refs,
+        overlays,
       );
       priceList = computed.priceList;
       priceMin = computed.priceMin;
@@ -515,6 +598,7 @@ export class CatalogMediaService {
         adjustedAt: c.priceAdjustedAt,
       },
       refs,
+      overlays,
     );
     const history = await this.prisma.containerPriceChange.findMany({
       where: { iso },
@@ -552,22 +636,15 @@ export class CatalogMediaService {
     this.assertApprover(user);
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c || c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
-    const [pricing, vis, refs, dry] = await Promise.all([
+    const [pricing, vis, refs, dry, overlays] = await Promise.all([
       this.loadPricing(),
       this.loadVisibility(),
       this.loadAcquisitionRefs(),
       presentDryReferential(this.prisma),
+      loadOverlayConcepts(this.prisma),
     ]);
-    const unit = {
-      iso: c.iso,
-      type: c.type,
-      cat: c.cat,
-      manufacturer: c.manufacturer,
-      fobCif: Number(c.fobCif),
-      costSource: c.costSource,
-      dryReferential: dry.effective,
-    };
-    const computed = computeListPrices(unit, pricing, refs);
+    const unit = overlayUnitFrom(c, dry);
+    const computed = computeListPrices(unit, pricing, refs, overlays);
     let priceList = computed.priceList;
     let priceMin = computed.priceMin;
     let source = "rule";
@@ -604,6 +681,7 @@ export class CatalogMediaService {
         adjustedAt: now,
       },
       refs,
+      overlays,
     );
     const note = (body.note || "").trim().slice(0, 240);
     await this.prisma.containerPriceChange.create({
@@ -659,7 +737,23 @@ export class CatalogMediaService {
     return normalizeAcquisitionRefs(row?.value);
   }
 
+  private async requireUnit(iso: string) {
+    const c = await this.prisma.container.findUnique({ where: { iso }, select: { iso: true, archivedAt: true } });
+    if (!c || c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
+    return c;
+  }
+
+  private async findCandidate(iso: string, odooLotId?: number | null) {
+    return this.prisma.odooLotCandidate.findFirst({
+      where: {
+        OR: [{ containerIso: iso }, ...(odooLotId != null ? [{ odooLotId }] : [])],
+      },
+      select: { id: true, productCode: true },
+    });
+  }
+
   private assertApprover(user: AuthUser) {
+    if (isSuperadmin(user.role)) return;
     if (!MEDIA_APPROVER_ROLES.includes(user.role as (typeof MEDIA_APPROVER_ROLES)[number])) {
       throw new ForbiddenException("Solo Administrador o Gerencia pueden publicar, ocultar, rechazar fotos o fijar el precio de oferta.");
     }

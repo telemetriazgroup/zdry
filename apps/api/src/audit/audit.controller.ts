@@ -1,21 +1,14 @@
-import { Controller, Get } from "@nestjs/common";
+import { Controller, Get, Query } from "@nestjs/common";
 import { Roles } from "../auth/roles.decorator";
-import { CurrentUser } from "../auth/current-user.decorator";
-import { AuthUser } from "../auth/auth.types";
-import { PrismaService } from "../prisma/prisma.service";
+import { AuditService } from "./audit.service";
 
 @Controller("audit")
-@Roles("admin")
+@Roles("superadmin")
 export class AuditController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly audit: AuditService) {}
 
   @Get()
-  async list(@CurrentUser() _user: AuthUser) {
-    const rows = await this.prisma.auditLog.findMany({
-      take: 50,
-      orderBy: { createdAt: "desc" },
-      include: { user: { select: { email: true, name: true, role: true } } },
-    });
-    return rows;
+  list(@Query("from") from?: string, @Query("to") to?: string, @Query("take") take?: string) {
+    return this.audit.list(from, to, take ? Number(take) : 2000);
   }
 }

@@ -3,6 +3,82 @@ import { Link } from "react-router-dom";
 import { api, apiUpload, apiUrl, ApiError } from "../api.js";
 import { useAuth } from "../auth.jsx";
 
+function CommercePanel({ onSaved, onError }) {
+  const [st, setSt] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  async function refresh() {
+    setSt(await api("/config/catalog-commerce"));
+  }
+
+  useEffect(() => {
+    refresh().catch((e) => onError(e.message));
+  }, []);
+
+  async function save(patch) {
+    setBusy(true);
+    onError("");
+    onSaved("");
+    try {
+      const next = await api("/config/catalog-commerce", { method: "PUT", body: { ...st, ...patch } });
+      setSt(next);
+      onSaved(next.mode === "full"
+        ? "Modo completo: el cliente puede crear cuenta y pedir cotización en el catálogo."
+        : "Modo promoción: el catálogo se publica y el interés va por WhatsApp. El comercial genera enlaces temporizados.");
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!st) return <div className="panel" style={{ marginBottom: 18 }}><h3>Modo del catálogo</h3><p className="section-sub">Cargando…</p></div>;
+
+  return (
+    <div className="panel" style={{ marginBottom: 18 }}>
+      <h3>Modo del catálogo público</h3>
+      <p className="section-sub">
+        Mientras afinamos la cotización en línea, publica el stock y atiende por WhatsApp. Cuando esté listo, activa el modo completo.
+      </p>
+      <div className="tile-row" style={{ margin: "12px 0" }}>
+        <div className="tile">
+          <div className="v">{st.mode === "full" ? "COMPLETO" : "WHATSAPP"}</div>
+          <div className="l">Modo actual</div>
+        </div>
+        <div className="tile">
+          <div className="v">{st.quotesEnabled ? "Sí" : "No"}</div>
+          <div className="l">Cotización de clientes</div>
+        </div>
+        <div className="tile">
+          <div className="v">{st.accountsEnabled ? "Sí" : "No"}</div>
+          <div className="l">Crear cuentas</div>
+        </div>
+      </div>
+      <div className="form-grid">
+        <div>
+          <label>WhatsApp de respaldo (catálogo sin enlace)</label>
+          <input value={st.whatsapp || ""} onChange={(e) => setSt({ ...st, whatsapp: e.target.value })} placeholder="51 9XX XXX XXX" />
+        </div>
+        <div>
+          <label>Nombre del coordinador</label>
+          <input value={st.coordinatorName || ""} onChange={(e) => setSt({ ...st, coordinatorName: e.target.value })} placeholder="Ventas ZGROUP" />
+        </div>
+      </div>
+      <div className="action-row">
+        <button className="btn-primary" type="button" disabled={busy} onClick={() => save({ mode: "whatsapp" })}>
+          Modo promoción (WhatsApp)
+        </button>
+        <button className="btn-ghost" type="button" disabled={busy} onClick={() => save({ mode: "full" })}>
+          Modo completo (cotización + cuentas)
+        </button>
+        <button className="btn-ghost" type="button" disabled={busy} onClick={() => save({})}>
+          Guardar número
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function DemoPanel() {
   const [st, setSt] = useState(null);
   const [busy, setBusy] = useState("");
@@ -475,13 +551,19 @@ export default function ConfigPage() {
   const [pricing, setPricing] = useState([]);
   const [refs, setRefs] = useState([]);
   const [refMeta, setRefMeta] = useState({ types: [], categories: [] });
-  const [dryRef, setDryRef] = useState({ amount: "", windowMonths: 24, computed: null, effective: null, sample: 0 });
+  const [dryRef, setDryRef] = useState({ amount: "", windowMonths: 24, computed: null, effective: null, sample: 0, buckets: [] });
   const [services, setServices] = useState([]);
+  const [overlays, setOverlays] = useState([]);
+  const [overlayMeta, setOverlayMeta] = useState({ warehouses: [], vendors: [] });
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
 
+  const isSuper = user?.role === "superadmin";
+
   useEffect(() => {
-    api("/config/sections").then(setData).catch((e) => setError(e.message));
+    if (isSuper) {
+      api("/config/sections").then(setData).catch((e) => setError(e.message));
+    }
     api("/config/yard-columns").then(setRules).catch(() => {});
     api("/config/visibility").then(setVis).catch(() => {});
     api("/config/pricing").then(setPricing).catch(() => {});
@@ -496,10 +578,15 @@ export default function ConfigPage() {
         computed: d.computed,
         effective: d.effective,
         sample: d.sample || 0,
+        buckets: d.buckets || [],
       });
     }).catch(() => {});
     api("/config/commercial-services").then(setServices).catch(() => {});
-  }, []);
+    api("/config/acquisition-overlays").then((d) => {
+      setOverlays(d.concepts || []);
+      setOverlayMeta({ warehouses: d.warehouses || [], vendors: d.vendors || [] });
+    }).catch(() => {});
+  }, [isSuper]);
 
   async function saveRules(next) {
     setSaved("");
@@ -550,8 +637,21 @@ export default function ConfigPage() {
         computed: out.computed,
         effective: out.effective,
         sample: out.sample || 0,
+        buckets: out.buckets || [],
       });
-      setSaved("✓ Precio referencial DRY guardado. Los ajustes de inventario lo usan como costo.");
+      setSaved("✓ Referencial DRY guardado. Cubetas por tipo/plaza; el monto admin solo pisa el fallback global.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function saveOverlays() {
+    setSaved("");
+    try {
+      const out = await api("/config/acquisition-overlays", { method: "PUT", body: { concepts: overlays } });
+      setOverlays(out.concepts || []);
+      setOverlayMeta({ warehouses: out.warehouses || [], vendors: out.vendors || [] });
+      setSaved(`✓ Extras de costo guardados. Se recalcularon ${out.recalculated ?? 0} listas (no manuales).`);
     } catch (e) {
       setError(e.message);
     }
@@ -571,23 +671,27 @@ export default function ConfigPage() {
   return (
     <>
       <h2 className="section-title">Configuración</h2>
-      <p className="section-sub">{data?.note || "Solo Administrador y Gerente."}</p>
+      <p className="section-sub">{isSuper ? "Textos públicos, marca de agua, modo demo y anclas de desarrollo." : (data?.note || "Solo Administrador y Gerente.")}</p>
       {error ? <div className="err">{error}</div> : null}
       {saved ? <div className="ok-msg">{saved}</div> : null}
 
-      <WatermarkPanel onSaved={setSaved} onError={setError} />
+      {isSuper ? <CommercePanel onSaved={setSaved} onError={setError} /> : null}
+      {isSuper ? <WatermarkPanel onSaved={setSaved} onError={setError} /> : null}
 
-      <div className="panel" style={{ marginBottom: 18 }}>
-        <h3>Textos del catálogo público</h3>
-        <p className="section-sub">Titular, carrusel, pasos, botones, pie y legales. Editas a la izquierda y ves a la derecha cómo lo ve el cliente.</p>
-        <Link className="btn-primary" to="/app/catalogo-textos">Abrir editor</Link>
-      </div>
+      {isSuper ? (
+        <div className="panel" style={{ marginBottom: 18 }}>
+          <h3>Textos del catálogo público</h3>
+          <p className="section-sub">Titular, carrusel, pasos, botones, pie y legales. Editas a la izquierda y ves a la derecha cómo lo ve el cliente.</p>
+          <Link className="btn-primary" to="/app/catalogo-textos">Abrir editor</Link>
+        </div>
+      ) : null}
 
-      {user?.role === "admin" ? <DemoPanel /> : null}
+      {isSuper ? <DemoPanel /> : null}
 
-      {user?.role === "admin" ? <DepotConceptsPanel onSaved={setSaved} onError={setError} /> : null}
-      {(user?.role === "admin" || user?.role === "gerente") ? <EvaluationPanel onSaved={setSaved} onError={setError} /> : null}
+      {(user?.role === "admin" || isSuper) ? <DepotConceptsPanel onSaved={setSaved} onError={setError} /> : null}
+      {(user?.role === "admin" || user?.role === "gerente" || isSuper) ? <EvaluationPanel onSaved={setSaved} onError={setError} /> : null}
 
+      <>
       <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Visibilidad de precios en catálogo</h3>
         <p className="section-sub">Jerarquía global → tipo/categoría/depósito → fabricante → unidad. CIMC visible por defecto; el resto pide precio. El neto, IGV e historial de una unidad se fijan en Ficha catálogo.</p>
@@ -662,20 +766,90 @@ export default function ConfigPage() {
       </div>
 
       <div className="panel" style={{ marginBottom: 18 }}>
+        <h3>Extras de costo (almacén Odoo / proveedor)</h3>
+        <p className="section-sub">
+          Se suman a la OC o al referencial para armar la base. No pisan el costo Odoo. ZGROU y Piura son plazas de existencias;
+          el patio fino (Principal / Gambeta) lo elige el coordinador y no cambia este extra.
+        </p>
+        {overlays.map((r, i) => (
+          <div className="form-grid" key={r.id || i}>
+            <div>
+              <label>Concepto</label>
+              <input value={r.label} onChange={(e) => setOverlays(overlays.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} />
+            </div>
+            <div>
+              <label>Ámbito</label>
+              <select value={r.scope} onChange={(e) => setOverlays(overlays.map((x, j) => j === i ? { ...x, scope: e.target.value, target: "" } : x))}>
+                <option value="warehouse">Almacén Odoo</option>
+                <option value="vendor">Proveedor OC</option>
+              </select>
+            </div>
+            <div>
+              <label>Destino</label>
+              {r.scope === "vendor" ? (
+                <input
+                  list="odoo-vendors"
+                  value={r.target || ""}
+                  onChange={(e) => setOverlays(overlays.map((x, j) => j === i ? { ...x, target: e.target.value } : x))}
+                  placeholder="Razón social Odoo"
+                />
+              ) : (
+                <select value={r.target || ""} onChange={(e) => setOverlays(overlays.map((x, j) => j === i ? { ...x, target: e.target.value } : x))}>
+                  <option value="">Elegir…</option>
+                  {(overlayMeta.warehouses || []).map((w) => (
+                    <option key={w.code} value={w.code}>{w.label}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+            <div>
+              <label>USD</label>
+              <input type="number" min="0" step="1" value={r.amount} onChange={(e) => setOverlays(overlays.map((x, j) => j === i ? { ...x, amount: Number(e.target.value) } : x))} />
+            </div>
+            <div>
+              <label>Aplica a</label>
+              <select value={r.applies || "all"} onChange={(e) => setOverlays(overlays.map((x, j) => j === i ? { ...x, applies: e.target.value } : x))}>
+                <option value="all">OC y referencial</option>
+                <option value="oc">Solo OC</option>
+                <option value="referential">Solo referencial</option>
+              </select>
+            </div>
+            <div style={{ display: "flex", alignItems: "end" }}>
+              <button className="btn-ghost" type="button" onClick={() => setOverlays(overlays.filter((_, j) => j !== i))}>Quitar</button>
+            </div>
+          </div>
+        ))}
+        <datalist id="odoo-vendors">
+          {(overlayMeta.vendors || []).map((v) => <option key={v} value={v} />)}
+        </datalist>
+        <div className="action-row">
+          <button
+            className="btn-ghost"
+            type="button"
+            onClick={() => setOverlays([...overlays, { label: "Traslado Piura", scope: "warehouse", target: "PIURA", amount: 0, applies: "all", active: true }])}
+          >
+            Añadir extra
+          </button>
+          <button className="btn-primary" type="button" onClick={saveOverlays}>Guardar extras y recalcular listas</button>
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Precio referencial DRY (ajustes de inventario)</h3>
         <p className="section-sub">
-          Costo que usa un contenedor DRY que entró a Odoo por ajuste, sin OC. Si dejas el monto vacío se usa el
-          promedio de precios de OC/factura DRY ({dryRef.sample} lote(s)
-          {dryRef.computed != null ? ` · promedio USD ${Number(dryRef.computed).toLocaleString("en-US")}` : ""}).
-          Vigente: {dryRef.effective != null ? `USD ${Number(dryRef.effective).toLocaleString("en-US")}` : "sin dato aún — busca en Odoo primero"}.
+          Un ajuste o una MO sin costo usa el promedio de OC del mismo tipo, uso (nuevo/segundo uso) y plaza Odoo.
+          Si ese tipo no tiene ninguna OC, cae al promedio general
+          {dryRef.effective != null ? ` (USD ${Number(dryRef.effective).toLocaleString("en-US")}` : " (sin dato aún"}
+          {dryRef.sample ? ` · ${dryRef.sample} lote(s)` : ""}).
+          El monto admin solo pisa ese fallback global; no mezcla 20 con 40 ni Principal con Gambeta.
         </p>
         <div className="form-grid">
           <div>
-            <label>Monto admin USD (opcional)</label>
+            <label>Fallback global USD (opcional)</label>
             <input
               type="number"
               min="0"
-              placeholder={dryRef.computed != null ? String(dryRef.computed) : "Automático"}
+              placeholder={dryRef.computed != null ? String(dryRef.computed) : "Promedio general"}
               value={dryRef.amount}
               onChange={(e) => setDryRef({ ...dryRef, amount: e.target.value })}
             />
@@ -691,6 +865,41 @@ export default function ConfigPage() {
             />
           </div>
         </div>
+        {dryRef.buckets?.length ? (
+          <div className="table-wrap" style={{ marginTop: 12 }}>
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Cubeta</th>
+                  <th>Tipo</th>
+                  <th>Uso</th>
+                  <th>Plaza</th>
+                  <th>SKU</th>
+                  <th>n</th>
+                  <th>Promedio USD</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dryRef.buckets
+                  .filter((b) => b.kind === "typeUsageWh" || b.kind === "typeUsage" || b.kind === "typeWh" || b.kind === "type")
+                  .sort((a, b) => `${a.kind}${a.type}${a.warehouse}${a.usage}`.localeCompare(`${b.kind}${b.type}${b.warehouse}${b.usage}`))
+                  .map((b) => (
+                    <tr key={`${b.kind}-${b.type}-${b.usage}-${b.warehouse}-${b.productCode}`}>
+                      <td>{b.kind === "typeUsageWh" ? "tipo · uso · plaza" : b.kind === "typeUsage" ? "tipo · uso" : b.kind === "typeWh" ? "tipo · plaza" : "tipo"}</td>
+                      <td>{b.type || "—"}</td>
+                      <td>{b.usage || "—"}</td>
+                      <td>{b.warehouse || "—"}</td>
+                      <td>{b.productCode || "—"}</td>
+                      <td>{b.sample}</td>
+                      <td>{Number(b.average).toLocaleString("en-US")}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="section-sub">Aún no hay cubetas. Busca en Odoo para promediar OC por tipo.</p>
+        )}
         <div className="action-row">
           <button className="btn-primary" type="button" onClick={saveDryRef}>Guardar referencial DRY</button>
         </div>
@@ -794,6 +1003,8 @@ export default function ConfigPage() {
           </div>
         </div>
       ) : null}
+      </>
+      {isSuper ? (
       <div className="config-grid">
         {(data?.sections || []).map((s) => (
           <div className="config-card" key={s.id}>
@@ -809,6 +1020,7 @@ export default function ConfigPage() {
           </div>
         ))}
       </div>
+      ) : null}
     </>
   );
 }

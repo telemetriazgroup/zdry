@@ -113,7 +113,7 @@ export class PeopleController {
 
   @Post("collaborators")
   async createCollaborator(
-    @Body() body: { email?: string; name?: string; role?: Role; password?: string },
+    @Body() body: { email?: string; name?: string; role?: Role; password?: string; whatsapp?: string },
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
@@ -129,6 +129,7 @@ export class PeopleController {
         name: body.name.trim(),
         role: body.role,
         passwordHash: await argon2.hash(password),
+        whatsapp: String(body.whatsapp || "").replace(/\D/g, ""),
       },
     });
     await this.audit.log({
@@ -145,7 +146,7 @@ export class PeopleController {
   @Put("collaborators/:id")
   async updateCollaborator(
     @Param("id") id: string,
-    @Body() body: { email?: string; name?: string; role?: Role; active?: boolean },
+    @Body() body: { email?: string; name?: string; role?: Role; active?: boolean; whatsapp?: string },
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
@@ -185,7 +186,13 @@ export class PeopleController {
 
     const row = await this.prisma.user.update({
       where: { id },
-      data: { name, email, role, active },
+      data: {
+        name,
+        email,
+        role,
+        active,
+        ...(body.whatsapp !== undefined ? { whatsapp: String(body.whatsapp || "").replace(/\D/g, "") } : {}),
+      },
     });
     await this.audit.log({
       user,

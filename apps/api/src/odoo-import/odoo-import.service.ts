@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from "@nestjs/comm
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
+import { StorageService } from "../storage/storage.service";
 import { OdooClient } from "../odoo/odoo.client";
 import { AuthUser } from "../auth/auth.types";
 import {
@@ -27,7 +28,9 @@ import {
   ODOO_LOT_SELECT_FALLBACK,
   ownedStorageKey,
 } from "../domain/odoo-lot-map";
-import { listOdooLotChatter, listOdooLotNotes, openOdooLotPhoto } from "../odoo/odoo-lot-photos";
+import { warehouseFromLocation } from "../domain/odoo-warehouse";
+import { listOdooLotNotes } from "../odoo/odoo-lot-photos";
+import { cacheOdooLotPhotos, listOrCacheOdooPhotos, openOrCacheOdooPhoto } from "./odoo-photo-cache.store";
 import { applySerialTextRefs, assignRefsBySharedMove, purchaseRefFromOrder, type OdooPurchaseRef } from "../domain/odoo-purchase";
 import {
   assimilateCostPlan,
@@ -36,7 +39,8 @@ import {
   splitOdooProductLabel,
   type LotMoveFact,
 } from "../domain/odoo-origin";
-import { presentDryReferential } from "./dry-referential.store";
+import { presentDryReferential, referentialHitFor } from "./dry-referential.store";
+import { depotForOdooLocation } from "./depot-map.store";
 import { ExpedienteStore } from "../odoo-events/expediente.store";
 import { AssimilateLogStore } from "./assimilate-log.store";
 import { errorDetail } from "../domain/odoo-assimilate-log";
@@ -60,6 +64,7 @@ export class OdooImportService {
     private readonly prisma: PrismaService,
     private readonly odoo: OdooClient,
     private readonly audit: AuditService,
+    private readonly storage: StorageService,
   ) {
     this.expediente = new ExpedienteStore(prisma);
     this.logs = new AssimilateLogStore(prisma);
@@ -320,6 +325,7 @@ export class OdooImportService {
         productName,
         productCode,
         locationName,
+        odooWarehouse: warehouseFromLocation(locationName),
         locationOdooId: this.relId(q.location_id) || null,
         qtyOnHand: qty,
         color: attrs.color,
@@ -495,58 +501,125 @@ export class OdooImportService {
 
   async assimilate(ids: string[], user: AuthUser, ip?: string) {
     if (!ids?.length) throw new BadRequestException("Elige al menos un lote.");
+    const existing = await this.logs.currentRunning();
+    const live = await this.progress();
+    const liveAge = live.updatedAt ? Date.now() - new Date(live.updatedAt).getTime() : 0;
+    const liveStuck = live.status === "running" && liveAge > 15 * 60 * 1000;
+    const orphan = (existing || live.status === "running") && !this.runId;
+    if (orphan || liveStuck) {
+      await this.abortActive(
+        orphan
+          ? "La pasada anterior se cortó (reinicio del servicio). Se inicia una nueva."
+          : "La pasada anterior se cortó. Se inicia una nueva.",
+      );
+    } else if (existing || live.status === "running") {
+      return {
+        ok: true,
+        running: true,
+        runId: existing?.id,
+        message: "Ya hay una pasada en curso. El progreso se actualiza arriba.",
+      };
+    }
     const run = await this.logs.start("assimilate", user.name);
+    this.abortFlag = false;
+    this.aborted.delete(run.id);
     this.runId = run.id;
+    await this.writeProgress({
+      status: "running",
+      step: "assimilate",
+      current: 0,
+      total: ids.length,
+      iso: "",
+      message: `Asimilando ${ids.length} unidad(es)…`,
+    });
+    void this.runAssimilate(run.id, ids, user, ip).finally(() => {
+      if (this.runId === run.id) this.runId = null;
+    });
+    return {
+      ok: true,
+      running: true,
+      runId: run.id,
+      message: `Asimilación en segundo plano: ${ids.length} unidad(es). El progreso se actualiza aquí.`,
+    };
+  }
+
+  private async runAssimilate(runId: string, ids: string[], user: AuthUser, ip?: string) {
+    this.runId = runId;
     const out: { iso: string; created: boolean; isoReview: boolean }[] = [];
     try {
-    for (const id of ids) {
-      let cand = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
-      if (!cand) {
-        await this.logs.add(run.id, { level: "error", step: "assimilate", message: `Candidato ${id} no encontrado.` });
-        continue;
-      }
-      try {
-      if (!cand.odooIntakeKind) {
-        await this.attachIntakeOrigins([cand.odooLotId]);
-        cand = (await this.prisma.odooLotCandidate.findUnique({ where: { id } })) || cand;
-      }
-      if (cand.odooIntakeKind === "fabrication" && !cand.odooSourceLotId) {
-        await this.attachFabricationLineage([cand.odooLotId]);
-        cand = (await this.prisma.odooLotCandidate.findUnique({ where: { id } })) || cand;
-      }
-      const item = await this.assimilateOne(cand, user, ip);
-      out.push(item);
-      await this.logs.add(run.id, {
-        level: "ok",
-        step: "assimilate",
-        iso: item.iso,
-        serialRaw: cand.serialRaw,
-        odooLotId: cand.odooLotId,
-        product: cand.productName,
-        message: item.created ? "Creado en Recepción." : `Ya existía ${item.iso}; ficha actualizada.`,
-      });
-      } catch (e) {
-        const { message, detail } = errorDetail(e);
-        await this.logs.add(run.id, {
-          level: "error",
+      let i = 0;
+      for (const id of ids) {
+        if (this.isAborted(runId)) {
+          await this.writeProgress({ status: "idle", step: "", message: "Asimilación cancelada." });
+          return;
+        }
+        i += 1;
+        let cand = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
+        if (!cand) {
+          await this.logs.add(runId, { level: "error", step: "assimilate", message: `Candidato ${id} no encontrado.` });
+          continue;
+        }
+        await this.writeProgress({
+          status: "running",
           step: "assimilate",
+          current: i,
+          total: ids.length,
           iso: cand.isoNormalized,
-          serialRaw: cand.serialRaw,
-          odooLotId: cand.odooLotId,
-          product: cand.productName,
-          message,
-          detail,
+          message: `${i}/${ids.length} · ${cand.isoNormalized || cand.serialRaw}`,
         });
+        try {
+          if (!cand.odooIntakeKind) {
+            await this.attachIntakeOrigins([cand.odooLotId]);
+            cand = (await this.prisma.odooLotCandidate.findUnique({ where: { id } })) || cand;
+          }
+          if (cand.odooIntakeKind === "fabrication" && !cand.odooSourceLotId) {
+            await this.attachFabricationLineage([cand.odooLotId]);
+            cand = (await this.prisma.odooLotCandidate.findUnique({ where: { id } })) || cand;
+          }
+          const isoLabel = cand.isoNormalized || cand.serialRaw;
+          const item = await this.assimilateOne(cand, user, ip, {
+            onPhotoProgress: async (info) => {
+              await this.writeProgress({
+                status: "running",
+                step: "fotos",
+                current: i,
+                total: ids.length,
+                iso: isoLabel,
+                message: `${i}/${ids.length} · ${isoLabel} · foto ${info.current}/${info.total}`,
+              });
+            },
+          });
+          out.push(item);
+          await this.logs.add(runId, {
+            level: "ok",
+            step: "assimilate",
+            iso: item.iso,
+            serialRaw: cand.serialRaw,
+            odooLotId: cand.odooLotId,
+            product: cand.productName,
+            message: item.created ? "Creado en Recepción." : `Ya existía ${item.iso}; ficha actualizada.`,
+          });
+        } catch (e) {
+          const { message, detail } = errorDetail(e);
+          await this.logs.add(runId, {
+            level: "error",
+            step: "assimilate",
+            iso: cand.isoNormalized,
+            serialRaw: cand.serialRaw,
+            odooLotId: cand.odooLotId,
+            product: cand.productName,
+            message,
+            detail,
+          });
+        }
       }
-    }
-    const summary = `${out.length} unidad(es) asimilada(s). ${ids.length - out.length ? `${ids.length - out.length} con error.` : ""}`.trim();
-    await this.logs.finish(run.id, summary);
-    return { ok: true, items: out, runId: run.id, message: summary };
+      const summary = `${out.length} unidad(es) asimilada(s). ${ids.length - out.length ? `${ids.length - out.length} con error.` : ""}`.trim();
+      await this.logs.finish(runId, summary);
+      await this.writeProgress({ status: "done", step: "listo", current: ids.length, total: ids.length, iso: "", message: summary });
     } catch (e) {
-      await this.logs.fail(run.id, e, "assimilate");
-      throw e;
-    } finally {
-      if (this.runId === run.id) this.runId = null;
+      if (this.isAborted(runId)) return;
+      await this.logs.fail(runId, e, "assimilate");
+      await this.writeProgress({ status: "error", step: "error", message: (e as Error).message || "Error al asimilar" });
     }
   }
 
@@ -792,6 +865,7 @@ export class OdooImportService {
     },
     user: AuthUser,
     ip?: string,
+    opts: { onPhotoProgress?: (info: { current: number; total: number; name: string }) => Promise<void> | void } = {},
   ) {
     const isoInfo = inspectOdooIso(cand.serialRaw || cand.isoNormalized);
     const iso = isoInfo.isoNormalized;
@@ -821,10 +895,11 @@ export class OdooImportService {
       });
       await this.fillEmptyFromOdoo(iso, { ...cand, ...plan });
       await this.pullOdooNotes({ ...cand, containerIso: existing.iso }).catch(() => undefined);
+      await this.pullOdooPhotos({ id: cand.id, odooLotId: cand.odooLotId, containerIso: existing.iso }, opts.onPhotoProgress).catch(() => undefined);
       return { iso, created: false, isoReview: !isoInfo.iso6346Ok || existing.isoException };
     }
 
-    const depot = await this.ensureDepot(cand.locationName);
+    const { depot, warehouse } = await depotForOdooLocation(this.prisma, cand.locationName);
     const types = await this.prisma.containerType.findMany({ where: { archivedAt: null } });
     const cats = await this.prisma.category.findMany({ where: { archivedAt: null } });
     const typeCode = this.pickCode(
@@ -862,6 +937,7 @@ export class OdooImportService {
           intakeOrigin: "odoo",
           odooLotId: cand.odooLotId,
           odooLocation: cand.locationName,
+          odooWarehouse: warehouse || warehouseFromLocation(cand.locationName) || null,
           odooDua: cand.dua,
           odooPoName: plan.odooIntakeKind === "purchase" ? cand.odooPoName : null,
           odooPoId: plan.odooIntakeKind === "purchase" ? cand.odooPoId : null,
@@ -911,6 +987,7 @@ export class OdooImportService {
     });
 
     await this.pullOdooNotes({ ...cand, containerIso: iso }).catch(() => undefined);
+    await this.pullOdooPhotos({ id: cand.id, odooLotId: cand.odooLotId, containerIso: iso }, opts.onPhotoProgress).catch(() => undefined);
     await this.audit.log({
       user,
       action: "odoo_assimilate",
@@ -967,6 +1044,12 @@ export class OdooImportService {
       odooNotes,
       moUnitCost,
       dryReferential,
+      referentialHit: referentialHitFor(dryReferential, {
+        type: row.zdryType || inferTypeFromProduct(row.productName, row.productCode, ""),
+        cat: row.zdryCat || inferCatFromProduct(row.productName, ""),
+        odooWarehouse: row.odooWarehouse,
+        productCode: row.productCode,
+      }),
       fieldStatus,
       odooFields: ODOO_OWNED_FIELDS.map((key) => ({
         key,
@@ -1224,12 +1307,11 @@ export class OdooImportService {
   async listPhotos(id: string) {
     const row = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
     if (!row) throw new NotFoundException("Candidato no encontrado.");
-    const chatter = await listOdooLotChatter(this.odoo, row.odooLotId);
-    await this.expediente.importOdooNotes(row.isoNormalized, chatter.notes, {
-      candidateId: row.id,
+    return listOrCacheOdooPhotos(this.prisma, this.storage, this.odoo, {
+      odooLotId: row.odooLotId,
       containerIso: row.containerIso,
+      candidateId: row.id,
     });
-    return chatter.photos;
   }
 
   private notesFetchedAt(payload: unknown): string | null {
@@ -1322,10 +1404,31 @@ export class OdooImportService {
     return notes;
   }
 
+  private async pullOdooPhotos(
+    cand: { id: string; odooLotId: number; containerIso?: string | null },
+    onProgress?: (info: { current: number; total: number; name: string }) => Promise<void> | void,
+  ) {
+    return cacheOdooLotPhotos(
+      this.prisma,
+      this.storage,
+      this.odoo,
+      {
+        odooLotId: cand.odooLotId,
+        containerIso: cand.containerIso,
+        candidateId: cand.id,
+      },
+      onProgress,
+    );
+  }
+
   async openPhoto(id: string, attId: string) {
     const row = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
     if (!row) throw new NotFoundException("Candidato no encontrado.");
-    return openOdooLotPhoto(this.odoo, row.odooLotId, attId);
+    return openOrCacheOdooPhoto(this.prisma, this.storage, this.odoo, {
+      odooLotId: row.odooLotId,
+      containerIso: row.containerIso,
+      candidateId: row.id,
+    }, attId);
   }
 
   async resetModule(user: AuthUser, confirm: string, ip?: string) {
@@ -1341,6 +1444,7 @@ export class OdooImportService {
     ).map((c) => c.iso);
 
     await this.prisma.$transaction(async (tx) => {
+      await tx.odooCachedPhoto.deleteMany();
       await tx.odooFieldWriteback.deleteMany();
       await tx.odooLotCandidate.deleteMany();
       if (odooIsos.length) {
@@ -1379,6 +1483,80 @@ export class OdooImportService {
     };
   }
 
+  /** Quita solo unidades asimiladas (no vendidas, no reentregas manuales) y relanza Buscar en Odoo. */
+  async resyncAssimilated(user: AuthUser, confirm: string, ip?: string) {
+    if (String(confirm || "").trim().toUpperCase() !== "SINCRONIZAR") {
+      throw new BadRequestException("Escribe SINCRONIZAR para borrar solo lo asimilado y buscar de nuevo en Odoo.");
+    }
+    await this.abortActive("Re-sincronización: se canceló la pasada en curso.");
+
+    const soldIsos = (
+      await this.prisma.container.findMany({
+        where: { intakeOrigin: "odoo", status: "Vendido" },
+        select: { iso: true },
+      })
+    ).map((c) => c.iso);
+
+    const liveOdoo = await this.prisma.container.findMany({
+      where: { intakeOrigin: "odoo", status: { not: "Vendido" } },
+      select: { iso: true },
+    });
+    const assimilated = await this.prisma.odooLotCandidate.findMany({
+      where: {
+        status: "assimilated",
+        ...(soldIsos.length ? { OR: [{ containerIso: null }, { containerIso: { notIn: soldIsos } }] } : {}),
+      },
+      select: { id: true, odooLotId: true, containerIso: true },
+    });
+
+    const containerIsos = [...new Set([...liveOdoo.map((c) => c.iso), ...assimilated.map((c) => c.containerIso).filter((iso): iso is string => !!iso)])];
+    const lotIds = [...new Set(assimilated.map((c) => c.odooLotId))];
+    const candIds = assimilated.map((c) => c.id);
+
+    await this.prisma.$transaction(async (tx) => {
+      if (containerIsos.length) {
+        await tx.gateVisit.updateMany({ where: { containerIso: { in: containerIsos } }, data: { containerIso: null } });
+        await tx.odooCachedPhoto.updateMany({ where: { containerIso: { in: containerIsos } }, data: { containerIso: null } });
+      }
+      if (lotIds.length) {
+        await tx.odooCachedPhoto.deleteMany({ where: { odooLotId: { in: lotIds } } });
+      }
+      if (candIds.length) {
+        await tx.odooLotCandidate.deleteMany({ where: { id: { in: candIds } } });
+      }
+      if (containerIsos.length) {
+        await tx.container.deleteMany({
+          where: { iso: { in: containerIsos }, intakeOrigin: "odoo", status: { not: "Vendido" } },
+        });
+      }
+    });
+
+    const emptyOdooDepots = await this.prisma.depot.findMany({
+      where: { city: "Odoo", containers: { none: {} } },
+      select: { id: true },
+    });
+    if (emptyOdooDepots.length) {
+      await this.prisma.depot.deleteMany({ where: { id: { in: emptyOdooDepots.map((d) => d.id) } } });
+    }
+
+    await this.audit.log({
+      user,
+      action: "odoo_assimilated_resync",
+      entity: "OdooLotCandidate",
+      after: { removedContainers: containerIsos.length, removedCandidates: candIds.length, keptSold: soldIsos.length },
+      ip,
+    });
+
+    const sync = await this.sync(user, ip);
+    return {
+      ...sync,
+      clearedContainers: containerIsos.length,
+      clearedCandidates: candIds.length,
+      keptSold: soldIsos.length,
+      message: `Se quitaron ${containerIsos.length} unidad(es) asimilada(s) (vendidas se conservan). ${sync.message}`,
+    };
+  }
+
   async ignore(id: string, user: AuthUser, ip?: string) {
     const row = await this.prisma.odooLotCandidate.update({
       where: { id },
@@ -1389,26 +1567,8 @@ export class OdooImportService {
   }
 
   private async ensureDepot(locationName: string) {
-    const name = titleFromLocation(locationName);
-    const found =
-      (await this.prisma.depot.findFirst({
-        where: { OR: [{ name: { equals: name, mode: "insensitive" } }, { address: locationName || name }], archivedAt: null },
-      })) ||
-      (locationName
-        ? await this.prisma.depot.findFirst({
-            where: { name: { equals: locationName, mode: "insensitive" }, archivedAt: null },
-          })
-        : null);
-    if (found) return found;
-    return this.prisma.depot.create({
-      data: {
-        name,
-        city: "Odoo",
-        address: locationName || name,
-        dailyRateTeu: 1,
-        protected: false,
-      },
-    });
+    const { depot } = await depotForOdooLocation(this.prisma, locationName);
+    return depot;
   }
 
   private async hydrateDossiers(lotIds: number[]) {
@@ -2666,6 +2826,7 @@ export class OdooImportService {
     cand: {
       odooLotId?: number;
       locationName?: string;
+      odooWarehouse?: string | null;
       dua?: string | null;
       originCountry?: string | null;
       color?: string | null;
@@ -2721,6 +2882,9 @@ export class OdooImportService {
       if (cand.invoicePending !== undefined) data.invoicePending = cand.invoicePending;
     }
     if (!c.odooLocation && cand.locationName) data.odooLocation = cand.locationName;
+    if (!c.odooWarehouse && (cand.odooWarehouse || cand.locationName)) {
+      data.odooWarehouse = cand.odooWarehouse || warehouseFromLocation(cand.locationName);
+    }
     if (!c.odooDua && cand.dua) data.odooDua = cand.dua;
     if (!c.originCountry && cand.originCountry) data.originCountry = cand.originCountry;
     if ((!c.color || c.color === "—") && mapped.color !== "—") data.color = mapped.color;

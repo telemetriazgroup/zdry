@@ -23,6 +23,8 @@ import { OdooEventsModule } from "./odoo-events/odoo-events.module";
 import { EvaluationModule } from "./evaluation/evaluation.module";
 import { GateVisitsModule } from "./gate-visits/gate-visits.module";
 import { DryStatsModule } from "./dry-stats/dry-stats.module";
+import { DashboardModule } from "./dashboard/dashboard.module";
+import { CatalogSharesModule } from "./catalog-shares/catalog-shares.module";
 
 @Module({
   imports: [
@@ -48,6 +50,8 @@ import { DryStatsModule } from "./dry-stats/dry-stats.module";
     OdooEventsModule,
     GateVisitsModule,
     DryStatsModule,
+    DashboardModule,
+    CatalogSharesModule,
   ],
   controllers: [HealthController],
   providers: [SeedService],
