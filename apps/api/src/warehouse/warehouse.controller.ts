@@ -46,6 +46,11 @@ export class WarehouseController {
     return this.warehouse.pending(user);
   }
 
+  @Get("validated")
+  validated(@CurrentUser() user: AuthUser) {
+    return this.warehouse.validated(user);
+  }
+
   @Get("campo")
   campo(@Query("q") q?: string) {
     return this.warehouse.campoQueue(q || "");
@@ -114,13 +119,21 @@ export class WarehouseController {
       mgwKg?: number;
       color?: string;
       cat?: string;
-      year?: number | null;
       manufacturer?: string;
       inspectionNotes?: string;
       odooDua?: string;
       originCountry?: string;
       material?: string;
       odooDescription?: string;
+      zgroupCode?: string;
+      internalRef?: string;
+      lotCategory?: string;
+      classification?: string;
+      lotCode?: string;
+      numberingDate?: string;
+      manufactureMonth?: string;
+      productTitle?: string;
+      year?: number | string | null;
       conditionFloor?: string | null;
       conditionRoof?: string | null;
       conditionDoors?: string | null;

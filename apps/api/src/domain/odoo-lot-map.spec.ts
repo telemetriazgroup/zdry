@@ -7,6 +7,7 @@ import {
   inferTypeFromProduct,
   mergeFieldCatalog,
   odooWriteKeys,
+  ownedFieldKeys,
   pickFieldByLabel,
   readLotAttrs,
   receptionOwnedPatch,
@@ -187,6 +188,32 @@ describe("odoo-lot-map", () => {
       mgwKg: 30480,
       description: "Golpe en esquina derecha",
     });
+  });
+
+  it("separa Código de Código ZGroup y conserva un año que no es número", () => {
+    const fields = {
+      x_studio_codigo: { string: "Código" },
+      x_studio_codigo_zgroup: { string: "Código ZGroup" },
+      x_studio_category: { string: "*Category" },
+      building_year: { string: "Año de Fabricación" },
+    };
+    expect(ownedFieldKeys(fields, "lotCode")).toEqual(["x_studio_codigo"]);
+    expect(ownedFieldKeys(fields, "zgroupCode")).toEqual(["x_studio_codigo_zgroup"]);
+    expect(ownedFieldKeys(fields, "lotCategory")).toEqual(["x_studio_category"]);
+    const attrs = readLotAttrs(
+      {
+        name: "ZCSU402995-4",
+        x_studio_codigo: "ZCSU402995-4",
+        x_studio_codigo_zgroup: "ZCSU402995-4",
+        building_year: "NO DEFINE",
+      },
+      fields,
+    );
+    expect(attrs.lotCode).toBe("ZCSU402995-4");
+    expect(attrs.zgroupCode).toBe("ZCSU402995-4");
+    expect(attrs.year).toBeNull();
+    expect(attrs.yearToken).toBe("NO DEFINE");
+    expect(receptionOwnedPatch({ year: "NO DEFINE" }).year).toBe("NO DEFINE");
   });
 
   it("lee la descripción del lote (note / Descripción)", () => {

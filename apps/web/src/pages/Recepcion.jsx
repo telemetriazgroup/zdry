@@ -127,6 +127,57 @@ function whoLine(u) {
   return `Registró ${u.registeredByName || "—"} · ${formatWhen(u.createdAt)}`;
 }
 
+function foldOpt(value) {
+  return String(value || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
+function matchSelect(value, options) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const hit = (options || []).find(([key, label]) => key === raw || label === raw || foldOpt(key) === foldOpt(raw) || foldOpt(label) === foldOpt(raw));
+  return hit ? hit[0] : raw;
+}
+
+function fichaFrom(unit) {
+  const lot = unit.lotFicha || {};
+  return {
+    tareKg: unit.tareKg ?? "",
+    mgwKg: unit.mgwKg ?? "",
+    color: lot.color || (!unit.color || unit.color === "—" ? "" : unit.color),
+    cat: unit.cat || "",
+    year: lot.yearToken || unit.year || "",
+    manufacturer: !unit.manufacturer || unit.manufacturer === "—" ? "" : unit.manufacturer,
+    odooDua: unit.odooDua || "",
+    originCountry: unit.originCountry || "",
+    material: unit.material || "",
+    odooDescription: unit.odooDescription || "",
+    inspectionNotes: unit.inspectionNotes || "",
+    zgroupCode: lot.zgroupCode || "",
+    internalRef: lot.internalRef || "",
+    lotCategory: lot.lotCategory || "",
+    classification: lot.classification || "",
+    lotCode: lot.lotCode || "",
+    numberingDate: lot.numberingDate || "",
+    manufactureMonth: lot.manufactureMonth || "",
+    productTitle: lot.productTitle || "",
+  };
+}
+
+function OdooSelect({ label, value, options, onChange }) {
+  const current = matchSelect(value, options);
+  const known = (options || []).some(([key]) => key === current);
+  return (
+    <div>
+      <label>{label}</label>
+      <select value={current} onChange={(e) => onChange(e.target.value)}>
+        <option value="">—</option>
+        {(options || []).map(([key, text]) => <option key={key} value={key}>{text}</option>)}
+        {current && !known ? <option value={current}>{current}</option> : null}
+      </select>
+    </div>
+  );
+}
+
 function OriginBadges({ u }) {
   return (
     <>
@@ -145,6 +196,8 @@ export default function Recepcion() {
   const lb = useLightbox();
   const [meta, setMeta] = useState(null);
   const [pending, setPending] = useState([]);
+  const [validated, setValidated] = useState([]);
+  const [listTab, setListTab] = useState("pendientes");
   const [mode, setMode] = useState("bandeja");
   const [inspectIso, setInspectIso] = useState(null);
   const [unit, setUnit] = useState(null);
@@ -181,10 +234,19 @@ export default function Recepcion() {
   const [capNote, setCapNote] = useState("");
   const [pushingRef, setPushingRef] = useState(null);
   const [rentalReturns, setRentalReturns] = useState([]);
+  const [ficha, setFicha] = useState(null);
+  const [savingFicha, setSavingFicha] = useState(false);
+  const [syncModal, setSyncModal] = useState("");
+  const [bulk, setBulk] = useState([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   async function loadPending() {
-    const rows = await api("/warehouse/pending");
+    const [rows, sent] = await Promise.all([
+      api("/warehouse/pending"),
+      api("/warehouse/validated"),
+    ]);
     setPending(rows);
+    setValidated(sent);
   }
 
   async function loadRentalReturns() {
@@ -228,6 +290,7 @@ export default function Recepcion() {
     api(`/warehouse/units/${inspectIso}`)
       .then((u) => {
         setUnit(u);
+        setFicha(fichaFrom(u));
         setDocRows([newDocRow()]);
         if (u.visit) {
           setVisitMode("saved");
@@ -322,15 +385,16 @@ export default function Recepcion() {
     };
   }, [form.iso, mode]);
 
+  const board = listTab === "campo" ? validated : pending;
   const filteredPending = useMemo(() => {
     const raw = pendingQ.trim().toUpperCase();
     const compact = raw.replace(/[\s-]/g, "");
-    if (!raw) return pending;
-    return pending.filter((u) => {
+    if (!raw) return board;
+    return board.filter((u) => {
       const hay = pendingSearchText(u);
       return hay.includes(raw) || hay.replace(/[\s-]/g, "").includes(compact);
     });
-  }, [pending, pendingQ]);
+  }, [board, pendingQ]);
 
   const pendingPages = Math.max(1, Math.ceil(filteredPending.length / PAGE_SIZE));
   const safePendingPage = Math.min(pendingPage, pendingPages);
@@ -485,8 +549,10 @@ export default function Recepcion() {
       setUnit(next);
       setCapNote("");
       setMsg("Imagen o video del coordinador guardado. También puedes cargarlo en las casillas 1–9.");
+      return true;
     } catch (e) {
       setError(e.message);
+      return false;
     }
   }
 
@@ -572,15 +638,111 @@ export default function Recepcion() {
 
   async function correctRating({ conceptId, levelId, reason }) {
     if (!inspectIso) return;
+    const next = await api(`/warehouse/units/${inspectIso}/ratings`, {
+      method: "POST",
+      body: { conceptId, levelId, reason, source: "recepcion" },
+    });
+    setUnit(next);
+    setMsg("Evaluación guardada. Queda en la trazabilidad.");
+  }
+
+  function addBulk(fileList) {
+    const files = [...fileList].filter((f) => f && (f.type.startsWith("image/") || f.type.startsWith("video/")));
+    if (!files.length) return;
+    setBulk((cur) => [
+      ...cur,
+      ...files.map((file) => ({ id: `${file.name}-${file.size}-${Math.random()}`, file, name: file.name, preview: URL.createObjectURL(file) })),
+    ]);
+  }
+
+  async function placeBulk() {
+    if (!bulk.length || !inspectIso) return;
+    setBulkBusy(true);
+    setError("");
     try {
-      const next = await api(`/warehouse/units/${inspectIso}/ratings`, {
-        method: "POST",
-        body: { conceptId, levelId, reason, source: "recepcion" },
-      });
-      setUnit(next);
-      setMsg("Corrección de evaluación guardada. Queda en la trazabilidad.");
+      let slot = 0;
+      const photos = unit?.photos || [];
+      let videoUsed = !!unit?.hasVideo;
+      const leftover = [];
+      for (const item of bulk) {
+        const isVideo = item.file.type.startsWith("video/");
+        if (isVideo && !videoUsed) {
+          const ok = await uploadSlot("video", item.file);
+          if (!ok) return;
+          videoUsed = true;
+          continue;
+        }
+        while (slot < 9 && photos[slot]) slot += 1;
+        if (!isVideo && slot < 9) {
+          const ok = await uploadSlot(slot, item.file);
+          if (!ok) return;
+          photos[slot] = true;
+          slot += 1;
+        } else {
+          leftover.push(item);
+        }
+      }
+      for (const item of leftover) {
+        const ok = await uploadCoordCapture(item.file);
+        if (!ok) return;
+      }
+      bulk.forEach((item) => URL.revokeObjectURL(item.preview));
+      setBulk([]);
+      setMsg(leftover.length
+        ? "Casillas llenas. El resto quedó en la bandeja de evidencias."
+        : "Fotos asignadas a las casillas.");
     } catch (e) {
       setError(e.message);
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function saveFicha() {
+    if (!inspectIso || !ficha) return;
+    setSavingFicha(true);
+    setError("");
+    try {
+      const next = await api(`/warehouse/units/${inspectIso}`, {
+        method: "PATCH",
+        body: {
+          tareKg: ficha.tareKg === "" ? 0 : Number(ficha.tareKg),
+          mgwKg: ficha.mgwKg === "" ? 0 : Number(ficha.mgwKg),
+          color: matchSelect(ficha.color, meta?.odooSelects?.color),
+          cat: ficha.cat,
+          year: ficha.year === "" ? null : (/^\d+$/.test(String(ficha.year)) ? Number(ficha.year) : ficha.year),
+          manufacturer: ficha.manufacturer,
+          odooDua: ficha.odooDua,
+          originCountry: ficha.originCountry,
+          material: ficha.material,
+          odooDescription: ficha.odooDescription,
+          inspectionNotes: ficha.inspectionNotes,
+          zgroupCode: ficha.zgroupCode,
+          internalRef: ficha.internalRef,
+          lotCategory: ficha.lotCategory,
+          classification: ficha.classification,
+          lotCode: ficha.lotCode,
+          numberingDate: ficha.numberingDate,
+          manufactureMonth: matchSelect(ficha.manufactureMonth, meta?.odooSelects?.manufactureMonth),
+          productTitle: ficha.productTitle,
+        },
+      });
+      setUnit(next);
+      setFicha(fichaFrom(next));
+      if (next.writeback && next.writeback.ok === false) {
+        const lines = (next.writeback.failed || []).map((row) => `${row.label}: ${row.message}`).join("\n");
+        const head = next.writeback.flushed
+          ? "Odoo actualizó el resto de la ficha. Estos campos no se sincronizaron:"
+          : "El cambio quedó en ZDRY. Odoo no lo recibió:";
+        setSyncModal(`${head}\n${lines || next.writeback.message || next.saveMessage || "Sin detalle."}`);
+      } else {
+        setMsg(next.saveMessage || "Ficha guardada.");
+      }
+    } catch (e) {
+      if (String(e.message || "").toLowerCase().includes("año")) setYearErr(e.message);
+      setError(e.message);
+    } finally {
+      setSavingFicha(false);
     }
   }
 
@@ -639,8 +801,10 @@ export default function Recepcion() {
       const next = await apiUpload(`/warehouse/units/${inspectIso}/photos`, fd);
       setUnit(next);
       setBust(Date.now());
+      return true;
     } catch (e) {
       setError(e.message);
+      return false;
     }
   }
 
@@ -998,6 +1162,46 @@ export default function Recepcion() {
             )}
             {canCoord ? (
               <>
+                <div
+                  className="bulk-drop"
+                  onPaste={(e) => {
+                    const files = [...(e.clipboardData?.files || [])];
+                    if (!files.length) return;
+                    e.preventDefault();
+                    addBulk(files);
+                  }}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    addBulk(e.dataTransfer.files);
+                  }}
+                >
+                  <b>Importar varias fotos</b>
+                  <p className="section-sub">Pega con Ctrl+V o suelta aquí todas las imágenes que quieras. Luego asígnalas a las casillas vacías. La carga de una en una, abajo, sigue disponible.</p>
+                  <label className="btn-ghost">
+                    Elegir archivos
+                    <input type="file" accept="image/*,video/*" multiple hidden onChange={(e) => { addBulk(e.target.files); e.target.value = ""; }} />
+                  </label>
+                  {bulk.length ? (
+                    <>
+                      <div className="bulk-tray">
+                        {bulk.map((item) => (
+                          <figure key={item.id}>
+                            {item.file.type.startsWith("video/") ? <span>Video</span> : <img src={item.preview} alt="" />}
+                            <figcaption>{item.name}</figcaption>
+                            <button type="button" className="link-btn" onClick={() => {
+                              URL.revokeObjectURL(item.preview);
+                              setBulk((cur) => cur.filter((x) => x.id !== item.id));
+                            }}>Quitar</button>
+                          </figure>
+                        ))}
+                      </div>
+                      <button className="btn-primary" type="button" disabled={bulkBusy} onClick={placeBulk}>
+                        {bulkBusy ? "Asignando…" : `Asignar ${bulk.length} a casillas vacías`}
+                      </button>
+                    </>
+                  ) : null}
+                </div>
                 <div className="recv-capture-note">
                   <label>Nota de tu toma (opcional)</label>
                   <p className="section-sub">Describe qué se ve en la foto o video antes de adjuntarlo. Queda en la bandeja de evidencias.</p>
@@ -1101,8 +1305,8 @@ export default function Recepcion() {
               </>
             ) : null}
             <div className="eval-recepcion">
-              <h4>Evaluación de patio</h4>
-              <p className="section-sub">Lo que cargó campo. Si las fotos muestran otra cosa, corrige y deja el motivo. No se borra el historial.</p>
+              <h4>Evaluación</h4>
+              <p className="section-sub">Si patio aún no evaluó, elige el nivel y pulsa Guardar evaluación. Si ya hay una, la corrección pide el motivo y queda en la trazabilidad.</p>
               <EvalCorrect
                 concepts={meta.evaluationConcepts || []}
                 levels={meta.evaluationLevels || []}
@@ -1146,7 +1350,7 @@ export default function Recepcion() {
             <p className="section-sub">
               {unit.intakeOrigin === "odoo"
                 ? "Completa o corrige la ficha. Los ids de Odoo no se muestran aquí."
-                : "Ficha recíproca a Odoo: tara, peso, color, DUA, procedencia, material, año y fabricante."}
+                : "Ficha del lote: los mismos campos que Odoo, para no volver a completarlos allá."}
             </p>
             {canSeeOdoo && (unit.odooSource || unit.odooLocation || unit.odooDua || unit.originCountry) ? (
               <div className="odoo-source">
@@ -1170,49 +1374,76 @@ export default function Recepcion() {
               </div>
             ) : null}
             <div className="form-grid">
-              <div><label>Tara (kg)</label><input type="number" defaultValue={unit.tareKg} key={`tare-${unit.tareKg}`} onBlur={(e) => patchField("tareKg", e.target.value)} /></div>
-              <div><label>Peso bruto máx. (kg)</label><input type="number" defaultValue={unit.mgwKg} key={`mgw-${unit.mgwKg}`} onBlur={(e) => patchField("mgwKg", e.target.value)} /></div>
-              <div>
-                <label>Color exterior</label>
-                <SearchCreate
-                  options={meta.colors}
-                  value={!unit.color || unit.color === "—" ? "" : unit.color}
-                  onChange={(v) => patchField("color", v)}
-                  onCreate={(v) => addOption("color", v)}
-                  placeholder="Buscar o crear color"
+              <div><label>Tara (kg)</label><input type="number" value={ficha?.tareKg ?? ""} onChange={(e) => setFicha({ ...ficha, tareKg: e.target.value })} /></div>
+              <div><label>Peso bruto máx. (kg)</label><input type="number" value={ficha?.mgwKg ?? ""} onChange={(e) => setFicha({ ...ficha, mgwKg: e.target.value })} /></div>
+              {(meta.odooSelects?.color || []).length ? (
+                <OdooSelect
+                  label="Color exterior"
+                  value={ficha?.color || ""}
+                  options={meta.odooSelects.color}
+                  onChange={(v) => setFicha({ ...ficha, color: v })}
                 />
-              </div>
+              ) : (
+                <div>
+                  <label>Color exterior</label>
+                  <SearchCreate
+                    options={meta.colors}
+                    value={ficha?.color || ""}
+                    onChange={(v) => setFicha({ ...ficha, color: v })}
+                    onCreate={(v) => addOption("color", v)}
+                    placeholder="Buscar o crear color"
+                  />
+                </div>
+              )}
               <div>
                 <label>Condición comercial</label>
-                <select value={unit.cat} onChange={(e) => patchField("cat", e.target.value)}>
+                <select value={ficha?.cat || unit.cat} onChange={(e) => setFicha({ ...ficha, cat: e.target.value })}>
                   {meta.categories.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
                 </select>
               </div>
-              <div>
-                <label>Año ({meta.yearMin || 1980}–{meta.yearMax || new Date().getFullYear()})</label>
-                <input
-                  type="number"
-                  min={meta.yearMin || 1980}
-                  max={meta.yearMax || new Date().getFullYear()}
-                  defaultValue={unit.year || ""}
-                  key={`year-${unit.year || "x"}`}
-                  onBlur={(e) => patchField("year", e.target.value === "" ? null : Number(e.target.value))}
+              {(meta.odooSelects?.year || []).length ? (
+                <OdooSelect
+                  label="Año de fabricación"
+                  value={ficha?.year || ""}
+                  options={meta.odooSelects.year}
+                  onChange={(v) => { setYearErr(""); setFicha({ ...ficha, year: v }); }}
                 />
-                {yearErr ? <div className="err" style={{ marginTop: 4 }}>{yearErr}</div> : null}
-              </div>
+              ) : (
+                <div>
+                  <label>Año de fabricación</label>
+                  <input
+                    value={ficha?.year ?? ""}
+                    onChange={(e) => { setYearErr(""); setFicha({ ...ficha, year: e.target.value }); }}
+                  />
+                  {yearErr ? <div className="err" style={{ marginTop: 4 }}>{yearErr}</div> : null}
+                </div>
+              )}
               <div>
                 <label>Fabricante</label>
                 <SearchCreate
                   options={meta.manufacturers}
-                  value={!unit.manufacturer || unit.manufacturer === "—" ? "" : unit.manufacturer}
-                  onChange={(v) => patchField("manufacturer", v)}
+                  value={ficha?.manufacturer || ""}
+                  onChange={(v) => setFicha({ ...ficha, manufacturer: v })}
                   onCreate={(v) => addOption("manufacturer", v)}
                   placeholder="Buscar o crear fabricante"
                 />
               </div>
-              <div><label>DUA</label><input defaultValue={unit.odooDua || ""} key={`dua-${unit.odooDua || ""}`} onBlur={(e) => patchField("odooDua", e.target.value)} /></div>
-              <div><label>Procedencia</label><input defaultValue={unit.originCountry || ""} key={`orig-${unit.originCountry || ""}`} onBlur={(e) => patchField("originCountry", e.target.value)} /></div>
-              <div><label>Material</label><input defaultValue={unit.material || ""} key={`mat-${unit.material || ""}`} onBlur={(e) => patchField("material", e.target.value)} /></div>
+              <div><label>DUA</label><input value={ficha?.odooDua || ""} onChange={(e) => setFicha({ ...ficha, odooDua: e.target.value })} /></div>
+              <div><label>Procedencia</label><input value={ficha?.originCountry || ""} onChange={(e) => setFicha({ ...ficha, originCountry: e.target.value })} /></div>
+              <div><label>Material</label><input value={ficha?.material || ""} onChange={(e) => setFicha({ ...ficha, material: e.target.value })} /></div>
+              <div><label>Código</label><input value={ficha?.lotCode || ""} onChange={(e) => setFicha({ ...ficha, lotCode: e.target.value })} /></div>
+              <div><label>Código ZGroup</label><input value={ficha?.zgroupCode || ""} onChange={(e) => setFicha({ ...ficha, zgroupCode: e.target.value })} /></div>
+              <div><label>Referencia interna</label><input value={ficha?.internalRef || ""} onChange={(e) => setFicha({ ...ficha, internalRef: e.target.value })} /></div>
+              <div><label>Category</label><input value={ficha?.lotCategory || ""} onChange={(e) => setFicha({ ...ficha, lotCategory: e.target.value })} /></div>
+              <div><label>Clasificación</label><input value={ficha?.classification || ""} onChange={(e) => setFicha({ ...ficha, classification: e.target.value })} /></div>
+              <div><label>Nombre del producto</label><input value={ficha?.productTitle || ""} onChange={(e) => setFicha({ ...ficha, productTitle: e.target.value })} /></div>
+              <div><label>Fecha de numeración</label><input type="date" value={ficha?.numberingDate || ""} onChange={(e) => setFicha({ ...ficha, numberingDate: e.target.value })} /></div>
+              <OdooSelect
+                label="Mes de fabricación"
+                value={ficha?.manufactureMonth || ""}
+                options={meta.odooSelects?.manufactureMonth || []}
+                onChange={(v) => setFicha({ ...ficha, manufactureMonth: v })}
+              />
             </div>
             {missing.length ? (
               <p style={{ fontSize: 11, color: "#c9720b", marginTop: 6, fontWeight: 700 }}>
@@ -1225,13 +1456,12 @@ export default function Recepcion() {
             {unit.hasOdooChatter || unit.odooLotId ? (
               <div style={{ marginTop: 10 }}>
                 <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-2)", textTransform: "uppercase" }}>Descripción (Odoo)</label>
-                <p className="section-sub">Comentarios del lote. Se escriben en Odoo al salir del campo.</p>
+                <p className="section-sub">Comentarios del lote. Se envían a Odoo al pulsar Guardar ficha.</p>
                 <textarea
                   rows={3}
                   style={{ width: "100%", marginTop: 6, padding: "9px 10px", border: "1px solid var(--line)", borderRadius: 7, fontFamily: "inherit" }}
-                  defaultValue={unit.odooDescription || ""}
-                  key={`odesc-${unit.odooDescription || ""}`}
-                  onBlur={(e) => patchField("odooDescription", e.target.value)}
+                  value={ficha?.odooDescription || ""}
+                  onChange={(e) => setFicha({ ...ficha, odooDescription: e.target.value })}
                 />
               </div>
             ) : null}
@@ -1240,10 +1470,14 @@ export default function Recepcion() {
               <textarea
                 rows={3}
                 style={{ width: "100%", marginTop: 6, padding: "9px 10px", border: "1px solid var(--line)", borderRadius: 7, fontFamily: "inherit" }}
-                defaultValue={unit.inspectionNotes}
-                key={`notes-${unit.iso}`}
-                onBlur={(e) => patchField("inspectionNotes", e.target.value)}
+                value={ficha?.inspectionNotes || ""}
+                onChange={(e) => setFicha({ ...ficha, inspectionNotes: e.target.value })}
               />
+            </div>
+            <div className="action-row" style={{ marginTop: 12 }}>
+              <button className="btn-primary" type="button" disabled={savingFicha} onClick={saveFicha}>
+                {savingFicha ? "Guardando…" : "Guardar ficha"}
+              </button>
             </div>
             <div style={{ marginTop: 14 }}>
               <b>Documentos de la unidad</b>
@@ -1472,12 +1706,24 @@ export default function Recepcion() {
           </>
         ) : null}
       </div>
-      {pending.length ? (
+      <div className="recv-tabs">
+        <button type="button" className={listTab === "pendientes" ? "on" : ""} onClick={() => { setListTab("pendientes"); setPendingPage(1); }}>
+          Pendientes ({pending.length})
+        </button>
+        <button type="button" className={listTab === "campo" ? "on" : ""} onClick={() => { setListTab("campo"); setPendingPage(1); }}>
+          En campo ({validated.length})
+        </button>
+      </div>
+      {board.length ? (
         <>
           <h3 style={{ marginTop: 0 }}>
-            Pendientes ({filteredPending.length}{pendingQ.trim() ? ` de ${pending.length}` : ""})
+            {listTab === "campo" ? "En campo" : "Pendientes"} ({filteredPending.length}{pendingQ.trim() ? ` de ${board.length}` : ""})
           </h3>
-          <p className="section-sub">Toca una unidad para continuar la inspección. Se listan de {PAGE_SIZE} en {PAGE_SIZE}.</p>
+          <p className="section-sub">
+            {listTab === "campo"
+              ? "Unidades ya enviadas a campo. Ábrelas para corregir la ficha, las fotos o la evaluación."
+              : "Toca una unidad para continuar la inspección. Al enviarla a campo pasa a la otra pestaña."}
+          </p>
           <div className="odoo-toolbar">
             <input
               className="odoo-search"
@@ -1574,12 +1820,28 @@ export default function Recepcion() {
           ) : null}
             </>
           ) : (
-            <p className="section-sub">Ningún pendiente coincide con la búsqueda.</p>
+            <p className="section-sub">Ninguna unidad coincide con la búsqueda.</p>
           )}
         </>
       ) : (
-        <p style={{ color: "#2f9e44", fontWeight: 700 }}>✓ No hay contenedores pendientes de inspección física ni con datos faltantes.</p>
+        <p style={{ color: "#2f9e44", fontWeight: 700 }}>
+          {listTab === "campo" ? "Todavía no hay unidades enviadas a campo." : "✓ No hay contenedores pendientes de enviar a campo."}
+        </p>
       )}
+      {syncModal ? (
+        <div className="overlay open odoo-link-overlay" role="dialog" aria-modal="true">
+          <div className="modal odoo-link-modal">
+            <div className="modal-head">
+              <h3>No se sincronizó con Odoo</h3>
+              <button className="modal-close" type="button" onClick={() => setSyncModal("")} aria-label="Cerrar">×</button>
+            </div>
+            <div className="modal-body single">
+              <p style={{ whiteSpace: "pre-line" }}>{syncModal}</p>
+              <button className="btn-primary" type="button" onClick={() => setSyncModal("")}>Entendido</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {lb.node}
     </div>
   );

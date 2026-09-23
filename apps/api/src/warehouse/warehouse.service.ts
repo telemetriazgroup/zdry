@@ -17,7 +17,7 @@ import { inspectIntakeIso } from "../domain/intake-iso";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { MANUFACTURERS } from "../domain/purchase-extras";
 import { CONDITION_GRADES, parseCondition } from "../domain/odoo-purchase";
-import { parseBuildYear, YEAR_MIN } from "../domain/year";
+import { YEAR_MIN } from "../domain/year";
 import {
   DEFAULT_DOCUMENT_CONCEPTS,
   mergeCatalogOptions,
@@ -69,7 +69,7 @@ import { OdooClient } from "../odoo/odoo.client";
 import { limaDayRange, listOdooLotNotes } from "../odoo/odoo-lot-photos";
 import { listOrCacheOdooPhotos, openOrCacheOdooPhoto } from "../odoo-import/odoo-photo-cache.store";
 import { ExpedienteStore } from "../odoo-events/expediente.store";
-import { receptionOwnedPatch } from "../domain/odoo-lot-map";
+import { ODOO_LOT_SELECT_FALLBACK, receptionOwnedPatch } from "../domain/odoo-lot-map";
 import { OdooImportService } from "../odoo-import/odoo-import.service";
 import { toOdooRefJpeg } from "../domain/odoo-ref-jpeg";
 import {
@@ -95,6 +95,14 @@ const CAMPO_ODOO_LOCKED = [
   "originCountry",
   "material",
   "odooDescription",
+  "zgroupCode",
+  "internalRef",
+  "lotCategory",
+  "classification",
+  "lotCode",
+  "numberingDate",
+  "manufactureMonth",
+  "productTitle",
 ] as const;
 
 const LAYOUT_RULES_KEY = "layout_rules";
@@ -220,6 +228,7 @@ export class WarehouseService {
       maxPhotoBytes: MAX_INSPECTION_PHOTO_BYTES,
       maxVideoBytes: MAX_INSPECTION_VIDEO_BYTES,
       ...evalCatalog,
+      odooSelects: await this.odooImport.lotSelects().catch(() => ({ ...ODOO_LOT_SELECT_FALLBACK })),
     };
   }
 
@@ -268,7 +277,16 @@ export class WarehouseService {
     }));
   }
 
-  async pending(user?: AuthUser) {
+  pending(user?: AuthUser) {
+    return this.receptionRows(user, false);
+  }
+
+  /** Unidades ya enviadas a campo. La ficha es la misma: el coordinador puede corregir. */
+  validated(user?: AuthUser) {
+    return this.receptionRows(user, true);
+  }
+
+  private async receptionRows(user: AuthUser | undefined, sent: boolean) {
     const [types, categories, rows] = await Promise.all([
       this.prisma.containerType.findMany(),
       this.prisma.category.findMany(),
@@ -287,7 +305,7 @@ export class WarehouseService {
           photoCount: c.intakeOrigin === "odoo" ? c.photos.length : undefined,
         });
         const waitingCampo = !c.campoEnabledAt;
-        if (!missing.length && !waitingCampo) return null;
+        if (sent ? waitingCampo : !waitingCampo) return null;
         if (user?.role === "almacen" && c.intakeOrigin === "odoo") return null;
         return {
           iso: c.iso,
@@ -311,14 +329,18 @@ export class WarehouseService {
           registeredByName: c.registeredByName || "—",
           createdAt: c.createdAt,
           campoEnabledAt: c.campoEnabledAt,
+          campoEnabledByName: c.campoEnabledByName || "",
           waitingCampo,
-          missing: waitingCampo && !missing.length ? ["Pendiente de enviar a campo"] : missing,
+          missing: sent
+            ? (missing.length ? missing : [`En campo${c.campoEnabledByName ? ` · ${c.campoEnabledByName}` : ""}`])
+            : waitingCampo && !missing.length ? ["Pendiente de enviar a campo"] : missing,
         };
       })
       .filter((x): x is NonNullable<typeof x> => !!x);
   }
 
   async getUnit(iso: string, opts: { hideOdoo?: boolean; hideOdooIds?: boolean; hideRates?: boolean } = {}) {
+    await this.odooImport.hydrateReceptionFicha(iso).catch(() => undefined);
     const c = await this.loadUnit(iso);
     await this.evaluation.importLegacyForUnit(c.iso, c);
     const [types, categories, rules, extras] = await Promise.all([
@@ -449,13 +471,21 @@ export class WarehouseService {
       mgwKg?: number;
       color?: string;
       cat?: string;
-      year?: number | null;
+      year?: number | string | null;
       manufacturer?: string;
       inspectionNotes?: string;
       odooDua?: string;
       originCountry?: string;
       material?: string;
       odooDescription?: string;
+      zgroupCode?: string;
+      internalRef?: string;
+      lotCategory?: string;
+      classification?: string;
+      lotCode?: string;
+      numberingDate?: string;
+      manufactureMonth?: string;
+      productTitle?: string;
       conditionFloor?: string | null;
       conditionRoof?: string | null;
       conditionDoors?: string | null;
@@ -488,9 +518,14 @@ export class WarehouseService {
       data.cat = body.cat;
     }
     if (body.year !== undefined) {
-      const parsed = parseBuildYear(body.year);
-      if (!parsed.ok) throw new BadRequestException(parsed.message);
-      data.year = parsed.year;
+      const raw = body.year == null ? "" : String(body.year).trim();
+      if (!raw) data.year = null;
+      else if (/^\d{4}$/.test(raw)) {
+        const year = Number(raw);
+        const max = new Date().getFullYear() + 1;
+        if (year < 1960 || year > max) throw new BadRequestException(`El año debe estar entre 1960 y ${max}.`);
+        data.year = year;
+      }
     }
     if (body.manufacturer !== undefined) data.manufacturer = body.manufacturer || "—";
     if (body.inspectionNotes !== undefined) data.inspectionNotes = String(body.inspectionNotes || "");
@@ -498,6 +533,18 @@ export class WarehouseService {
     if (body.originCountry !== undefined) data.originCountry = String(body.originCountry || "").trim() || null;
     if (body.material !== undefined) data.material = String(body.material || "").trim() || null;
     if (body.odooDescription !== undefined) data.odooDescription = String(body.odooDescription || "");
+    const lotKeys = ["zgroupCode", "internalRef", "lotCategory", "classification", "lotCode", "numberingDate", "manufactureMonth", "productTitle"] as const;
+    if (body.year !== undefined || lotKeys.some((key) => body[key] !== undefined) || body.color !== undefined) {
+      const prev = c.odooSource && typeof c.odooSource === "object" && !Array.isArray(c.odooSource)
+        ? { ...(c.odooSource as Record<string, unknown>) }
+        : {};
+      if (body.year !== undefined) prev.yearToken = body.year == null || body.year === "" ? null : String(body.year).trim();
+      if (body.color !== undefined) prev.color = body.color || null;
+      for (const key of lotKeys) {
+        if (body[key] !== undefined) prev[key] = String(body[key] || "").trim() || null;
+      }
+      data.odooSource = prev as Prisma.InputJsonValue;
+    }
     for (const key of ["conditionFloor", "conditionRoof", "conditionDoors", "conditionPaint", "conditionWalls"] as const) {
       if (body[key] !== undefined) data[key] = parseCondition(body[key]) || null;
     }
@@ -1965,6 +2012,7 @@ export class WarehouseService {
       odooDua: hideOdoo ? null : c.odooDua,
       originCountry: hideOdoo ? null : c.originCountry,
       odooSource: hideOdooIds ? null : c.odooSource,
+      lotFicha: hideOdoo ? null : lotFichaOf(c),
       fieldRegularizedAt: c.fieldRegularizedAt,
       fieldRegularizedByName: c.fieldRegularizedByName,
       missing: inspectMissing({
@@ -1975,6 +2023,35 @@ export class WarehouseService {
       suggested,
     };
   }
+}
+
+function lotText(value: unknown) {
+  if (value == null || value === "—") return "";
+  return String(value);
+}
+
+function lotFichaOf(c: { year: number | null; color: string; odooSource: unknown }) {
+  const src = c.odooSource && typeof c.odooSource === "object" && !Array.isArray(c.odooSource)
+    ? (c.odooSource as Record<string, unknown>)
+    : {};
+  const date = lotText(src.numberingDate);
+  const isoDate = date.match(/^(\d{4}-\d{2}-\d{2})/)?.[1]
+    || (() => {
+      const dmy = date.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      return dmy ? `${dmy[3]}-${dmy[2].padStart(2, "0")}-${dmy[1].padStart(2, "0")}` : "";
+    })();
+  return {
+    zgroupCode: lotText(src.zgroupCode),
+    internalRef: lotText(src.internalRef),
+    lotCategory: lotText(src.lotCategory),
+    classification: lotText(src.classification),
+    lotCode: lotText(src.lotCode),
+    numberingDate: isoDate,
+    manufactureMonth: lotText(src.manufactureMonth),
+    productTitle: lotText(src.productTitle),
+    yearToken: lotText(src.yearToken) || (c.year ? String(c.year) : ""),
+    color: c.color && c.color !== "—" ? c.color : lotText(src.color),
+  };
 }
 
 function toYardUnit(c: {

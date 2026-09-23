@@ -7,8 +7,10 @@ const SOURCE = {
   catalogo: "Ficha catálogo",
 };
 
-export function levelFor(ratings, conceptId) {
-  return (ratings || []).find((r) => r.conceptId === conceptId) || null;
+export function levelFor(ratings, concept) {
+  const id = typeof concept === "string" ? concept : concept?.id;
+  const key = typeof concept === "string" ? "" : concept?.key || "";
+  return (ratings || []).find((r) => r.conceptId === id || (key && r.conceptKey === key)) || null;
 }
 
 export function EvalGrid({ concepts = [], levels = [], ratings = [], onChange, disabled }) {
@@ -16,7 +18,7 @@ export function EvalGrid({ concepts = [], levels = [], ratings = [], onChange, d
   return (
     <div className="form-grid eval-grid">
       {concepts.map((c) => {
-        const current = levelFor(ratings, c.id);
+        const current = levelFor(ratings, c);
         return (
           <div key={c.id}>
             <label>{c.label}</label>
@@ -44,18 +46,24 @@ export function EvalGrid({ concepts = [], levels = [], ratings = [], onChange, d
 
 export function EvalCorrect({ concepts = [], levels = [], ratings = [], history = [], onCorrect, busy }) {
   const [draft, setDraft] = useState({});
+  const [rowErr, setRowErr] = useState({});
+  const [rowBusy, setRowBusy] = useState("");
   if (!concepts.length) return <p className="section-sub">Aún no hay conceptos de evaluación. Configúralos en Configuración.</p>;
 
-  function setField(id, patch) {
-    setDraft((d) => ({ ...d, [id]: { reason: "", levelId: levelFor(ratings, id)?.levelId || "", ...d[id], ...patch } }));
+  function setField(concept, patch) {
+    const base = levelFor(ratings, concept)?.levelId || "";
+    setDraft((d) => ({ ...d, [concept.id]: { reason: "", levelId: base, ...d[concept.id], ...patch } }));
+    setRowErr((e) => ({ ...e, [concept.id]: "" }));
   }
 
   return (
     <div className="eval-correct">
       {concepts.map((c) => {
-        const current = levelFor(ratings, c.id);
+        const current = levelFor(ratings, c);
         const row = draft[c.id] || { levelId: current?.levelId || "", reason: "" };
         const changed = row.levelId && row.levelId !== (current?.levelId || "");
+        const needsReason = !!current && changed;
+        const reasonOk = !needsReason || row.reason.trim().length >= 4;
         return (
           <div key={c.id} className="eval-correct-row">
             <div className="eval-correct-head">
@@ -63,13 +71,13 @@ export function EvalCorrect({ concepts = [], levels = [], ratings = [], history 
               <span className="recv-who">
                 {current
                   ? `${current.levelLabel} · ${SOURCE[current.source] || current.source} · ${current.setByName || "—"} · ${formatWhen(current.setAt)}`
-                  : "Sin evaluar en patio"}
+                  : "Sin evaluar"}
               </span>
             </div>
             <div className="form-grid">
               <div>
-                <label>Corregir a</label>
-                <select value={row.levelId} onChange={(e) => setField(c.id, { levelId: e.target.value })}>
+                <label>{current ? "Corregir a" : "Evaluar"}</label>
+                <select value={row.levelId} onChange={(e) => setField(c, { levelId: e.target.value })}>
                   <option value="">—</option>
                   {levels.map((l) => (
                     <option key={l.id} value={l.id}>{l.label}</option>
@@ -77,21 +85,36 @@ export function EvalCorrect({ concepts = [], levels = [], ratings = [], history 
                 </select>
               </div>
               <div>
-                <label>Motivo (según fotos)</label>
+                <label>{current ? "Motivo (según fotos)" : "Nota (opcional)"}</label>
                 <input
                   value={row.reason}
-                  onChange={(e) => setField(c.id, { reason: e.target.value })}
-                  placeholder="Ej. corrosión visible en foto 3"
+                  onChange={(e) => setField(c, { reason: e.target.value })}
+                  placeholder={current ? "Ej. corrosión visible en foto 3" : "Opcional"}
                 />
               </div>
             </div>
+            {needsReason && !reasonOk ? (
+              <p className="recv-who">Para corregir una evaluación ya hecha, escribe el motivo (mínimo 4 caracteres).</p>
+            ) : null}
+            {rowErr[c.id] ? <div className="err">{rowErr[c.id]}</div> : null}
             <button
-              className="btn-ghost"
+              className="btn-primary"
               type="button"
-              disabled={busy || !changed}
-              onClick={() => onCorrect?.({ conceptId: c.id, levelId: row.levelId, reason: row.reason })}
+              disabled={busy || rowBusy === c.id || !changed || !reasonOk}
+              onClick={async () => {
+                setRowBusy(c.id);
+                setRowErr((e) => ({ ...e, [c.id]: "" }));
+                try {
+                  await onCorrect?.({ conceptId: c.id, levelId: row.levelId, reason: row.reason });
+                  setDraft((d) => ({ ...d, [c.id]: { levelId: row.levelId, reason: "" } }));
+                } catch (err) {
+                  setRowErr((e) => ({ ...e, [c.id]: err.message || "No se guardó la evaluación." }));
+                } finally {
+                  setRowBusy("");
+                }
+              }}
             >
-              Guardar corrección
+              {rowBusy === c.id ? "Guardando…" : current ? "Guardar corrección" : "Guardar evaluación"}
             </button>
           </div>
         );
