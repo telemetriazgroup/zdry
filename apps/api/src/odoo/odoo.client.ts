@@ -1,6 +1,9 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { forwardRef, Inject, Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { AuthUser } from "../auth/auth.types";
 import { envOdooConfig, normalizeOdooConfig, ODOO_CONFIG_KEY, type OdooConfig } from "../domain/odoo-config";
+import { redactOdooSecret } from "../domain/odoo-link";
+import { OdooLinkService } from "./odoo-link.service";
 
 export type OdooSaleClosePayload = {
   from: string;
@@ -14,8 +17,62 @@ type JsonRpcResponse = { result?: unknown; error?: { message?: string; data?: { 
 @Injectable()
 export class OdooClient {
   private readonly log = new Logger(OdooClient.name);
+  private readonly uidCache = new Map<string, { uid: number; exp: number }>();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(forwardRef(() => OdooLinkService)) private readonly links: OdooLinkService,
+  ) {}
+
+  runAsQuoteVendor<T>(quoteId: string, fn: () => Promise<T>): Promise<T> {
+    return this.prisma.quote
+      .findUnique({
+        where: { id: quoteId },
+        select: {
+          vendor: { select: { id: true, email: true, name: true, role: true, customerId: true, avatarKey: true, whatsapp: true } },
+        },
+      })
+      .then((quote) => {
+        const v = quote?.vendor;
+        if (!v) return fn();
+        const actor: AuthUser = {
+          id: v.id,
+          email: v.email,
+          name: v.name,
+          role: v.role,
+          customerId: v.customerId,
+          hasAvatar: !!v.avatarKey,
+          whatsapp: v.whatsapp || "",
+        };
+        return this.links.runAs(actor, fn);
+      });
+  }
+
+  private async session(): Promise<{ cfg: OdooConfig; uid: number; via: "principal" | "user" | "bypass" }> {
+    const principal = await this.readConfig();
+    const resolved = await this.links.resolveActing(principal);
+    const cfg = resolved.cfg;
+    const cacheKey = `${resolved.via}:${cfg.url}|${cfg.db}|${cfg.user}`;
+    const hit = this.uidCache.get(cacheKey);
+    if (hit && hit.exp > Date.now()) return { cfg, uid: hit.uid, via: resolved.via };
+    try {
+      const uid = await this.authenticate(cfg);
+      this.uidCache.set(cacheKey, { uid, exp: Date.now() + 5 * 60 * 1000 });
+      return { cfg, uid, via: resolved.via };
+    } catch (e) {
+      this.uidCache.delete(cacheKey);
+      const actor = this.links.currentActor();
+      if (resolved.via === "user" && actor) await this.links.markFailed(actor.id, (e as Error).message || "");
+      throw new Error(redactOdooSecret((e as Error).message || "Odoo rechazó la clave.", cfg.apiKey));
+    }
+  }
+
+  private async noteBypass(via: string, model: string, detail: string) {
+    if (via !== "bypass") return;
+    const actor = this.links.currentActor();
+    if (!actor) return;
+    await this.links.noteBypass(actor, model, detail);
+  }
 
   async readConfig(): Promise<OdooConfig> {
     const row = await this.prisma.appSetting.findUnique({ where: { key: ODOO_CONFIG_KEY } });
@@ -81,8 +138,7 @@ export class OdooClient {
     fields: string[],
     extras: { limit?: number; offset?: number; order?: string } = {},
   ) {
-    const cfg = await this.readConfig();
-    const uid = await this.authenticate(cfg);
+    const { cfg, uid } = await this.session();
     const kwargs: Record<string, unknown> = {
       limit: extras.limit ?? 200,
       offset: extras.offset ?? 0,
@@ -98,8 +154,8 @@ export class OdooClient {
     values: Record<string, unknown>,
     extras: { context?: Record<string, unknown> } = {},
   ) {
-    const cfg = await this.readConfig();
-    const uid = await this.authenticate(cfg);
+    const { cfg, uid, via } = await this.session();
+    await this.noteBypass(via, model, `write ${ids.join(",")}`);
     const kwargs = extras.context ? { context: extras.context } : {};
     return this.executeKw(cfg, uid, model, "write", [ids, values], kwargs);
   }
@@ -109,8 +165,8 @@ export class OdooClient {
     values: Record<string, unknown>,
     extras: { context?: Record<string, unknown> } = {},
   ) {
-    const cfg = await this.readConfig();
-    const uid = await this.authenticate(cfg);
+    const { cfg, uid, via } = await this.session();
+    await this.noteBypass(via, model, "create");
     const kwargs = extras.context ? { context: extras.context } : {};
     return this.executeKw(cfg, uid, model, "create", [values], kwargs);
   }
@@ -121,28 +177,26 @@ export class OdooClient {
     args: unknown[] = [],
     kwargs: Record<string, unknown> = {},
   ) {
-    const cfg = await this.readConfig();
-    const uid = await this.authenticate(cfg);
+    const { cfg, uid, via } = await this.session();
+    await this.noteBypass(via, model, method);
     return this.executeKw(cfg, uid, model, method, args, kwargs);
   }
 
   async unlink(model: string, ids: number[], extras: { context?: Record<string, unknown> } = {}) {
     if (!ids.length) return true;
-    const cfg = await this.readConfig();
-    const uid = await this.authenticate(cfg);
+    const { cfg, uid, via } = await this.session();
+    await this.noteBypass(via, model, `unlink ${ids.join(",")}`);
     const kwargs = extras.context ? { context: extras.context } : {};
     return this.executeKw(cfg, uid, model, "unlink", [ids], kwargs);
   }
 
   async read(model: string, ids: number[], fields: string[]) {
-    const cfg = await this.readConfig();
-    const uid = await this.authenticate(cfg);
+    const { cfg, uid } = await this.session();
     return (await this.executeKw(cfg, uid, model, "read", [ids, fields])) as Record<string, unknown>[];
   }
 
   async fieldsGet(model: string) {
-    const cfg = await this.readConfig();
-    const uid = await this.authenticate(cfg);
+    const { cfg, uid } = await this.session();
     return (await this.executeKw(cfg, uid, model, "fields_get", [], {
       attributes: ["string", "type", "selection"],
     })) as Record<string, { string?: string; type?: string; selection?: [string, string][] }>;

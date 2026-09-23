@@ -4,11 +4,27 @@ import { StorageService } from "../storage/storage.service";
 import { AuditService } from "../audit/audit.service";
 import { DemoService } from "../demo/demo.service";
 import { AuthUser } from "../auth/auth.types";
-import { envOdooConfig, normalizeOdooConfig, ODOO_CONFIG_KEY, publicOdooConfig } from "../domain/odoo-config";
+import {
+  envOdooConfig,
+  inferOdooModes,
+  normalizeOdooConfig,
+  normalizeOdooModes,
+  ODOO_CONFIG_KEY,
+  ODOO_MODES_KEY,
+  publicOdooConfig,
+  publicOdooMode,
+  type OdooConfig,
+  type OdooModeName,
+  type OdooModeStore,
+} from "../domain/odoo-config";
+import { sameOdooOrigin } from "../domain/odoo-link";
+import { OdooClient } from "../odoo/odoo.client";
+import { OdooLinkService } from "../odoo/odoo-link.service";
 
 const KEEP_SETTINGS = new Set([
   "system_initialized",
   ODOO_CONFIG_KEY,
+  ODOO_MODES_KEY,
   "catalog_copy",
   "layout_rules",
   "yard_config",
@@ -22,6 +38,8 @@ export class SuperadminService {
     private readonly storage: StorageService,
     private readonly audit: AuditService,
     private readonly demo: DemoService,
+    private readonly odoo: OdooClient,
+    private readonly links: OdooLinkService,
   ) {}
 
   async odooStatus() {
@@ -41,45 +59,122 @@ export class SuperadminService {
         updatedAt: true,
       },
     });
+    const cutover = await this.links.cutoverState();
+    const modes = await this.readModes(cfg);
     return {
       config: publicOdooConfig(cfg),
       source: row ? "guardado" : "entorno",
+      mode: modes.active,
+      modes: {
+        staging: publicOdooMode(modes.staging),
+        production: publicOdooMode(modes.production),
+      },
       queue,
+      cutover,
     };
   }
 
   async saveOdoo(
-    body: { enabled?: boolean; url?: string; db?: string; user?: string; apiKey?: string },
+    body: { mode?: OdooModeName; activate?: boolean; enabled?: boolean; url?: string; db?: string; user?: string; apiKey?: string },
     user: AuthUser,
     ip?: string,
   ) {
-    const current = await this.odooStatus();
     const row = await this.prisma.appSetting.findUnique({ where: { key: ODOO_CONFIG_KEY } });
-    const prev = normalizeOdooConfig(row?.value, envOdooConfig());
+    const live = normalizeOdooConfig(row?.value, envOdooConfig());
+    const modes = await this.readModes(live);
+    const mode: OdooModeName = body.mode === "production" || body.mode === "staging" ? body.mode : modes.active || "staging";
+    const slotPrev = modes[mode] || { enabled: false, url: "", db: "", user: "", apiKey: "" };
     const next = normalizeOdooConfig(
       {
         enabled: body.enabled,
         url: body.url,
         db: body.db,
         user: body.user,
-        apiKey: body.apiKey?.trim() ? body.apiKey : prev.apiKey,
+        apiKey: body.apiKey?.trim() ? body.apiKey : slotPrev.apiKey,
       },
-      prev,
+      slotPrev,
     );
+    const stored: OdooModeStore = { ...modes, [mode]: next };
+    const activate = body.activate === true;
+    if (!activate) {
+      await this.writeModes(stored);
+      await this.audit.log({
+        user,
+        action: "odoo_mode_save",
+        entity: "AppSetting",
+        entityId: ODOO_MODES_KEY,
+        after: { mode, url: next.url, db: next.db, user: next.user, apiKeySet: Boolean(next.apiKey), active: stored.active },
+        ip,
+      });
+      return this.odooStatus();
+    }
+    const originChanged = !sameOdooOrigin(live, next);
+    if (originChanged && !next.apiKey) {
+      throw new BadRequestException("Para activar este modo hace falta la clave API de la cuenta principal de ese servidor.");
+    }
+    if (originChanged) {
+      const probe = await this.probeConfig(next);
+      if (!probe.ok) {
+        throw new BadRequestException(probe.message || "La Odoo nueva rechazó la cuenta principal. No se cambió el modo.");
+      }
+    }
+    stored.active = mode;
     await this.prisma.appSetting.upsert({
       where: { key: ODOO_CONFIG_KEY },
       update: { value: next },
       create: { key: ODOO_CONFIG_KEY, value: next },
     });
+    await this.writeModes(stored);
     await this.audit.log({
       user,
-      action: "update",
+      action: "odoo_mode_activate",
       entity: "AppSetting",
       entityId: ODOO_CONFIG_KEY,
-      after: { enabled: next.enabled, url: next.url, db: next.db, user: next.user, apiKeySet: Boolean(next.apiKey) },
+      after: { mode, enabled: next.enabled, url: next.url, db: next.db, user: next.user, apiKeySet: Boolean(next.apiKey), originChanged },
       ip,
     });
-    return { ...current, config: publicOdooConfig(next), source: "guardado" as const };
+    if (originChanged) await this.links.onOriginChange(user, live, next);
+    return this.odooStatus();
+  }
+
+  private async readModes(live: OdooConfig): Promise<OdooModeStore> {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: ODOO_MODES_KEY } });
+    if (!row?.value) return inferOdooModes(live);
+    return normalizeOdooModes(row.value, live);
+  }
+
+  private async writeModes(modes: OdooModeStore) {
+    const value = {
+      active: modes.active,
+      staging: modes.staging,
+      production: modes.production,
+    };
+    await this.prisma.appSetting.upsert({
+      where: { key: ODOO_MODES_KEY },
+      update: { value },
+      create: { key: ODOO_MODES_KEY, value },
+    });
+  }
+
+  private async probeConfig(cfg: OdooConfig) {
+    if (!cfg.url || !cfg.db || !cfg.user || !cfg.apiKey) {
+      return { ok: false, message: "Faltan URL, base, usuario o clave de la cuenta principal." };
+    }
+    try {
+      const uid = await this.odoo.authenticate(cfg);
+      await this.odoo.executeKw(cfg, uid, "res.users", "read", [[uid], ["name", "login"]]);
+      return { ok: true, message: "Conexión correcta." };
+    } catch (e) {
+      return { ok: false, message: (e as Error).message };
+    }
+  }
+
+  listOdooLinks() {
+    return this.links.listForAdmin();
+  }
+
+  setOdooBypass(userId: string, bypass: boolean, user: AuthUser, ip?: string) {
+    return this.links.setBypass(user, userId, bypass, ip);
   }
 
   async listBackups() {

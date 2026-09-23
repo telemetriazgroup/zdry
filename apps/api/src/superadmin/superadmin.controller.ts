@@ -15,9 +15,24 @@ export class SuperadminController {
     return this.svc.odooStatus();
   }
 
+  @Get("odoo-links")
+  odooLinks() {
+    return this.svc.listOdooLinks();
+  }
+
+  @Put("odoo-links/:userId")
+  setOdooBypass(
+    @Param("userId") userId: string,
+    @Body() body: { bypass?: boolean },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.svc.setOdooBypass(userId, !!body.bypass, user, req.ip);
+  }
+
   @Put("odoo")
   saveOdoo(
-    @Body() body: { enabled?: boolean; url?: string; db?: string; user?: string; apiKey?: string },
+    @Body() body: { mode?: "staging" | "production"; activate?: boolean; enabled?: boolean; url?: string; db?: string; user?: string; apiKey?: string },
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {

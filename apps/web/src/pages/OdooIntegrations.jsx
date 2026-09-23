@@ -4,40 +4,27 @@ import { api } from "../api.js";
 
 export default function OdooIntegrations() {
   const [data, setData] = useState(null);
-  const [form, setForm] = useState({ enabled: false, url: "", db: "", user: "", apiKey: "" });
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [probe, setProbe] = useState(null);
 
   async function load() {
-    const d = await api("/superadmin/odoo");
-    setData(d);
-    setForm({
-      enabled: !!d.config?.enabled,
-      url: d.config?.url || "",
-      db: d.config?.db || "",
-      user: d.config?.user || "",
-      apiKey: "",
-    });
+    setData(await api("/superadmin/odoo"));
   }
 
   useEffect(() => {
     load().catch((e) => setError(e.message));
   }, []);
 
-  async function save(e) {
-    e.preventDefault();
+  async function saveMode(body) {
     setBusy(true);
     setError("");
     setMsg("");
     try {
-      const body = { enabled: form.enabled, url: form.url, db: form.db, user: form.user };
-      if (form.apiKey.trim()) body.apiKey = form.apiKey.trim();
       const d = await api("/superadmin/odoo", { method: "PUT", body });
       setData(d);
-      setForm((f) => ({ ...f, apiKey: "" }));
-      setMsg("Conexión Odoo guardada.");
+      setMsg(body.activate ? `Modo ${body.mode === "production" ? "producción" : "staging"} activo.` : "Conexión guardada. El modo activo no cambió.");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -49,8 +36,8 @@ export default function OdooIntegrations() {
     <>
       <h2 className="section-title">Integración Odoo</h2>
       <p className="section-sub">
-        El conector usa las mismas credenciales para dos flechas: cierre de venta ZDRY → Odoo, y lectura de lotes DRY a la mano Odoo → ZDRY.
-        La clave no se vuelve a mostrar; déjala en blanco si no la cambias.
+        Hay dos conexiones guardadas. El modo activo es el que usa todo el equipo; en la barra se lee Staging o Producción.
+        La clave no se vuelve a mostrar. Los demás usuarios no ven la URL ni la base.
       </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
@@ -78,36 +65,35 @@ export default function OdooIntegrations() {
       </div>
       {probe?.ok ? <div className="ok-msg">Conectado{probe.user?.name ? ` · ${probe.user.name}` : ""}.</div> : null}
       {probe && !probe.ok ? <div className="err">{probe.message}</div> : null}
+      {data?.cutover?.pending ? (
+        <div className="err">
+          El origen cambió ({data.cutover.fromDb || "anterior"} → {data.cutover.toDb || "nuevo"}).
+          Los id de la Odoo de pruebas se limpiaron y la cola de ese entorno no se reintenta.
+          Baja de nuevo la bandeja para emparejar por ISO.
+        </div>
+      ) : null}
+      <OdooBypassList />
 
-      <form className="panel" onSubmit={save} style={{ marginBottom: 18 }}>
-        <h3>Conexión</h3>
-        <p className="section-sub">Origen actual: {data?.source === "guardado" ? "valores guardados" : "variables de entorno"}.</p>
-        <label className="check-inline" style={{ display: "flex", gap: 8, alignItems: "center", margin: "10px 0" }}>
-          <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
-          Conector activo
-        </label>
-        <div className="form-grid">
-          <div>
-            <label>URL</label>
-            <input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://odoo.ejemplo.com" />
-          </div>
-          <div>
-            <label>Base de datos</label>
-            <input value={form.db} onChange={(e) => setForm({ ...form, db: e.target.value })} />
-          </div>
-          <div>
-            <label>Usuario</label>
-            <input value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} />
-          </div>
-          <div>
-            <label>Clave API {data?.config?.apiKeySet ? "(ya hay una guardada)" : ""}</label>
-            <input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} placeholder={data?.config?.apiKeySet ? "••••••••" : ""} autoComplete="new-password" />
-          </div>
-        </div>
-        <div className="action-row" style={{ marginTop: 14 }}>
-          <button className="btn-primary" type="submit" disabled={busy}>Guardar</button>
-        </div>
-      </form>
+      <div className="odoo-mode-grid">
+        <OdooModeCard
+          mode="staging"
+          title="Staging"
+          hint="Odoo de pruebas. Guardar no cambia el modo activo."
+          saved={data?.modes?.staging}
+          active={data?.mode === "staging"}
+          busy={busy}
+          onSubmit={saveMode}
+        />
+        <OdooModeCard
+          mode="production"
+          title="Producción"
+          hint="Odoo real. Activarlo corta el origen: las claves personales quedan sin vínculo."
+          saved={data?.modes?.production}
+          active={data?.mode === "production"}
+          busy={busy}
+          onSubmit={saveMode}
+        />
+      </div>
 
       <div className="panel">
         <h3>Cotización ZDRY → Odoo (Q0 + Q2)</h3>
@@ -164,6 +150,119 @@ export default function OdooIntegrations() {
         )}
       </div>
     </>
+  );
+}
+
+function OdooModeCard({ mode, title, hint, saved, active, busy, onSubmit }) {
+  const [form, setForm] = useState({
+    enabled: !!saved?.enabled,
+    url: saved?.url || "",
+    db: saved?.db || "",
+    user: saved?.user || "",
+    apiKey: "",
+  });
+
+  useEffect(() => {
+    setForm({
+      enabled: !!saved?.enabled,
+      url: saved?.url || "",
+      db: saved?.db || "",
+      user: saved?.user || "",
+      apiKey: "",
+    });
+  }, [saved?.url, saved?.db, saved?.user, saved?.enabled]);
+
+  function send(activate) {
+    const body = { mode, activate, enabled: form.enabled, url: form.url, db: form.db, user: form.user };
+    if (form.apiKey.trim()) body.apiKey = form.apiKey.trim();
+    return onSubmit(body);
+  }
+
+  return (
+    <form className={`panel odoo-mode-card${active ? " is-active" : ""}`} onSubmit={(e) => { e.preventDefault(); send(false); }}>
+      <h3>{title}{active ? " · activo" : ""}</h3>
+      <p className="section-sub">{hint}{saved?.apiKeySet ? " Ya hay una clave guardada." : " Todavía no hay clave guardada."}</p>
+      <label className="check-inline" style={{ display: "flex", gap: 8, alignItems: "center", margin: "10px 0" }}>
+        <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
+        Conector activo en este modo
+      </label>
+      <div className="form-grid">
+        <div>
+          <label>URL</label>
+          <input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://odoo.ejemplo.com" />
+        </div>
+        <div>
+          <label>Base de datos</label>
+          <input value={form.db} onChange={(e) => setForm({ ...form, db: e.target.value })} />
+        </div>
+        <div>
+          <label>Usuario principal</label>
+          <input value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} />
+        </div>
+        <div>
+          <label>Clave API</label>
+          <input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} placeholder={saved?.apiKeySet ? "••••••••" : ""} autoComplete="new-password" />
+        </div>
+      </div>
+      <div className="action-row" style={{ marginTop: 14 }}>
+        <button className="btn-ghost" type="submit" disabled={busy}>Guardar</button>
+        <button className="btn-primary" type="button" disabled={busy || active} onClick={() => send(true)}>Usar este modo</button>
+      </div>
+    </form>
+  );
+}
+
+function OdooBypassList() {
+  const [rows, setRows] = useState([]);
+  const [error, setError] = useState("");
+
+  async function load() {
+    setRows(await api("/superadmin/odoo-links"));
+  }
+
+  useEffect(() => {
+    load().catch((e) => setError(e.message));
+  }, []);
+
+  async function toggle(id, bypass) {
+    setError("");
+    try {
+      setRows(await api(`/superadmin/odoo-links/${id}`, { method: "PUT", body: { bypass } }));
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  return (
+    <div className="panel" style={{ marginBottom: 18 }}>
+      <h3>Exención: operar como la cuenta principal</h3>
+      <p className="section-sub">
+        Comercial, despacho y administrador necesitan su clave. Si marcas la exención, entran igual y Odoo sigue viendo la cuenta principal. Queda en la auditoría.
+      </p>
+      {error ? <div className="err">{error}</div> : null}
+      <div className="tablewrap">
+        <table className="data">
+          <thead>
+            <tr><th>Persona</th><th>Rol</th><th>Estado</th><th>Cuenta principal</th></tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td><b>{r.name}</b><div className="recv-who">{r.email}</div></td>
+                <td>{r.role}</td>
+                <td>{r.status === "active" ? "Activa" : r.status === "exempt" ? "Exenta" : r.status === "failed" ? "Fallida" : "Sin vínculo"}</td>
+                <td>
+                  <label className="check-inline">
+                    <input type="checkbox" checked={!!r.bypass} onChange={(e) => toggle(r.id, e.target.checked)} />
+                    {" "}Eximir
+                  </label>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

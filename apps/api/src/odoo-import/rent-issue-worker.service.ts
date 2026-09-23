@@ -94,7 +94,7 @@ export class RentIssueWorker implements OnModuleInit, OnModuleDestroy {
     });
 
     try {
-      const result = await this.issueRent(job.quoteId);
+      const result = await this.odoo.runAsQuoteVendor(job.quoteId, () => this.issueRent(job.quoteId));
       await this.prisma.odooSyncJob.update({
         where: { id: jobId },
         data: { status: "sent", lastError: null, payload: result as Prisma.InputJsonValue },

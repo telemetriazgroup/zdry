@@ -83,7 +83,7 @@ export class RentCloseWorker implements OnModuleInit, OnModuleDestroy {
     });
 
     try {
-      const result = await this.closeRent(job.quoteId);
+      const result = await this.odoo.runAsQuoteVendor(job.quoteId, () => this.closeRent(job.quoteId));
       await this.prisma.odooSyncJob.update({
         where: { id: jobId },
         data: { status: "sent", lastError: null, payload: result as Prisma.InputJsonValue },

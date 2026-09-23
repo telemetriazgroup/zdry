@@ -33,6 +33,7 @@ import {
   type PricingRule,
 } from "../domain/pricing";
 import { EvaluationService } from "../evaluation/evaluation.service";
+import { OdooLinkService } from "../odoo/odoo-link.service";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import { DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
@@ -48,6 +49,7 @@ export class CatalogMediaService {
     private readonly warehouse: WarehouseService,
     private readonly storage: StorageService,
     private readonly evaluation: EvaluationService,
+    private readonly odooLinks: OdooLinkService,
   ) {}
 
   async meta() {
@@ -102,6 +104,7 @@ export class CatalogMediaService {
       if (cand.containerIso) candByIso.set(cand.containerIso, ref);
       if (cand.odooLotId != null) candByLot.set(cand.odooLotId, ref);
     }
+    const odooLocked = await this.odooLinks.viewerLocked();
     return rows.map((c) => {
       const active = c.photos.filter((p) => p.status === PHOTO_STATUS_ACTIVE);
       const rejected = c.photos.filter((p) => p.status === PHOTO_STATUS_REJECTED);
@@ -153,13 +156,14 @@ export class CatalogMediaService {
         demo: c.demo,
         registeredByName: c.registeredByName || "—",
         createdAt: c.createdAt,
-        odooLotId: c.odooLotId,
+        odooLotId: odooLocked ? null : c.odooLotId,
         candidateId: cand?.id || null,
-        odooWarehouse: c.odooWarehouse,
-        odooVendorName: c.odooVendorName,
+        odooWarehouse: odooLocked ? null : c.odooWarehouse,
+        odooVendorName: odooLocked ? null : c.odooVendorName,
+        odooLocked,
         costSource: c.costSource,
-        rawBase: offer.rawBase,
-        securedBase: offer.securedBase,
+        rawBase: odooLocked ? null : offer.rawBase,
+        securedBase: odooLocked ? null : offer.securedBase,
         safetyPct: offer.safetyPct,
         safetyAdd: offer.safetyAdd,
         showPrice: offer.showPrice,
@@ -230,11 +234,12 @@ export class CatalogMediaService {
       roofHole: c.roofHole,
       ratings: evalData.ratings,
       ratingHistory: evalData.ratingHistory,
-      odooLotId: c.odooLotId,
+      odooLotId: (await this.odooLinks.viewerLocked()) ? null : c.odooLotId,
       candidateId: cand?.id || null,
       intakeOrigin: c.intakeOrigin,
-      odooWarehouse: c.odooWarehouse,
-      odooVendorName: c.odooVendorName,
+      odooWarehouse: (await this.odooLinks.viewerLocked()) ? null : c.odooWarehouse,
+      odooVendorName: (await this.odooLinks.viewerLocked()) ? null : c.odooVendorName,
+      odooLocked: await this.odooLinks.viewerLocked(),
     };
   }
 
@@ -658,9 +663,15 @@ export class CatalogMediaService {
       orderBy: { createdAt: "desc" },
       take: 20,
     });
+    const odooLocked = await this.odooLinks.viewerLocked();
     return {
       ...offer,
-      fobCif: Number(c.fobCif) || 0,
+      odooLocked,
+      rawBase: odooLocked ? null : offer.rawBase,
+      base: odooLocked ? null : offer.base,
+      securedBase: odooLocked ? null : offer.securedBase,
+      detail: odooLocked ? "Conecta tu clave API de Odoo para ver costos, proveedor y procedencia." : offer.detail,
+      fobCif: odooLocked ? null : Number(c.fobCif) || 0,
       history: history.map((h) => ({
         id: h.id,
         priceList: Number(h.priceList),

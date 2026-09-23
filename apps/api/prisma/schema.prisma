@@ -44,8 +44,30 @@ model User {
   auditLogs        AuditLog[]
   quotesSold       Quote[]    @relation("QuoteVendor")
   catalogShares    CatalogShare[]
+  odooLink         UserOdooLink?
 
   @@index([demo])
+}
+
+model UserOdooLink {
+  userId       String    @id
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  odooLogin    String    @default("")
+  odooUid      Int?
+  odooName     String    @default("")
+  companyId    Int?
+  companyName  String    @default("")
+  apiKeyEnc    String    @default("")
+  status       String    @default("none")
+  testedAt     DateTime?
+  lastError    String    @default("")
+  bypass       Boolean   @default(false)
+  bypassById   String?
+  bypassByName String    @default("")
+  bypassAt     DateTime?
+  targetUrl    String    @default("")
+  targetDb     String    @default("")
+  updatedAt    DateTime  @updatedAt
 }
 
 model Depot {

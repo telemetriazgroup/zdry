@@ -25,6 +25,7 @@ import SystemBackup from "./SystemBackup.jsx";
 import DryStats from "./DryStats.jsx";
 import Alquileres from "./Alquileres.jsx";
 import CatalogShares from "./CatalogShares.jsx";
+import { OdooLinkModal, OdooNavStatus, useOdooLink } from "../odoo-link.jsx";
 
 const SIDEBAR_KEY = "zdry.sidebarCollapsed";
 
@@ -39,6 +40,7 @@ function allowed(nav, pathname, role) {
 
 export default function Shell() {
   const { user, nav, logout, avatarUrl } = useAuth();
+  const odooLink = useOdooLink();
   const navigate = useNavigate();
   const loc = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -131,6 +133,7 @@ export default function Shell() {
               <img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" />
             </div>
             <div className="topbar-tools account-bar">
+              <OdooNavStatus status={odooLink.status} />
               <NavLink to="/app/perfil" className="account-chip" title="Mi perfil">
                 {avatarUrl ? (
                   <img className="avatar" src={avatarUrl} alt="" />
@@ -149,6 +152,17 @@ export default function Shell() {
 
         <div className="page">
           <div className="role-desc">{ROLE_DESC[user.role]}</div>
+          {odooLink.open && odooLink.status ? (
+            <OdooLinkModal
+              status={odooLink.status}
+              onClose={odooLink.snooze}
+              onDone={async (next) => {
+                odooLink.setStatus(next);
+                odooLink.snooze();
+                if (next?.open) sessionStorage.removeItem("zdry.odooLinkSnooze");
+              }}
+            />
+          ) : null}
           <Routes>
             <Route index element={<Home />} />
             <Route path="perfil" element={<Profile />} />

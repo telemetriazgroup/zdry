@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, apiUpload, ApiError } from "../api.js";
 import { useAuth } from "../auth.jsx";
+import { OdooLinkForm } from "../odoo-link.jsx";
 
 export default function Profile() {
   const { user, refreshUser, avatarUrl } = useAuth();
@@ -11,6 +12,10 @@ export default function Profile() {
   const [newPassword, setNewPassword] = useState("");
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
+  const [odoo, setOdoo] = useState(null);
+  useEffect(() => {
+    api("/odoo-link/me").then(setOdoo).catch(() => {});
+  }, []);
   const initials = (user?.name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 
   async function save(e) {
@@ -100,6 +105,13 @@ export default function Profile() {
           <button className="btn-primary" type="submit">Guardar</button>
         </form>
       </div>
+
+      {odoo?.required ? (
+        <div className="panel" style={{ marginBottom: 18 }}>
+          <h3>Clave API de Odoo</h3>
+          <OdooLinkForm status={odoo} onDone={(next) => { setOdoo(next); setMsg(next.open ? "Conexión con Odoo lista." : "Prueba registrada."); }} />
+        </div>
+      ) : null}
 
       <div className="panel">
         <h3>Cambiar clave</h3>

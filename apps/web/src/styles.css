@@ -810,6 +810,24 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .overlay.open { display: flex; }
 .modal { background: #fff; border-radius: 14px; max-width: 980px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,.35); overflow: hidden; }
 .modal.quote-modal { max-width: 640px; }
+.modal.odoo-link-modal { max-width: 640px; }
+.overlay.odoo-link-overlay { z-index: 220; }
+.odoo-steps-title { margin: 0 0 8px; font-weight: 800; }
+.odoo-steps { margin: 0 0 16px; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; }
+.odoo-steps li { font-size: 14px; line-height: 1.4; }
+.odoo-nav {
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid rgba(255,255,255,.28); border-radius: 999px;
+  padding: 4px 10px; color: #fff; font-size: 12px; white-space: nowrap;
+}
+.odoo-nav b { font-size: 12px; }
+.odoo-nav span { opacity: .9; }
+.odoo-nav-staging { background: #8a5a12; }
+.odoo-nav-production { background: #1d6b45; }
+.odoo-nav-none { background: transparent; }
+.odoo-mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px; }
+.odoo-mode-card.is-active { outline: 2px solid #1d6b45; }
+@media (max-width: 900px) { .odoo-mode-grid { grid-template-columns: 1fr; } }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--line); }
 .modal-close { background: var(--bg); border: none; width: 32px; height: 32px; border-radius: 50%; font-size: 16px; color: var(--text-2); }
 .modal-body { padding: 22px; display: grid; grid-template-columns: 1.2fr 1fr; gap: 26px; }

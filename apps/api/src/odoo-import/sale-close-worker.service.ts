@@ -80,7 +80,7 @@ export class SaleCloseWorker implements OnModuleInit, OnModuleDestroy {
     });
 
     try {
-      const result = await this.closeQuote(job.quoteId);
+      const result = await this.odoo.runAsQuoteVendor(job.quoteId, () => this.closeQuote(job.quoteId));
       await this.prisma.odooSyncJob.update({
         where: { id: jobId },
         data: { status: "sent", lastError: null, payload: result as Prisma.InputJsonValue },

@@ -178,7 +178,7 @@ export class QuoteIssueWorker implements OnModuleInit, OnModuleDestroy {
     });
 
     try {
-      const result = await this.issueQuote(job.quoteId);
+      const result = await this.odoo.runAsQuoteVendor(job.quoteId, () => this.issueQuote(job.quoteId));
       await this.prisma.odooSyncJob.update({
         where: { id: jobId },
         data: { status: "sent", lastError: null, payload: result as Prisma.InputJsonValue },
