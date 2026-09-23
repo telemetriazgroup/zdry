@@ -107,6 +107,7 @@ export class WarehouseController {
       hideOdoo: hideOdooFor(user.role),
       hideOdooIds: hideOdooIdsFor(user.role),
       hideRates: hideRatesFor(user.role),
+      includeArchive: user.role === "superadmin",
     });
   }
 
@@ -212,12 +213,46 @@ export class WarehouseController {
   }
 
   @Get("units/:iso/captures/:id")
-  async openCapture(@Param("iso") iso: string, @Param("id") id: string) {
-    const obj = await this.warehouse.openCapture(iso, id);
+  async openCapture(@Param("iso") iso: string, @Param("id") id: string, @CurrentUser() user: AuthUser) {
+    const obj = await this.warehouse.openCapture(iso, id, user);
     return new StreamableFile(obj.stream, {
       type: obj.contentType || "application/octet-stream",
       length: obj.contentLength,
       disposition: `inline; filename="${(obj.name || "toma").replace(/"/g, "")}"`,
+    });
+  }
+
+  @Post("units/:iso/captures/:id/archive")
+  @Roles("admin", "coordinador")
+  archiveCapture(
+    @Param("iso") iso: string,
+    @Param("id") id: string,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.archiveCapture(iso, id, user, req.ip);
+  }
+
+  @Post("units/:iso/photos/:slot/clear")
+  @Roles("admin", "coordinador")
+  clearSlot(
+    @Param("iso") iso: string,
+    @Param("slot") slot: string,
+    @Body() body: { to?: "campo" | "archive" },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.clearSlot(iso, slot, body?.to === "campo" ? "campo" : "archive", user, req.ip);
+  }
+
+  @Get("units/:iso/photo-history/:id")
+  @Roles("superadmin")
+  async openPhotoHistory(@Param("iso") iso: string, @Param("id") id: string) {
+    const obj = await this.warehouse.openPhotoHistory(iso, id);
+    return new StreamableFile(obj.stream, {
+      type: obj.contentType || "application/octet-stream",
+      length: obj.contentLength,
+      disposition: "inline",
     });
   }
 

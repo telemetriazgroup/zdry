@@ -339,7 +339,7 @@ export class WarehouseService {
       .filter((x): x is NonNullable<typeof x> => !!x);
   }
 
-  async getUnit(iso: string, opts: { hideOdoo?: boolean; hideOdooIds?: boolean; hideRates?: boolean } = {}) {
+  async getUnit(iso: string, opts: { hideOdoo?: boolean; hideOdooIds?: boolean; hideRates?: boolean; includeArchive?: boolean } = {}) {
     await this.odooImport.hydrateReceptionFicha(iso).catch(() => undefined);
     const c = await this.loadUnit(iso);
     await this.evaluation.importLegacyForUnit(c.iso, c);
@@ -347,7 +347,7 @@ export class WarehouseService {
       this.prisma.containerType.findMany(),
       this.prisma.category.findMany(),
       this.getLayoutRules(),
-      this.loadUnitExtras(c.iso, !!opts.hideRates),
+      this.loadUnitExtras(c.iso, !!opts.hideRates, !!opts.includeArchive),
     ]);
     const occupants = (await this.prisma.container.findMany({ where: { depotId: c.depotId, lado: { not: null } } })).map(
       toYardUnit,
@@ -372,6 +372,7 @@ export class WarehouseService {
       hideOdoo: hideOdooFor(user.role),
       hideOdooIds: hideOdooIdsFor(user.role),
       hideRates: hideRatesFor(user.role),
+      includeArchive: user.role === "superadmin",
     });
   }
 
@@ -1269,11 +1270,147 @@ export class WarehouseService {
     return this.presentFor(c.iso, user);
   }
 
-  async openCapture(iso: string, id: string) {
+  async openCapture(iso: string, id: string, user?: AuthUser) {
     const row = await this.prisma.fieldCapture.findFirst({ where: { id, iso } });
     if (!row) throw new NotFoundException("Toma no encontrada.");
+    if (row.archivedAt && user?.role !== "superadmin") {
+      throw new ForbiddenException("Solo el superusuario ve las tomas archivadas.");
+    }
     const obj = await this.storage.get(row.storageKey);
     return { ...obj, contentType: row.mimeType || obj.contentType, name: row.originalName };
+  }
+
+  async openPhotoHistory(iso: string, id: string) {
+    const photo = await this.prisma.inspectionPhoto.findFirst({
+      where: { id, iso, status: PHOTO_STATUS_REJECTED },
+    });
+    if (!photo) throw new NotFoundException("Foto archivada no encontrada.");
+    const obj = await this.storage.get(photo.storageKey);
+    return { ...obj, contentType: photo.mimeType || obj.contentType };
+  }
+
+  async archiveCapture(iso: string, id: string, user: AuthUser, ip?: string) {
+    if (user.role === "almacen") throw new ForbiddenException("El personal de campo no archiva tomas.");
+    const c = await this.loadUnit(iso);
+    const cap = await this.prisma.fieldCapture.findFirst({ where: { id, iso: c.iso, archivedAt: null } });
+    if (!cap) throw new NotFoundException("Toma no encontrada.");
+    await this.prisma.fieldCapture.update({
+      where: { id: cap.id },
+      data: { archivedAt: new Date(), archivedById: user.id, archivedByName: user.name },
+    });
+    await this.prisma.containerHistory.create({
+      data: {
+        iso: c.iso,
+        type: "Foto",
+        detail: `${user.name} archivó una toma de campo${cap.originalName ? ` (${cap.originalName})` : ""}.`,
+      },
+    });
+    await this.audit.log({
+      user,
+      action: "archive_capture",
+      entity: "FieldCapture",
+      entityId: cap.id,
+      after: { iso: c.iso },
+      ip,
+    });
+    return this.presentFor(c.iso, user);
+  }
+
+  async clearSlot(iso: string, slotRaw: string, to: "campo" | "archive", user: AuthUser, ip?: string) {
+    if (user.role === "almacen") throw new ForbiddenException("El personal de campo no quita casillas del catálogo.");
+    const c = await this.loadUnit(iso);
+    const isVideo = slotRaw === "video" || slotRaw === "9";
+    const slot = isVideo ? 9 : Number(slotRaw);
+    if (!isVideo && (!Number.isInteger(slot) || slot < 0 || slot > 8)) {
+      throw new BadRequestException("Slot de foto inválido (0–8).");
+    }
+    const photo = isVideo ? null : c.photos.find((p) => p.slot === slot && p.status === PHOTO_STATUS_ACTIVE);
+    if (isVideo ? !c.video360Key : !photo) throw new BadRequestException("Esa casilla está vacía.");
+    const linked = await this.prisma.fieldCapture.findFirst({
+      where: { iso: c.iso, assignedSlot: slot, archivedAt: null },
+      orderBy: { createdAt: "desc" },
+    });
+    if (to === "campo") {
+      if (linked) {
+        await this.prisma.fieldCapture.update({ where: { id: linked.id }, data: { assignedSlot: null } });
+      } else if (isVideo && c.video360Key) {
+        await this.captureFromStored(c.iso, c.video360Key, c.video360Mime || "video/mp4", "video", "Video 360", user, false);
+      } else if (photo) {
+        await this.captureFromStored(c.iso, photo.storageKey, photo.mimeType, "photo", photo.originalName, user, false);
+      }
+    } else if (linked) {
+      await this.prisma.fieldCapture.update({
+        where: { id: linked.id },
+        data: { archivedAt: new Date(), archivedById: user.id, archivedByName: user.name },
+      });
+    } else if (isVideo && c.video360Key) {
+      await this.captureFromStored(c.iso, c.video360Key, c.video360Mime || "video/mp4", "video", "Video 360", user, true);
+    }
+    if (isVideo) {
+      await this.prisma.container.update({
+        where: { iso: c.iso },
+        data: { video360Key: null, video360Mime: null },
+      });
+    } else if (photo) {
+      await this.archivePhoto(photo, user, to === "campo" ? "Devuelta a tomas de campo" : "Quitada de la casilla");
+      if (c.odooRefSlot === slot) {
+        await this.prisma.container.update({
+          where: { iso: c.iso },
+          data: { odooRefSlot: null, odooRefAttachmentId: null, odooRefPushedAt: null },
+        });
+      }
+    }
+    const label = isVideo ? "Video 360" : PHOTO_LABELS[slot] || `Casilla ${slot + 1}`;
+    await this.prisma.containerHistory.create({
+      data: {
+        iso: c.iso,
+        type: "Foto",
+        detail: to === "campo"
+          ? `${user.name} sacó ${label} de la casilla y la devolvió a tomas de campo.`
+          : `${user.name} quitó ${label} de la casilla. Quedó archivada.`,
+      },
+    });
+    await this.audit.log({
+      user,
+      action: "clear_slot",
+      entity: "InspectionPhoto",
+      entityId: c.iso,
+      after: { slot, to },
+      ip,
+    });
+    return this.presentFor(c.iso, user);
+  }
+
+  private async captureFromStored(
+    iso: string,
+    storageKey: string,
+    mimeType: string,
+    kind: "photo" | "video",
+    originalName: string,
+    user: AuthUser,
+    archived: boolean,
+  ) {
+    const buf = await this.storage.getBuffer(storageKey);
+    const ext = storageKey.split(".").pop() || (kind === "video" ? "mp4" : "jpg");
+    const id = randomUUID();
+    const nextKey = `warehouse/${iso}/captures/${id}.${ext}`;
+    await this.storage.put(nextKey, buf.buffer, mimeType || buf.contentType || "application/octet-stream");
+    await this.prisma.fieldCapture.create({
+      data: {
+        iso,
+        kind,
+        storageKey: nextKey,
+        mimeType: mimeType || buf.contentType || "application/octet-stream",
+        originalName: originalName || `${kind}.${ext}`,
+        sizeBytes: buf.buffer.length,
+        note: "",
+        createdById: user.id,
+        createdByName: user.name,
+        archivedAt: archived ? new Date() : null,
+        archivedById: archived ? user.id : null,
+        archivedByName: archived ? user.name : null,
+      },
+    });
   }
 
   async assignCapture(iso: string, id: string, slotRaw: string, user: AuthUser, ip?: string) {
@@ -1288,6 +1425,10 @@ export class WarehouseService {
     let portrait = false;
     if (isVideo) {
       await this.uploadMedia(c.iso, "video", { buffer: buf.buffer, originalname: cap.originalName, size: buf.buffer.length }, user, ip);
+      await this.prisma.fieldCapture.updateMany({
+        where: { iso: c.iso, assignedSlot: 9, archivedAt: null, id: { not: cap.id } },
+        data: { assignedSlot: null },
+      });
       await this.prisma.fieldCapture.update({ where: { id: cap.id }, data: { assignedSlot: 9 } });
     } else {
       const slot = Number(slotRaw);
@@ -1302,6 +1443,10 @@ export class WarehouseService {
         portrait = false;
       }
       await this.storeInspectionPhoto(c, slot, buf.buffer, cap.originalName, buf.buffer.length, user, ip, "Asignada desde toma de campo");
+      await this.prisma.fieldCapture.updateMany({
+        where: { iso: c.iso, assignedSlot: slot, archivedAt: null, id: { not: cap.id } },
+        data: { assignedSlot: null },
+      });
       await this.prisma.fieldCapture.update({ where: { id: cap.id }, data: { assignedSlot: slot } });
     }
     await this.audit.log({
@@ -1587,9 +1732,15 @@ export class WarehouseService {
     return normalizeDocumentConcept(concept);
   }
 
-  private async loadUnitExtras(iso: string, hideRates: boolean) {
-    const [captures, costs, documents, visit, evalData] = await Promise.all([
-      this.prisma.fieldCapture.findMany({ where: { iso }, orderBy: { createdAt: "desc" } }),
+  private async loadUnitExtras(iso: string, hideRates: boolean, includeArchive = false) {
+    const [captures, archivedCaptures, archivedPhotos, costs, documents, visit, evalData] = await Promise.all([
+      this.prisma.fieldCapture.findMany({ where: { iso, archivedAt: null }, orderBy: { createdAt: "desc" } }),
+      includeArchive
+        ? this.prisma.fieldCapture.findMany({ where: { iso, archivedAt: { not: null } }, orderBy: { archivedAt: "desc" } })
+        : Promise.resolve([]),
+      includeArchive
+        ? this.prisma.inspectionPhoto.findMany({ where: { iso, status: PHOTO_STATUS_REJECTED }, orderBy: { rejectedAt: "desc" } })
+        : Promise.resolve([]),
       this.prisma.depotCostEntry.findMany({ where: { iso }, orderBy: { createdAt: "desc" } }),
       this.prisma.containerDocument.findMany({ where: { iso }, orderBy: { createdAt: "desc" } }),
       this.prisma.gateVisit.findFirst({ where: { containerIso: iso, archivedAt: null }, orderBy: { linkedAt: "desc" } }),
@@ -1604,6 +1755,26 @@ export class WarehouseService {
         originalName: r.originalName,
         createdByName: r.createdByName,
         createdAt: r.createdAt,
+      })),
+      archivedCaptures: archivedCaptures.map((r) => ({
+        id: r.id,
+        kind: r.kind,
+        note: r.note,
+        assignedSlot: r.assignedSlot,
+        originalName: r.originalName,
+        createdByName: r.createdByName,
+        createdAt: r.createdAt,
+        archivedAt: r.archivedAt,
+        archivedByName: r.archivedByName,
+      })),
+      archivedPhotos: archivedPhotos.map((p) => ({
+        id: p.id,
+        slot: p.slot,
+        label: PHOTO_LABELS[p.slot] || `Casilla ${p.slot + 1}`,
+        originalName: p.originalName,
+        rejectedAt: p.rejectedAt,
+        rejectedByName: p.rejectedByName,
+        rejectNote: p.rejectNote,
       })),
       depotCosts: costs.map((r) => presentDepotCost(r, hideRates)),
       documents: documents.map((r) => ({

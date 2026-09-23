@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, apiUpload, apiUrl, formatWhen } from "../api.js";
-import { hasRole, useAuth } from "../auth.jsx";
+import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
 import SearchCreate from "../search-create.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 import { parseIso6346 } from "../iso6346.js";
@@ -765,6 +765,35 @@ export default function Recepcion() {
     }
   }
 
+  async function archiveCapture(id) {
+    if (!inspectIso) return;
+    if (!window.confirm("¿Archivar esta toma? Sale de la bandeja. El superusuario puede verla.")) return;
+    try {
+      const next = await api(`/warehouse/units/${inspectIso}/captures/${id}/archive`, { method: "POST" });
+      setUnit(next);
+      if (pickedCap === id) setPickedCap(null);
+      setMsg("Toma archivada.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function clearSlot(slot, to) {
+    if (!inspectIso) return;
+    const question = to === "campo"
+      ? "¿Sacar esta imagen de la casilla y devolverla a tomas de campo?"
+      : "¿Quitar esta imagen de la casilla? Queda archivada para el superusuario.";
+    if (!window.confirm(question)) return;
+    try {
+      const next = await api(`/warehouse/units/${inspectIso}/photos/${slot}/clear`, { method: "POST", body: { to } });
+      setUnit(next);
+      setBust(Date.now());
+      setMsg(to === "campo" ? "La imagen volvió a tomas de campo." : "La imagen salió de la casilla y quedó archivada.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   async function assignCapture(id, slot) {
     if (!inspectIso) return;
     setAssigning(true);
@@ -1133,6 +1162,7 @@ export default function Recepcion() {
                       >
                         {c.assignedSlot == null ? "Sin casilla · Elegir" : c.assignedSlot === 9 ? "Video 360 · Elegir" : `Casilla ${c.assignedSlot + 1} · Elegir`}
                       </button>
+                      <button type="button" className="thumb-arch" onClick={() => archiveCapture(c.id)}>Archivar</button>
                     </div>
                   ))}
                 </div>
@@ -1149,6 +1179,49 @@ export default function Recepcion() {
             ) : (
               <p className="section-sub">El personal de campo también sube tomas. Aquí puedes cargar las tuyas y asignarlas a las casillas 1–9.</p>
             )}
+            {isSuperadmin(user) && ((unit.archivedCaptures || []).length || (unit.archivedPhotos || []).length) ? (
+              <div className="campo-caps">
+                <b>Archivo de imágenes</b>
+                <p className="section-sub">Solo el superusuario ve las tomas y las casillas que se quitaron.</p>
+                <div className="odoo-assign-thumbs">
+                  {(unit.archivedCaptures || []).map((c, idx) => (
+                    <div key={c.id} className="odoo-assign-thumb">
+                      <button
+                        type="button"
+                        className="thumb-zoom"
+                        onClick={() => lb.open(
+                          (unit.archivedCaptures || []).map((x) => ({
+                            src: apiUrl(`/warehouse/units/${unit.iso}/captures/${x.id}`),
+                            type: x.kind === "video" ? "video" : "image",
+                            label: x.originalName || "Toma archivada",
+                          })),
+                          idx,
+                        )}
+                      >
+                        {c.kind === "video" ? <span>Video archivado</span> : <img src={apiUrl(`/warehouse/units/${unit.iso}/captures/${c.id}`)} alt="" />}
+                      </button>
+                      <span>{c.archivedByName || "Archivada"}{c.assignedSlot == null ? "" : c.assignedSlot === 9 ? " · Video" : ` · Casilla ${c.assignedSlot + 1}`}</span>
+                    </div>
+                  ))}
+                  {(unit.archivedPhotos || []).map((p) => (
+                    <div key={p.id} className="odoo-assign-thumb">
+                      <button
+                        type="button"
+                        className="thumb-zoom"
+                        onClick={() => lb.open([{
+                          src: apiUrl(`/warehouse/units/${unit.iso}/photo-history/${p.id}`),
+                          type: "image",
+                          label: `${p.slot + 1}. ${p.label}`,
+                        }], 0)}
+                      >
+                        <img src={apiUrl(`/warehouse/units/${unit.iso}/photo-history/${p.id}`)} alt="" />
+                      </button>
+                      <span>{p.label} · {p.rejectedByName || "Archivada"}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {canCoord ? (
               <>
                 <div
@@ -1280,6 +1353,10 @@ export default function Recepcion() {
                           {i < 9 && origin === "odoo" && unit.canPushOdooRef ? (
                             <span className="odoo-ref-hint">Vino de Odoo</span>
                           ) : null}
+                          <div className="slot-actions">
+                            <button type="button" className="btn-ghost" onClick={() => clearSlot(i < 9 ? i : "video", "archive")}>Quitar</button>
+                            <button type="button" className="btn-ghost" onClick={() => clearSlot(i < 9 ? i : "video", "campo")}>A tomas de campo</button>
+                          </div>
                         </div>
                       );
                     }

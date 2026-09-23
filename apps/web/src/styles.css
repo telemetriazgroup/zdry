@@ -929,6 +929,14 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   display: block; width: 100%; padding: 6px 8px; border: 0; background: #fff;
   font-size: 11px; color: var(--text-2); text-align: left; cursor: pointer;
 }
+.odoo-assign-thumb .thumb-arch {
+  display: block; width: 100%; padding: 6px 8px; border: 0; border-top: 1px solid var(--line);
+  background: #fff; font-size: 11px; font-weight: 700; color: #c92a2a; text-align: left; cursor: pointer;
+}
+.slot-actions {
+  position: relative; z-index: 3; display: flex; gap: 6px; justify-content: center; margin-top: 6px;
+}
+.slot-actions .btn-ghost { padding: 4px 8px; font-size: 11px; }
 .watermark-config { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
 .watermark-preview {
   width: 220px; height: 88px; border: 1px solid var(--line); border-radius: 8px;

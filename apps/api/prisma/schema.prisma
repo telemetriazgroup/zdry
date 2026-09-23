@@ -840,6 +840,9 @@ model FieldCapture {
   sizeBytes      Int
   note           String    @default("")
   assignedSlot   Int?
+  archivedAt     DateTime?
+  archivedById   String?
+  archivedByName String?
   createdById    String?
   createdByName  String
   createdAt      DateTime  @default(now())
