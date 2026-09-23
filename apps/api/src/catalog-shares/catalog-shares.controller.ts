@@ -22,10 +22,22 @@ export class CatalogSharesController {
     return this.shares.list(user);
   }
 
+  @Post("ruc")
+  @Roles("superadmin", "vendedor")
+  lookupRuc(@Body() body: { ruc?: string }) {
+    return this.shares.lookupRuc(String(body?.ruc || ""));
+  }
+
   @Post()
   @Roles("superadmin", "vendedor")
   create(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.shares.create(body, user, req.ip);
+  }
+
+  @Post(":id/suspend")
+  @Roles("superadmin", "vendedor")
+  suspend(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.shares.suspend(id, user, req.ip);
   }
 
   @Get("mine/:id")

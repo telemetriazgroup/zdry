@@ -1223,17 +1223,30 @@ model CatalogShare {
   vendor         User                @relation(fields: [vendorId], references: [id])
   vendorName     String
   vendorWhatsapp String
+  ruc            String              @default("")
   clientName     String
   clientCompany  String              @default("")
   clientPhone    String              @default("")
+  clientEmail    String              @default("")
+  contactName    String              @default("")
+  street         String              @default("")
+  district       String              @default("")
+  province       String              @default("")
+  department     String              @default("")
+  sunatState     String              @default("")
+  sunatCondition String              @default("")
+  customerId     String?
   clientNote     String              @default("")
+  accessCode     String              @default("")
   hours          Int
   expiresAt      DateTime
+  suspendedAt    DateTime?
   createdAt      DateTime            @default(now())
   events         CatalogShareEvent[]
 
   @@index([vendorId, createdAt])
   @@index([expiresAt])
+  @@index([ruc, suspendedAt])
 }
 
 model CatalogShareEvent {
@@ -1243,6 +1256,9 @@ model CatalogShareEvent {
   kind      String
   iso       String?
   detail    Json?
+  ip        String        @default("")
+  userAgent String        @default("")
+  device    String        @default("")
   createdAt DateTime     @default(now())
 
   @@index([shareId, createdAt])

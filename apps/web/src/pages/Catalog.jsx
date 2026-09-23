@@ -113,6 +113,116 @@ function CardCover({ iso, slots, version }) {
   );
 }
 
+function ShareClock({ expiresAt }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+  const end = new Date(expiresAt).getTime();
+  const left = Math.max(0, end - now);
+  const total = Math.floor(left / 1000);
+  const days = Math.floor(total / 86400);
+  const h = Math.floor((total % 86400) / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  const label = left <= 0 ? "00:00:00" : days > 0 ? `${days}d ${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(h)}:${pad(m)}:${pad(s)}`;
+  return (
+    <div className="share-banner-until">
+      <span>{left <= 0 ? "Venció" : "Tiempo restante"}</span>
+      <b className="share-clock">{label}</b>
+      <small>{new Date(expiresAt).toLocaleString("es-PE")}</small>
+    </div>
+  );
+}
+
+function CatalogClosed({ copy }) {
+  const href = whatsappUrl(copy, "Hola, quiero ver el catálogo de contenedores dry. ¿Me puede atender un asesor?");
+  return (
+    <div className="site-page">
+      <header className="topbar">
+        <div className="topbar-inner topbar-public">
+          <span className="brand"><img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" /></span>
+        </div>
+      </header>
+      <div className="catalog-gate">
+        <div className="catalog-gate-card">
+          <p className="hero-kicker">ZGROUP</p>
+          <h1>Contacta con un asesor</h1>
+          <p>El catálogo se ve con tu sesión. Si aún no tienes acceso, escríbele a un asesor de ZGROUP por WhatsApp.</p>
+          <a className="btn-whatsapp" href={href} target="_blank" rel="noreferrer">Hablar por WhatsApp</a>
+        </div>
+      </div>
+      <SiteFooter copy={copy} />
+    </div>
+  );
+}
+
+function ShareLock({ share, error, onUnlock }) {
+  const [code, setCode] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!share?.token || busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await api(`/catalog/share/${share.token}/unlock`, { method: "POST", body: { code } });
+      onUnlock();
+    } catch (ex) {
+      setErr(ex.message || "Clave incorrecta.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="site-page">
+      <header className="topbar">
+        <div className="topbar-inner topbar-public">
+          <span className="brand"><img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" /></span>
+        </div>
+      </header>
+      <div className="catalog-gate">
+        <form className="catalog-gate-card share-lock" onSubmit={submit}>
+          {error ? <div className="err">{error}</div> : null}
+          {share ? (
+            <>
+              <aside className="share-banner">
+                <div>
+                  <span>Enlace de catálogo</span>
+                  <b>Hola {share.clientName}</b>
+                  <p>{share.vendorName} te comparte el stock. Escribe la clave de 6 dígitos que te envió.</p>
+                </div>
+                <ShareClock expiresAt={share.expiresAt} />
+              </aside>
+              <label htmlFor="share-code">Clave de acceso</label>
+              <input
+                id="share-code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                maxLength={6}
+                pattern="[0-9]{6}"
+                placeholder="000000"
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                required
+              />
+              {err ? <div className="err">{err}</div> : null}
+              <button className="btn-primary" type="submit" disabled={busy || code.length !== 6}>{busy ? "Comprobando…" : "Ver catálogo"}</button>
+            </>
+          ) : (
+            <p>Abriendo el enlace…</p>
+          )}
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function loadCart() {
   try {
     const raw = JSON.parse(localStorage.getItem(CART_KEY) || "[]");
@@ -124,7 +234,7 @@ function loadCart() {
 
 export default function Catalog() {
   const { iso: routeIso, shareToken } = useParams();
-  const { user, logout, login, register } = useAuth();
+  const { user, ready, logout, login, register } = useAuth();
   const nav = useNavigate();
   const [meta, setMeta] = useState(null);
   const [data, setData] = useState({ items: [], total: 0, page: 1, pages: 1 });
@@ -148,7 +258,8 @@ export default function Catalog() {
   const [copy, setCopy] = useState(DEFAULT_CATALOG_COPY);
   const [share, setShare] = useState(null);
   const [shareErr, setShareErr] = useState("");
-  const [splash, setSplash] = useState(() => (routeIso ? "detail" : "list"));
+  const [shareUnlocked, setShareUnlocked] = useState(false);
+  const [splash, setSplash] = useState(null);
   const listSplashDone = useRef(false);
   const lb = useLightbox();
 
@@ -174,17 +285,33 @@ export default function Catalog() {
         }, wait);
       })
       .catch((e) => {
+        if (shareToken && e.status === 401) {
+          window.sessionStorage.removeItem(`zdry-share-ok:${shareToken}`);
+          setShareUnlocked(false);
+        }
         setError(e.message);
         if (showList) {
           listSplashDone.current = true;
           setSplash((cur) => (cur === "list" ? null : cur));
         }
       });
-  }, [query, routeIso]);
+  }, [query, routeIso, shareToken]);
+
+  const catalogOpen = Boolean(user) || Boolean(shareToken && shareUnlocked);
 
   useEffect(() => {
-    api("/catalog/meta").then(setMeta).catch(() => {});
+    if (!shareToken) {
+      setShareUnlocked(false);
+      return;
+    }
+    setShareUnlocked(window.sessionStorage.getItem(`zdry-share-ok:${shareToken}`) === "1");
+  }, [shareToken]);
+
+  useEffect(() => {
     api("/catalog/copy").then((d) => setCopy(mergeCatalogCopy(d))).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     if (!shareToken) {
       setShare(null);
       setShareErr("");
@@ -208,20 +335,28 @@ export default function Catalog() {
   }, [shareToken]);
 
   useEffect(() => {
+    if (!ready || !catalogOpen) return;
+    api("/catalog/meta").then(setMeta).catch(() => {});
+  }, [ready, catalogOpen]);
+
+  useEffect(() => {
     const lock = Boolean(pdp || quoteOpen || splash);
     document.body.classList.toggle("modal-locked", lock);
     return () => document.body.classList.remove("modal-locked");
   }, [pdp, quoteOpen, splash]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!ready || !catalogOpen) return;
+    load();
+  }, [load, ready, catalogOpen]);
 
   useEffect(() => {
     localStorage.setItem(CART_KEY, JSON.stringify(cart));
   }, [cart]);
 
   useEffect(() => {
-    if (!routeIso) {
-      setPdp(null);
+    if (!routeIso || !ready || !catalogOpen) {
+      if (!routeIso) setPdp(null);
       return undefined;
     }
     setSplash("detail");
@@ -236,6 +371,10 @@ export default function Catalog() {
         setGalleryPaused(false);
         if (shareToken) {
           api(`/catalog/share/${shareToken}/events`, { method: "POST", body: { kind: "view_unit", iso: u.iso } }).catch(() => {});
+          const first = slots[0];
+          if (first != null) {
+            api(`/catalog/share/${shareToken}/events`, { method: "POST", body: { kind: "view_image", iso: u.iso, detail: { slot: first } } }).catch(() => {});
+          }
         }
       })
       .catch(() => {
@@ -250,7 +389,7 @@ export default function Catalog() {
     return () => {
       cancelled = true;
     };
-  }, [routeIso]);
+  }, [routeIso, ready, catalogOpen]);
 
   const loadAccount = useCallback(() => {
     if (!user || user.role !== "cliente") {
@@ -312,6 +451,24 @@ export default function Catalog() {
     if (!shareToken) return;
     api(`/catalog/share/${shareToken}/events`, { method: "POST", body: { kind, iso, detail } }).catch(() => {});
   }
+
+  useEffect(() => {
+    if (!shareToken) return undefined;
+    const q = filters.q.trim();
+    if (!q) return undefined;
+    const t = window.setTimeout(() => trackShare("search", null, { q }), 700);
+    return () => window.clearTimeout(t);
+  }, [filters.q, shareToken]);
+
+  useEffect(() => {
+    if (!shareToken) return;
+    const detail = {};
+    for (const key of ["type", "cat", "depot", "manufacturer", "sort"]) {
+      if (filters[key]) detail[key] = filters[key];
+    }
+    if (!Object.keys(detail).length) return;
+    trackShare("filter", null, detail);
+  }, [filters.type, filters.cat, filters.depot, filters.manufacturer, filters.sort, shareToken]);
 
   function openUnit(iso) {
     nav(shareToken ? `/c/${shareToken}/u/${iso}` : `/u/${iso}`);
@@ -413,13 +570,28 @@ export default function Catalog() {
 
   const unitWord = data.total === 1 ? copy.stockSingular : copy.stockPlural;
 
+  if (!ready) return null;
+  if (!shareToken && !user) return <CatalogClosed copy={copy} />;
+  if (shareToken && !user && !shareUnlocked) {
+    return (
+      <ShareLock
+        share={share}
+        error={shareErr}
+        onUnlock={() => {
+          window.sessionStorage.setItem(`zdry-share-ok:${shareToken}`, "1");
+          setShareUnlocked(true);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="site-page">
       {splash ? <CatalogSplash mode={splash} /> : null}
       <header className="topbar">
         <div className="topbar-inner topbar-public">
           <Link to={catalogHome()} className="brand"><img src={publicUrl("/brand/LOGO_Z.png")} alt="ZDRY" /></Link>
-          {user ? (
+          {user && !shareToken ? (
             <nav className="navtabs">
               {user.role === "cliente" ? <Link to="/mi-cuenta" className="navtab">Mi cuenta</Link> : null}
               {user.role !== "cliente" ? <Link to="/app" className="navtab">Dashboard</Link> : null}
@@ -429,7 +601,7 @@ export default function Catalog() {
             <button className="cart-pill" type="button" onClick={() => setQuoteOpen(true)}>
               🛒 <span className="cart-label">{copy.cartLabel}</span> <span>{cart.length}</span>
             </button>
-            {user ? (
+            {shareToken ? null : user ? (
               <button className="btn-ghost btn-salir-ghost" type="button" onClick={async () => { await logout(); goAppRoot(); }}>
                 {copy.logoutLabel}
               </button>
@@ -483,9 +655,14 @@ export default function Catalog() {
       <div className="view active catalog-wrap">
         {shareErr ? <div className="err">{shareErr}</div> : null}
         {share ? (
-          <div className="ok-msg">
-            Hola {share.clientName}. {share.vendorName} te comparte el stock. El enlace vence {new Date(share.expiresAt).toLocaleString("es-PE")}.
-          </div>
+          <aside className="share-banner">
+            <div>
+              <span>Enlace de catálogo</span>
+              <b>Hola {share.clientName}</b>
+              <p>{share.vendorName} te comparte el stock disponible.</p>
+            </div>
+            <ShareClock expiresAt={share.expiresAt} />
+          </aside>
         ) : null}
         {error ? <div className="err">{error}</div> : null}
         {msg ? <div className="ok-msg">{msg}</div> : null}
@@ -608,6 +785,7 @@ export default function Catalog() {
                           type="button"
                           className={`thumb ${thumb === slot ? "active" : ""}`}
                           onClick={() => {
+                            trackShare("view_image", pdp.iso, { slot });
                             if (thumb === slot) openPdpMedia();
                             else { setThumb(slot); setGalleryPaused(true); }
                           }}
@@ -620,6 +798,7 @@ export default function Catalog() {
                           type="button"
                           className={`thumb video ${thumb === "video" ? "active" : ""}`}
                           onClick={() => {
+                            trackShare("view_image", pdp.iso, { slot: "video" });
                             if (thumb === "video") openPdpMedia();
                             else { setThumb("video"); setGalleryPaused(true); }
                           }}
