@@ -539,16 +539,18 @@ export default function Recepcion() {
     }
   }
 
-  async function uploadCoordCapture(file) {
+  async function uploadCoordCapture(file, opts = {}) {
     if (!file || !inspectIso) return;
     const fd = new FormData();
     fd.append("file", file);
-    fd.append("note", capNote);
+    fd.append("note", opts.note !== undefined ? opts.note : capNote);
     try {
       const next = await apiUpload(`/warehouse/units/${inspectIso}/captures`, fd);
       setUnit(next);
-      setCapNote("");
-      setMsg("Imagen o video del coordinador guardado. También puedes cargarlo en las casillas 1–9.");
+      if (!opts.quiet) {
+        setCapNote("");
+        setMsg("Imagen o video del coordinador guardado en tomas de campo. Elige la toma y asígnala al sector que representa.");
+      }
       return true;
     } catch (e) {
       setError(e.message);
@@ -659,38 +661,25 @@ export default function Recepcion() {
     if (!bulk.length || !inspectIso) return;
     setBulkBusy(true);
     setError("");
+    const note = capNote;
+    const pending = [...bulk];
+    const done = [];
     try {
-      let slot = 0;
-      const photos = unit?.photos || [];
-      let videoUsed = !!unit?.hasVideo;
-      const leftover = [];
-      for (const item of bulk) {
-        const isVideo = item.file.type.startsWith("video/");
-        if (isVideo && !videoUsed) {
-          const ok = await uploadSlot("video", item.file);
-          if (!ok) return;
-          videoUsed = true;
-          continue;
+      for (const item of pending) {
+        const ok = await uploadCoordCapture(item.file, { quiet: true, note });
+        if (!ok) {
+          done.forEach((itemDone) => URL.revokeObjectURL(itemDone.preview));
+          setBulk(pending.filter((row) => !done.includes(row)));
+          return;
         }
-        while (slot < 9 && photos[slot]) slot += 1;
-        if (!isVideo && slot < 9) {
-          const ok = await uploadSlot(slot, item.file);
-          if (!ok) return;
-          photos[slot] = true;
-          slot += 1;
-        } else {
-          leftover.push(item);
-        }
+        done.push(item);
       }
-      for (const item of leftover) {
-        const ok = await uploadCoordCapture(item.file);
-        if (!ok) return;
-      }
-      bulk.forEach((item) => URL.revokeObjectURL(item.preview));
+      done.forEach((item) => URL.revokeObjectURL(item.preview));
       setBulk([]);
-      setMsg(leftover.length
-        ? "Casillas llenas. El resto quedó en la bandeja de evidencias."
-        : "Fotos asignadas a las casillas.");
+      setCapNote("");
+      setMsg(done.length === 1
+        ? "1 toma quedó en tomas de campo. Elige el sector que representa."
+        : `${done.length} tomas quedaron en tomas de campo. Elige el sector que representa cada una.`);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -1177,7 +1166,7 @@ export default function Recepcion() {
                   }}
                 >
                   <b>Importar varias fotos</b>
-                  <p className="section-sub">Pega con Ctrl+V o suelta aquí todas las imágenes que quieras. Luego asígnalas a las casillas vacías. La carga de una en una, abajo, sigue disponible.</p>
+                  <p className="section-sub">Pega con Ctrl+V o suelta aquí todas las imágenes que quieras. Entran en tomas de campo para que elijas el sector que representa cada una. La carga de una en una, abajo, sigue disponible.</p>
                   <label className="btn-ghost">
                     Elegir archivos
                     <input type="file" accept="image/*,video/*" multiple hidden onChange={(e) => { addBulk(e.target.files); e.target.value = ""; }} />
@@ -1197,7 +1186,7 @@ export default function Recepcion() {
                         ))}
                       </div>
                       <button className="btn-primary" type="button" disabled={bulkBusy} onClick={placeBulk}>
-                        {bulkBusy ? "Asignando…" : `Asignar ${bulk.length} a casillas vacías`}
+                        {bulkBusy ? "Cargando…" : `Cargar ${bulk.length} en tomas de campo`}
                       </button>
                     </>
                   ) : null}
