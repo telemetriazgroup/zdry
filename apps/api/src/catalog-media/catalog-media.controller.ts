@@ -64,6 +64,16 @@ export class CatalogMediaController {
     return this.media.list();
   }
 
+  @Post("publish-batch")
+  @Roles("admin", "gerente")
+  publishBatch(
+    @Body() body: { isos?: string[] },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.media.publishMany(body.isos || [], user, req.ip);
+  }
+
   @Get(":iso/history/:id")
   async historyPhoto(@Param("iso") iso: string, @Param("id") id: string) {
     const obj = await this.media.openHistoryPhoto(iso, id);
@@ -128,6 +138,7 @@ export class CatalogMediaController {
       visibility?: string;
       note?: string;
       recompute?: boolean;
+      visibilityOnly?: boolean;
     },
     @CurrentUser() user: AuthUser,
     @Req() req: Request,

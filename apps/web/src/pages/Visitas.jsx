@@ -27,6 +27,7 @@ function toLocalInput(iso) {
 
 export default function Visitas() {
   const lb = useLightbox();
+  const qr = `${window.location.origin}${publicUrl("/visita")}`;
   const [params] = useSearchParams();
   const focusId = params.get("visita") || "";
   const [rows, setRows] = useState([]);

@@ -17,19 +17,19 @@ export class CatalogSharesController {
   }
 
   @Get()
-  @Roles("superadmin", "admin", "gerente", "vendedor")
+  @Roles("superadmin", "vendedor")
   list(@CurrentUser() user: AuthUser) {
     return this.shares.list(user);
   }
 
   @Post()
-  @Roles("superadmin", "admin", "gerente", "vendedor")
+  @Roles("superadmin", "vendedor")
   create(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.shares.create(body, user, req.ip);
   }
 
   @Get("mine/:id")
-  @Roles("superadmin", "admin", "gerente", "vendedor")
+  @Roles("superadmin", "vendedor")
   one(@Param("id") id: string, @CurrentUser() user: AuthUser) {
     return this.shares.getOne(id, user);
   }

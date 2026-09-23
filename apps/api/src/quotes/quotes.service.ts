@@ -57,7 +57,7 @@ import { CATALOG_COMMERCE_KEY, normalizeCatalogCommerce, publicQuotesBlockedMess
 import { ACTIVE_MASTER } from "../domain/masters";
 import { isOwnSaleStock } from "../domain/iso6346";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
-import { loadOverlayConcepts, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
+import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import {
   ACQUISITION_REFS_KEY,
   assertPriceFloor,
@@ -189,12 +189,17 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     }
     const pricing = rules || (await this.loadPricing());
     const acquisition = refs || (await this.loadAcquisitionRefs());
-    const [dry, overlays] = await Promise.all([presentDryReferential(this.prisma), loadOverlayConcepts(this.prisma)]);
+    const [dry, overlays, safety] = await Promise.all([
+      presentDryReferential(this.prisma),
+      loadOverlayConcepts(this.prisma),
+      loadSafetyMarginRules(this.prisma),
+    ]);
     const computed = computeListPrices(
       overlayUnitFrom(c, dry),
       pricing,
       acquisition,
       overlays,
+      safety,
     );
     await this.prisma.container.update({
       where: { iso },

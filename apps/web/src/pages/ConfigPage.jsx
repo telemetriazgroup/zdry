@@ -1,7 +1,29 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useLocation } from "react-router-dom";
 import { api, apiUpload, apiUrl, ApiError } from "../api.js";
 import { useAuth } from "../auth.jsx";
+import { useNotice } from "../notice.jsx";
+
+function blankSafety() {
+  return { type: "", cat: "", supplier: "", origin: "", warehouse: "", marginPct: 0 };
+}
+
+function asSafetyRule(r) {
+  if (!r) return blankSafety();
+  const legacy = r.scope && r.type === undefined && r.cat === undefined;
+  return {
+    type: legacy ? (r.scope === "type" ? r.target || "" : "") : (r.type || ""),
+    cat: legacy ? (r.scope === "category" ? r.target || "" : "") : (r.cat || ""),
+    supplier: r.supplier || "",
+    origin: r.origin || "",
+    warehouse: r.warehouse || "",
+    marginPct: Number(r.marginPct) || 0,
+  };
+}
+
+function safetyDepth(r) {
+  return [r.type, r.cat, r.supplier, r.origin, r.warehouse].filter((v) => String(v || "").trim()).length;
+}
 
 function CommercePanel({ onSaved, onError }) {
   const [st, setSt] = useState(null);
@@ -543,8 +565,40 @@ function EvaluationPanel({ onSaved, onError }) {
   );
 }
 
+function configTabsFor(role) {
+  const superadmin = role === "superadmin";
+  const admin = role === "admin" || superadmin;
+  const evalOk = admin || role === "gerente";
+  return [
+    superadmin && { id: "catalogo", label: "Catálogo público" },
+    superadmin && { id: "marca", label: "Marca de agua" },
+    superadmin && { id: "textos", label: "Textos" },
+    superadmin && { id: "demo", label: "Demostración" },
+    admin && { id: "patio", label: "Conceptos de patio" },
+    evalOk && { id: "evaluacion", label: "Evaluación de unidades" },
+    { id: "visibilidad", label: "Visibilidad de precios" },
+    { id: "referencias", label: "Costos de referencia" },
+    { id: "extras", label: "Extras de costo" },
+    { id: "dry", label: "Referencial DRY" },
+    { id: "seguridad", label: "Margen de seguridad" },
+    { id: "precios", label: "Reglas de precio" },
+    { id: "servicios", label: "Servicios comerciales" },
+    { id: "columnas", label: "Columnas del patio" },
+    superadmin && { id: "anclas", label: "Anclas" },
+  ].filter(Boolean);
+}
+
+function initialConfigTab(role, pathname) {
+  const ids = configTabsFor(role).map((t) => t.id);
+  const hash = typeof window !== "undefined" ? window.location.hash.replace(/^#/, "") : "";
+  if (ids.includes(hash)) return hash;
+  if (String(pathname || "").includes("/precios") && ids.includes("precios")) return "precios";
+  return ids[0] || "visibilidad";
+}
+
 export default function ConfigPage() {
   const { user } = useAuth();
+  const { notify, toastNode } = useNotice();
   const [data, setData] = useState(null);
   const [rules, setRules] = useState(null);
   const [vis, setVis] = useState([]);
@@ -553,12 +607,35 @@ export default function ConfigPage() {
   const [refMeta, setRefMeta] = useState({ types: [], categories: [] });
   const [dryRef, setDryRef] = useState({ amount: "", windowMonths: 24, computed: null, effective: null, sample: 0, buckets: [] });
   const [services, setServices] = useState([]);
+  const [safety, setSafety] = useState([]);
   const [overlays, setOverlays] = useState([]);
-  const [overlayMeta, setOverlayMeta] = useState({ warehouses: [], vendors: [] });
+  const [overlayMeta, setOverlayMeta] = useState({ warehouses: [], vendors: [], origins: [] });
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
 
   const isSuper = user?.role === "superadmin";
+  const { pathname } = useLocation();
+
+  useEffect(() => {
+    if (saved) notify(saved.replace(/^✓\s*/, ""));
+  }, [saved]);
+  useEffect(() => {
+    if (error) notify(error, "err");
+  }, [error]);
+  const tabs = useMemo(() => configTabsFor(user?.role), [user?.role]);
+  const [tab, setTab] = useState(() => initialConfigTab(user?.role, pathname));
+
+  useEffect(() => {
+    if (tabs.some((t) => t.id === tab)) return;
+    setTab(tabs[0]?.id || "visibilidad");
+  }, [tabs, tab]);
+
+  function selectTab(id) {
+    setTab(id);
+    const next = `${window.location.pathname}${window.location.search}#${id}`;
+    window.history.replaceState(null, "", next);
+    document.querySelector(".config-tabs")?.scrollIntoView({ block: "start" });
+  }
 
   useEffect(() => {
     if (isSuper) {
@@ -567,6 +644,9 @@ export default function ConfigPage() {
     api("/config/yard-columns").then(setRules).catch(() => {});
     api("/config/visibility").then(setVis).catch(() => {});
     api("/config/pricing").then(setPricing).catch(() => {});
+    api("/config/safety-margin").then((rows) => {
+      setSafety(Array.isArray(rows) && rows.length ? rows.map(asSafetyRule) : [blankSafety()]);
+    }).catch(() => {});
     api("/config/acquisition-refs").then((d) => {
       setRefs(d.refs || []);
       setRefMeta({ types: d.types || [], categories: d.categories || [] });
@@ -584,7 +664,7 @@ export default function ConfigPage() {
     api("/config/commercial-services").then(setServices).catch(() => {});
     api("/config/acquisition-overlays").then((d) => {
       setOverlays(d.concepts || []);
-      setOverlayMeta({ warehouses: d.warehouses || [], vendors: d.vendors || [] });
+      setOverlayMeta({ warehouses: d.warehouses || [], vendors: d.vendors || [], origins: d.origins || [] });
     }).catch(() => {});
   }, [isSuper]);
 
@@ -605,6 +685,28 @@ export default function ConfigPage() {
       const out = await api("/config/visibility", { method: "PUT", body: { rules: vis } });
       setVis(out);
       setSaved("✓ Visibilidad de precios actualizada.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function recalculateAll() {
+    setSaved("");
+    setError("");
+    try {
+      const out = await api("/config/recalculate-prices", { method: "POST", body: {} });
+      setSaved(`✓ Listas recalculadas: ${out.updated ?? 0}. Las ofertas fijadas a mano no se tocaron.`);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function saveSafety() {
+    setSaved("");
+    try {
+      const out = await api("/config/safety-margin", { method: "PUT", body: { rules: safety } });
+      setSafety(out.rules?.length ? out.rules.map(asSafetyRule) : [blankSafety()]);
+      setSaved(`✓ Margen de seguridad guardado. Costo base actualizado en ${out.recalculated ?? 0} listas (las ofertas a mano no se pisan).`);
     } catch (e) {
       setError(e.message);
     }
@@ -650,7 +752,7 @@ export default function ConfigPage() {
     try {
       const out = await api("/config/acquisition-overlays", { method: "PUT", body: { concepts: overlays } });
       setOverlays(out.concepts || []);
-      setOverlayMeta({ warehouses: out.warehouses || [], vendors: out.vendors || [] });
+      setOverlayMeta({ warehouses: out.warehouses || [], vendors: out.vendors || [], origins: out.origins || [] });
       setSaved(`✓ Extras de costo guardados. Se recalcularon ${out.recalculated ?? 0} listas (no manuales).`);
     } catch (e) {
       setError(e.message);
@@ -674,11 +776,26 @@ export default function ConfigPage() {
       <p className="section-sub">{isSuper ? "Textos públicos, marca de agua, modo demo y anclas de desarrollo." : (data?.note || "Solo Administrador y Gerente.")}</p>
       {error ? <div className="err">{error}</div> : null}
       {saved ? <div className="ok-msg">{saved}</div> : null}
+      {toastNode}
 
-      {isSuper ? <CommercePanel onSaved={setSaved} onError={setError} /> : null}
-      {isSuper ? <WatermarkPanel onSaved={setSaved} onError={setError} /> : null}
+      <nav className="subtab-row config-tabs" aria-label="Secciones de configuración">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={`subtab${tab === t.id ? " active" : ""}`}
+            aria-current={tab === t.id ? "page" : undefined}
+            onClick={() => selectTab(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
 
-      {isSuper ? (
+      {tab === "catalogo" && isSuper ? <CommercePanel onSaved={setSaved} onError={setError} /> : null}
+      {tab === "marca" && isSuper ? <WatermarkPanel onSaved={setSaved} onError={setError} /> : null}
+
+      {tab === "textos" && isSuper ? (
         <div className="panel" style={{ marginBottom: 18 }}>
           <h3>Textos del catálogo público</h3>
           <p className="section-sub">Titular, carrusel, pasos, botones, pie y legales. Editas a la izquierda y ves a la derecha cómo lo ve el cliente.</p>
@@ -686,12 +803,12 @@ export default function ConfigPage() {
         </div>
       ) : null}
 
-      {isSuper ? <DemoPanel /> : null}
+      {tab === "demo" && isSuper ? <DemoPanel /> : null}
 
-      {(user?.role === "admin" || isSuper) ? <DepotConceptsPanel onSaved={setSaved} onError={setError} /> : null}
-      {(user?.role === "admin" || user?.role === "gerente" || isSuper) ? <EvaluationPanel onSaved={setSaved} onError={setError} /> : null}
+      {tab === "patio" && (user?.role === "admin" || isSuper) ? <DepotConceptsPanel onSaved={setSaved} onError={setError} /> : null}
+      {tab === "evaluacion" && (user?.role === "admin" || user?.role === "gerente" || isSuper) ? <EvaluationPanel onSaved={setSaved} onError={setError} /> : null}
 
-      <>
+      {tab === "visibilidad" ? (
       <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Visibilidad de precios en catálogo</h3>
         <p className="section-sub">Jerarquía global → tipo/categoría/depósito → fabricante → unidad. CIMC visible por defecto; el resto pide precio. El neto, IGV e historial de una unidad se fijan en Ficha catálogo.</p>
@@ -719,7 +836,9 @@ export default function ConfigPage() {
           <button className="btn-primary" type="button" onClick={saveVis}>Guardar visibilidad</button>
         </div>
       </div>
+      ) : null}
 
+      {tab === "referencias" ? (
       <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Costos de referencia (tipo / condición)</h3>
         <p className="section-sub">
@@ -764,7 +883,9 @@ export default function ConfigPage() {
           <button className="btn-primary" type="button" onClick={saveRefs}>Guardar referencias</button>
         </div>
       </div>
+      ) : null}
 
+      {tab === "extras" ? (
       <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Extras de costo (almacén Odoo / proveedor)</h3>
         <p className="section-sub">
@@ -833,7 +954,9 @@ export default function ConfigPage() {
           <button className="btn-primary" type="button" onClick={saveOverlays}>Guardar extras y recalcular listas</button>
         </div>
       </div>
+      ) : null}
 
+      {tab === "dry" ? (
       <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Precio referencial DRY (ajustes de inventario)</h3>
         <p className="section-sub">
@@ -904,10 +1027,92 @@ export default function ConfigPage() {
           <button className="btn-primary" type="button" onClick={saveDryRef}>Guardar referencial DRY</button>
         </div>
       </div>
+      ) : null}
 
+      {tab === "seguridad" ? (
+      <div className="panel" style={{ marginBottom: 18 }}>
+        <h3>Margen de seguridad</h3>
+        <p className="section-sub">
+          Se suma al costo (origen + extras) y ese resultado es el costo base. No hay descuento aquí.
+          Ejemplo: costo $1,000 y 20% → $1,000 + $200 = costo base $1,200.
+          Cada grupo puede anidar tipo, condición, proveedor, procedencia y almacén. «Cualquiera» no cuenta.
+          Si un contenedor entra en varios grupos, gana el que tiene más criterios y ese porcentaje reemplaza al global.
+          Si dos grupos empatan en criterios, gana el de más abajo. La pestaña Reglas de precio calcula el precio objetivo sobre ese costo base.
+        </p>
+        {safety.map((r, i) => {
+          const depth = safetyDepth(r);
+          return (
+            <div className="safety-rule" key={`safety-${i}`}>
+              <div className="safety-rule-head">
+                <span>{depth ? `${depth} criterio${depth === 1 ? "" : "s"}` : "Global"}</span>
+                <button className="btn-ghost" type="button" onClick={() => setSafety(safety.filter((_, j) => j !== i))}>Quitar</button>
+              </div>
+              <div className="form-grid">
+                <div>
+                  <label>Tipo</label>
+                  <select value={r.type || ""} onChange={(e) => setSafety(safety.map((x, j) => j === i ? { ...x, type: e.target.value } : x))}>
+                    <option value="">Cualquiera</option>
+                    {refMeta.types.map((t) => <option key={t.code} value={t.code}>{t.code}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label>Condición</label>
+                  <select value={r.cat || ""} onChange={(e) => setSafety(safety.map((x, j) => j === i ? { ...x, cat: e.target.value } : x))}>
+                    <option value="">Cualquiera</option>
+                    {refMeta.categories.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label>Proveedor</label>
+                  <input
+                    list="safety-vendors"
+                    value={r.supplier || ""}
+                    placeholder="Cualquiera"
+                    onChange={(e) => setSafety(safety.map((x, j) => j === i ? { ...x, supplier: e.target.value } : x))}
+                  />
+                </div>
+                <div>
+                  <label>Procedencia</label>
+                  <input
+                    list="safety-origins"
+                    value={r.origin || ""}
+                    placeholder="Cualquiera"
+                    onChange={(e) => setSafety(safety.map((x, j) => j === i ? { ...x, origin: e.target.value } : x))}
+                  />
+                </div>
+                <div>
+                  <label>Almacén</label>
+                  <select value={r.warehouse || ""} onChange={(e) => setSafety(safety.map((x, j) => j === i ? { ...x, warehouse: e.target.value } : x))}>
+                    <option value="">Cualquiera</option>
+                    {(overlayMeta.warehouses || []).map((w) => <option key={w.code} value={w.code}>{w.label || w.code}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label>Margen %</label>
+                  <input type="number" min="0" max="80" step="0.5" value={r.marginPct} onChange={(e) => setSafety(safety.map((x, j) => j === i ? { ...x, marginPct: Number(e.target.value) } : x))} />
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        <datalist id="safety-vendors">
+          {(overlayMeta.vendors || []).map((v) => <option key={v} value={v} />)}
+        </datalist>
+        <datalist id="safety-origins">
+          {[...new Set((overlayMeta.origins || []).map((v) => String(v || "").trim().toUpperCase()).filter(Boolean))].map((v) => <option key={v} value={v} />)}
+        </datalist>
+        <div className="action-row">
+          <button className="btn-ghost" type="button" onClick={() => setSafety([...safety, blankSafety()])}>Añadir grupo</button>
+          <button className="btn-primary" type="button" onClick={saveSafety}>Guardar margen de seguridad</button>
+          <button className="btn-ghost" type="button" onClick={recalculateAll}>Recalcular todas las listas</button>
+        </div>
+      </div>
+      ) : null}
+
+      {tab === "precios" ? (
       <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Reglas de precio (margen / descuento máximo)</h3>
-        <p className="section-sub">Se aplica sobre el costo de referencia o el FOB/CIF. Ámbito más específico gana (unidad → fabricante → tipo/condición → global).</p>
+        <p className="section-sub">Se aplica sobre el costo base, que ya incluye el margen de seguridad. El margen define el precio objetivo. El descuento máximo es lo que el comercial puede bajar sin intervención de gerencia. Ámbito más específico gana (unidad → fabricante → tipo/condición → global).</p>
         {pricing.map((r, i) => (
           <div className="form-grid" key={r.id || i}>
             <div>
@@ -949,22 +1154,29 @@ export default function ConfigPage() {
         <div className="action-row">
           <button className="btn-ghost" type="button" onClick={() => setPricing([...pricing, { scope: "category", target: "1TRIP", marginPct: 14, maxDiscountPct: 5 }])}>Añadir regla</button>
           <button className="btn-primary" type="button" onClick={savePricing}>Guardar precios</button>
+          <button className="btn-ghost" type="button" onClick={recalculateAll}>Recalcular todas las listas</button>
         </div>
       </div>
+      ) : null}
 
-      {services.length ? (
+      {tab === "servicios" ? (
         <div className="panel" style={{ marginBottom: 18 }}>
           <h3>Servicios comerciales</h3>
-          <div className="tablewrap">
-            <table className="data">
-              <thead><tr><th>Servicio</th><th>Precio</th></tr></thead>
-              <tbody>{services.map((s) => <tr key={s.id}><td>{s.name}</td><td>${Number(s.price)}</td></tr>)}</tbody>
-            </table>
-          </div>
+          {services.length ? (
+            <div className="tablewrap">
+              <table className="data">
+                <thead><tr><th>Servicio</th><th>Precio</th></tr></thead>
+                <tbody>{services.map((s) => <tr key={s.id}><td>{s.name}</td><td>${Number(s.price)}</td></tr>)}</tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="section-sub">Sin servicios cargados.</p>
+          )}
         </div>
       ) : null}
 
-      {rules ? (
+      {tab === "columnas" ? (
+        rules ? (
         <div className="panel" style={{ marginBottom: 18 }}>
           <h3>Reglas de columna del patio</h3>
           <p className="section-sub">Controla cuánto se apila por columna y qué unidades pueden compartir una misma columna. Además, una columna nueva (Col. 2, Col. 3…) solo se habilita cuando la columna anterior de esa ruma está completamente llena — esto se aplica siempre, para que el patio se llene de forma ordenada.</p>
@@ -1002,16 +1214,21 @@ export default function ConfigPage() {
             </label>
           </div>
         </div>
+        ) : (
+          <div className="panel" style={{ marginBottom: 18 }}>
+            <h3>Reglas de columna del patio</h3>
+            <p className="section-sub">Cargando…</p>
+          </div>
+        )
       ) : null}
-      </>
-      {isSuper ? (
+      {tab === "anclas" && isSuper ? (
       <div className="config-grid">
         {(data?.sections || []).map((s) => (
           <div className="config-card" key={s.id}>
             <h4>{s.title}</h4>
             <p>{s.blurb}</p>
             {s.status === "live" ? (
-              <div className="ok-msg" style={{ marginTop: 8 }}>Activo — edición arriba</div>
+              <div className="ok-msg" style={{ marginTop: 8 }}>Activo — edición en su pestaña</div>
             ) : s.status === "partial" ? (
               <div className="locked-note" style={{ marginTop: 8 }}>Stub de zonas en cierre comercial (Sprint 4); Maps en Sprint 7</div>
             ) : (

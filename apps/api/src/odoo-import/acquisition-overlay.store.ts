@@ -6,8 +6,22 @@ import {
   type OverlayConcept,
   type OverlayExtra,
 } from "../domain/acquisition-overlay";
-import { ACQUISITION_REFS_KEY, computeListPrices, DEFAULT_PRICING_RULES, normalizeAcquisitionRefs, type PricedUnit } from "../domain/pricing";
+import {
+  ACQUISITION_REFS_KEY,
+  computeListPrices,
+  DEFAULT_PRICING_RULES,
+  normalizeAcquisitionRefs,
+  normalizeSafetyMarginRules,
+  SAFETY_MARGIN_KEY,
+  type PricedUnit,
+  type SafetyMarginRule,
+} from "../domain/pricing";
 import { presentDryReferential, referentialAmountFor, type PresentDryReferential } from "./dry-referential.store";
+
+export async function loadSafetyMarginRules(prisma: PrismaService): Promise<SafetyMarginRule[]> {
+  const row = await prisma.appSetting.findUnique({ where: { key: SAFETY_MARGIN_KEY } });
+  return normalizeSafetyMarginRules(row?.value);
+}
 
 export async function loadOverlayConcepts(prisma: PrismaService): Promise<OverlayConcept[]> {
   const row = await prisma.appSetting.findUnique({ where: { key: ACQUISITION_OVERLAYS_KEY } });
@@ -41,6 +55,7 @@ export function overlayUnitFrom(c: {
   costSource?: string | null;
   odooWarehouse?: string | null;
   odooVendorName?: string | null;
+  originCountry?: string | null;
   productCode?: string | null;
   overlaySkipKeys?: unknown;
   overlayExtras?: unknown;
@@ -60,17 +75,19 @@ export function overlayUnitFrom(c: {
     }),
     odooWarehouse: c.odooWarehouse,
     odooVendorName: c.odooVendorName,
+    originCountry: c.originCountry,
     overlaySkipKeys: Array.isArray(c.overlaySkipKeys) ? (c.overlaySkipKeys as string[]) : null,
     overlayExtras: Array.isArray(c.overlayExtras) ? (c.overlayExtras as OverlayExtra[]) : null,
   };
 }
 
 export async function refreshRulePrices(prisma: PrismaService, filter: { warehouse?: string; vendor?: string } = {}) {
-  const [rules, refsRow, dry, overlays] = await Promise.all([
+  const [rules, refsRow, dry, overlays, safety] = await Promise.all([
     prisma.pricingRule.findMany(),
     prisma.appSetting.findUnique({ where: { key: ACQUISITION_REFS_KEY } }),
     presentDryReferential(prisma),
     loadOverlayConcepts(prisma),
+    loadSafetyMarginRules(prisma),
   ]);
   const pricing = rules.length
     ? rules.map((r) => ({
@@ -83,14 +100,14 @@ export async function refreshRulePrices(prisma: PrismaService, filter: { warehou
     : DEFAULT_PRICING_RULES;
   const refs = normalizeAcquisitionRefs(refsRow?.value);
   const where: Prisma.ContainerWhereInput = {
-    priceSource: { not: "manual" },
     archivedAt: null,
+    OR: [{ priceSource: null }, { priceSource: { not: "manual" } }],
   };
   if (filter.warehouse) where.odooWarehouse = filter.warehouse;
   if (filter.vendor) where.odooVendorName = filter.vendor;
   const rows = await prisma.container.findMany({ where, select: {
     iso: true, type: true, cat: true, manufacturer: true, fobCif: true, costSource: true,
-    odooWarehouse: true, odooVendorName: true, overlaySkipKeys: true, overlayExtras: true,
+    odooWarehouse: true, odooVendorName: true, originCountry: true, overlaySkipKeys: true, overlayExtras: true,
     odooLotId: true, odooSourceProductCode: true,
   } });
   const lotIds = [...new Set(rows.map((r) => r.odooLotId).filter((id): id is number => Number.isFinite(id)))];
@@ -104,7 +121,7 @@ export async function refreshRulePrices(prisma: PrismaService, filter: { warehou
   let updated = 0;
   for (const c of rows) {
     const productCode = skuByLot.get(c.odooLotId ?? -1) || c.odooSourceProductCode || "";
-    const computed = computeListPrices(overlayUnitFrom({ ...c, productCode }, dry), pricing, refs, overlays);
+    const computed = computeListPrices(overlayUnitFrom({ ...c, productCode }, dry), pricing, refs, overlays, safety);
     await prisma.container.update({
       where: { iso: c.iso },
       data: { priceList: computed.priceList, priceMin: computed.priceMin, priceSource: "rule" },

@@ -8,6 +8,7 @@ import { StorageService } from "../storage/storage.service";
 import { AuditService } from "../audit/audit.service";
 import { AuthUser } from "../auth/auth.types";
 import { computeListPrices, DEFAULT_PRICING_RULES } from "../domain/pricing";
+import { loadSafetyMarginRules } from "../odoo-import/acquisition-overlay.store";
 import {
   bestSlotFor,
   DEFAULT_LAYOUT_RULES,
@@ -577,6 +578,7 @@ export class DemoService {
       }));
 
     const pricing = await this.loadPricing();
+    const safety = await loadSafetyMarginRules(this.prisma);
     let photoIndex = 0;
     const used: FetchedPhoto[] = [];
 
@@ -585,6 +587,9 @@ export class DemoService {
       const prices = computeListPrices(
         { iso: plan.iso, type: plan.type, cat: plan.cat, manufacturer: plan.manufacturer, fobCif: plan.fobCif },
         pricing,
+        null,
+        null,
+        safety,
       );
       const invoiceId =
         plan.intakeType === "almacenaje_cliente"

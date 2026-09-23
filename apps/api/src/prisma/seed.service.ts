@@ -4,6 +4,7 @@ import * as argon2 from "argon2";
 import { PrismaService } from "./prisma.service";
 import { DEFAULT_LAYOUT_RULES, DEFAULT_YARD_CONFIG } from "../domain/yard";
 import { DEFAULT_PRICING_RULES, computeListPrices } from "../domain/pricing";
+import { loadSafetyMarginRules } from "../odoo-import/acquisition-overlay.store";
 import { DEFAULT_VISIBILITY_RULES } from "../domain/visibility";
 import { DEFAULT_PAYMENT_ACCOUNTS } from "../domain/payment-accounts";
 import { SYSTEM_DEPOT_CONCEPTS } from "../domain/depot-costs";
@@ -229,6 +230,7 @@ export class SeedService implements OnModuleInit {
           maxDiscountPct: Number(r.maxDiscountPct),
         }))
       : DEFAULT_PRICING_RULES;
+    const safety = await loadSafetyMarginRules(this.prisma);
     const toPrice = await this.prisma.container.findMany({
       where: { intakeType: "compra", physicallyReceived: true, priceList: null },
     });
@@ -236,6 +238,9 @@ export class SeedService implements OnModuleInit {
       const p = computeListPrices(
         { iso: c.iso, type: c.type, cat: c.cat, manufacturer: c.manufacturer, fobCif: Number(c.fobCif) },
         rules,
+        null,
+        null,
+        safety,
       );
       await this.prisma.container.update({
         where: { iso: c.iso },

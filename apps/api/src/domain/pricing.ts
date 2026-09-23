@@ -23,6 +23,7 @@ export type PricedUnit = {
   dryReferential?: number | null;
   odooWarehouse?: string | null;
   odooVendorName?: string | null;
+  originCountry?: string | null;
   overlaySkipKeys?: string[] | null;
   overlayExtras?: Array<{ key?: string; label: string; amount: number; note?: string }> | null;
 };
@@ -105,11 +106,119 @@ export function resolveAcquisition(unit: PricedUnit, refs?: AcquisitionRef[] | n
   return { amount: defaultAcquisition(unit.type), kind: "defaultType" as const, type, cat: null };
 }
 
+export const SAFETY_MARGIN_KEY = "safety_margin_rules";
+
+/** Grupo anidado. Vacío = global. El que coincide con más criterios reemplaza al resto. */
+export type SafetyMarginRule = {
+  type: string | null;
+  cat: string | null;
+  supplier: string | null;
+  origin: string | null;
+  warehouse: string | null;
+  marginPct: number;
+  label?: string;
+};
+
+function safetyToken(raw: unknown): string | null {
+  const s = String(raw ?? "").trim().replace(/\s+/g, " ");
+  if (!s || s === "—" || s === "-") return null;
+  return s.toUpperCase();
+}
+
+function safetyFromLegacy(r: Record<string, unknown>): Pick<SafetyMarginRule, "type" | "cat" | "supplier" | "origin" | "warehouse"> | null {
+  const scope = String(r.scope || "").trim();
+  if (!scope) return null;
+  const target = safetyToken(r.target);
+  if (scope === "global") return { type: null, cat: null, supplier: null, origin: null, warehouse: null };
+  if (scope === "category" && target) return { type: null, cat: target, supplier: null, origin: null, warehouse: null };
+  if (scope === "type" && target) return { type: target, cat: null, supplier: null, origin: null, warehouse: null };
+  return null;
+}
+
+/** 20% sobre 1000 deja el costo base en 1200. Un solo grupo gana: el más anidado que coincida. */
+export function normalizeSafetyMarginRules(raw: unknown): SafetyMarginRule[] {
+  const list = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === "object" && Array.isArray((raw as { rules?: unknown }).rules)
+      ? (raw as { rules: unknown[] }).rules
+      : [];
+  const out: SafetyMarginRule[] = [];
+  for (const row of list) {
+    const r = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+    const marginPct = Number(r.marginPct);
+    if (!Number.isFinite(marginPct) || marginPct < 0 || marginPct > 80) continue;
+    const hasGroup = ["type", "cat", "supplier", "origin", "warehouse"].some((k) => k in r);
+    const dims = hasGroup
+      ? {
+          type: safetyToken(r.type),
+          cat: safetyToken(r.cat),
+          supplier: safetyToken(r.supplier),
+          origin: safetyToken(r.origin),
+          warehouse: safetyToken(r.warehouse),
+        }
+      : safetyFromLegacy(r);
+    if (!dims) continue;
+    out.push({ ...dims, marginPct: Math.round(marginPct * 100) / 100 });
+  }
+  return out;
+}
+
+export function safetyRuleDepth(rule: SafetyMarginRule): number {
+  return [rule.type, rule.cat, rule.supplier, rule.origin, rule.warehouse].filter(Boolean).length;
+}
+
+export function safetyRuleLabel(rule: SafetyMarginRule): string {
+  const bits = [
+    rule.type ? `tipo ${rule.type}` : "",
+    rule.cat ? `condición ${rule.cat}` : "",
+    rule.supplier ? `proveedor ${rule.supplier}` : "",
+    rule.origin ? `procedencia ${rule.origin}` : "",
+    rule.warehouse ? `almacén ${rule.warehouse}` : "",
+  ].filter(Boolean);
+  return bits.length ? bits.join(" · ") : "global";
+}
+
+function safetyRuleMatches(unit: PricedUnit, rule: SafetyMarginRule): boolean {
+  if (rule.type && rule.type !== safetyToken(unit.type)) return false;
+  if (rule.cat && rule.cat !== safetyToken(unit.cat)) return false;
+  if (rule.supplier && rule.supplier !== safetyToken(unit.odooVendorName)) return false;
+  if (rule.origin && rule.origin !== safetyToken(unit.originCountry)) return false;
+  if (rule.warehouse && rule.warehouse !== safetyToken(unit.odooWarehouse)) return false;
+  return true;
+}
+
+/** El grupo con más criterios coincidentes gana y reemplaza al global. A igual profundidad, gana el último. */
+export function resolveSafetyMargin(unit: PricedUnit, rules?: SafetyMarginRule[] | null): SafetyMarginRule | null {
+  let best: SafetyMarginRule | null = null;
+  let bestDepth = -1;
+  for (const rule of rules || []) {
+    if (!safetyRuleMatches(unit, rule)) continue;
+    const depth = safetyRuleDepth(rule);
+    if (depth >= bestDepth) {
+      best = rule;
+      bestDepth = depth;
+    }
+  }
+  return best;
+}
+
+export function matchingSafetyMargins(unit: PricedUnit, rules?: SafetyMarginRule[] | null): SafetyMarginRule[] {
+  const winner = resolveSafetyMargin(unit, rules);
+  return winner ? [{ ...winner, label: safetyRuleLabel(winner) }] : [];
+}
+
+export function safetyMarginPctOf(unit: PricedUnit, rules?: SafetyMarginRule[] | null): number {
+  const winner = resolveSafetyMargin(unit, rules);
+  const pct = winner ? Number(winner.marginPct) || 0 : 0;
+  return Math.round(Math.min(80, pct) * 100) / 100;
+}
+
 export function computeListPrices(
   unit: PricedUnit,
   rules: PricingRule[],
   refs?: AcquisitionRef[] | null,
   overlays?: OverlayConcept[] | null,
+  safetyRules?: SafetyMarginRule[] | null,
 ): {
   priceList: number;
   priceMin: number;
@@ -120,14 +229,22 @@ export function computeListPrices(
   overlayTotal: number;
   overlayLines: ReturnType<typeof applyOverlays>["overlays"];
   acqKind: string;
+  safetyPct: number;
+  safetyAdd: number;
+  securedBase: number;
+  safetyLines: SafetyMarginRule[];
 } {
   const rule = resolvePricingRule(unit, rules) || { scope: "global", marginPct: 22, maxDiscountPct: 10 };
   const acq = resolveAcquisition(unit, refs);
   const applied = applyOverlays(acq, unit, overlays);
   const base = applied.base;
+  const safetyLines = matchingSafetyMargins(unit, safetyRules);
+  const safetyPct = safetyMarginPctOf(unit, safetyRules);
+  const safetyAdd = Math.round((base * safetyPct) / 100);
+  const securedBase = base + safetyAdd;
   const margin = Number(rule.marginPct) || 22;
   const maxDisc = Number(rule.maxDiscountPct) || 10;
-  const priceList = Math.round(base / (1 - margin / 100));
+  const priceList = Math.round(securedBase / (1 - margin / 100));
   const priceMin = Math.round(priceList * (1 - maxDisc / 100));
   return {
     priceList,
@@ -139,6 +256,10 @@ export function computeListPrices(
     overlayTotal: applied.overlayTotal,
     overlayLines: applied.overlays,
     acqKind: acq.kind,
+    safetyPct,
+    safetyAdd,
+    securedBase,
+    safetyLines,
   };
 }
 
@@ -206,6 +327,11 @@ export function overrideFromVisibilityMode(mode: OfferVisibilityMode | string | 
   return null;
 }
 
+function safetyPhrase(lines: SafetyMarginRule[]): string {
+  if (!lines.length) return "";
+  return lines.map((l) => `${l.marginPct}% ${l.label || safetyRuleLabel(l)}`).join(" + ");
+}
+
 export function describeOffer(
   unit: PricedUnit & { depotId?: string | null; status?: string },
   rules: PricingRule[],
@@ -213,11 +339,15 @@ export function describeOffer(
   stored: OfferSnapshot,
   refs?: AcquisitionRef[] | null,
   overlays?: OverlayConcept[] | null,
+  safetyRules?: SafetyMarginRule[] | null,
 ) {
-  const computed = computeListPrices(unit, rules, refs, overlays);
+  const computed = computeListPrices(unit, rules, refs, overlays, safetyRules);
   const source = stored.priceSource === "manual" ? "manual" : "rule";
-  const priceList = stored.priceList != null && stored.priceList > 0 ? stored.priceList : computed.priceList;
-  const priceMin = stored.priceMin != null && stored.priceMin > 0 ? stored.priceMin : computed.priceMin;
+  const storedList = stored.priceList != null && stored.priceList > 0 ? stored.priceList : null;
+  const storedMin = stored.priceMin != null && stored.priceMin > 0 ? stored.priceMin : null;
+  const priceList = source === "manual" && storedList != null ? storedList : computed.priceList;
+  const priceMin = source === "manual" && storedMin != null ? storedMin : computed.priceMin;
+  const outdated = source !== "manual" && storedList != null && Math.round(storedList) !== computed.priceList;
   const rule = resolvePricingRule(unit, rules) || { scope: "global", target: null, marginPct: 22, maxDiscountPct: 10 };
   const acq = resolveAcquisition(unit, refs);
   const baseKind = acq.kind;
@@ -233,14 +363,19 @@ export function describeOffer(
         ? `costo de referencia ${unit.type} · ${unit.cat} (${moneyUsd(computed.rawBase)})${overlayBit}`
         : `costo de referencia del tipo ${unit.type} (${moneyUsd(computed.rawBase)})${overlayBit}`;
   const ruleLabel = `${SCOPE_LABEL[rule.scope] || rule.scope}${rule.target ? ` ${rule.target}` : ""}`;
+  const safetyBit = computed.safetyPct > 0
+    ? ` Margen de seguridad ${safetyPhrase(computed.safetyLines)} = +${moneyUsd(computed.safetyAdd)} → costo base ${moneyUsd(computed.securedBase)}.`
+    : "";
   const title = source === "manual"
     ? stored.adjustedByName
       ? `Precio de oferta fijado por ${stored.adjustedByName}`
       : "Precio de oferta fijado a mano"
     : `Precio calculado (${ruleLabel})`;
   const detail = source === "manual"
-    ? `El administrador reemplazó la lista. La regla actual (${ruleLabel}) partiría de ${baseLabel} con margen ${computed.marginPct}% → neto ${moneyUsd(computed.priceList)}.`
-    : `Sale de ${baseLabel} + margen ${computed.marginPct}% (${ruleLabel}). Piso comercial ${moneyUsd(priceMin)} (dto. máx. ${computed.maxDiscountPct}%).`;
+    ? `El administrador reemplazó la lista. La regla actual (${ruleLabel}) partiría de ${baseLabel}.${safetyBit} Con margen ${computed.marginPct}% → neto ${moneyUsd(computed.priceList)}.`
+    : computed.safetyPct > 0
+      ? `Sale de ${baseLabel}.${safetyBit} Sobre ese costo base, margen ${computed.marginPct}% (${ruleLabel}) → venta ${moneyUsd(computed.priceList)}. Piso ${moneyUsd(priceMin)} (dto. máx. ${computed.maxDiscountPct}% del precio objetivo, sin gerencia).`
+      : `Sale de ${baseLabel} + margen ${computed.marginPct}% (${ruleLabel}). Piso comercial ${moneyUsd(priceMin)} (dto. máx. ${computed.maxDiscountPct}%).`;
   const mode = visibilityModeOf(stored.showPriceOverride);
   const inheritedShow = applyShowPrice(
     {
@@ -268,6 +403,10 @@ export function describeOffer(
     detail,
     base: computed.base,
     rawBase: computed.rawBase,
+    securedBase: computed.securedBase,
+    safetyPct: computed.safetyPct,
+    safetyAdd: computed.safetyAdd,
+    safetyLines: computed.safetyLines,
     overlayTotal: computed.overlayTotal,
     overlayLines: computed.overlayLines,
     baseKind,
@@ -277,6 +416,8 @@ export function describeOffer(
     maxDiscountPct: computed.maxDiscountPct,
     suggestedList: computed.priceList,
     suggestedMin: computed.priceMin,
+    storedList,
+    outdated,
     priceList,
     priceMin,
     igv: igvOf(priceList),

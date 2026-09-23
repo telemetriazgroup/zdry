@@ -34,7 +34,7 @@ import {
 } from "../domain/pricing";
 import { EvaluationService } from "../evaluation/evaluation.service";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
-import { loadOverlayConcepts, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
+import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import { DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
 
 const ACTIVE_PHOTOS = { where: { status: PHOTO_STATUS_ACTIVE } };
@@ -76,12 +76,13 @@ export class CatalogMediaService {
     });
     const isos = rows.map((c) => c.iso);
     const lotIds = [...new Set(rows.map((c) => c.odooLotId).filter((id): id is number => id != null))];
-    const [pricing, vis, refs, dry, overlays, candidates] = await Promise.all([
+    const [pricing, vis, refs, dry, overlays, safety, candidates] = await Promise.all([
       this.loadPricing(),
       this.loadVisibility(),
       this.loadAcquisitionRefs(),
       presentDryReferential(this.prisma),
       loadOverlayConcepts(this.prisma),
+      loadSafetyMarginRules(this.prisma),
       isos.length
         ? this.prisma.odooLotCandidate.findMany({
             where: {
@@ -124,6 +125,7 @@ export class CatalogMediaService {
         },
         refs,
         overlays,
+        safety,
       );
       return {
         iso: c.iso,
@@ -157,6 +159,10 @@ export class CatalogMediaService {
         odooVendorName: c.odooVendorName,
         costSource: c.costSource,
         rawBase: offer.rawBase,
+        securedBase: offer.securedBase,
+        safetyPct: offer.safetyPct,
+        safetyAdd: offer.safetyAdd,
+        showPrice: offer.showPrice,
         overlayTotal: offer.overlayTotal,
         overlayLines: offer.overlayLines,
         base: offer.base,
@@ -410,6 +416,50 @@ export class CatalogMediaService {
     return this.get(iso);
   }
 
+  async publishMany(isos: string[], user: AuthUser, ip?: string) {
+    this.assertApprover(user);
+    const unique = [...new Set((isos || []).map((iso) => String(iso || "").trim()).filter(Boolean))].slice(0, 400);
+    let published = 0;
+    let already = 0;
+    const skipped: string[] = [];
+    for (const iso of unique) {
+      const c = await this.prisma.container.findUnique({
+        where: { iso },
+        include: { photos: ACTIVE_PHOTOS },
+      });
+      if (!c || c.archivedAt || c.photos.length < 1) {
+        skipped.push(iso);
+        continue;
+      }
+      if (c.mediaStatus === "aprobado") {
+        already += 1;
+        continue;
+      }
+      await this.watermarkPublicCopies(c.iso, c.photos);
+      await this.prisma.container.update({
+        where: { iso },
+        data: {
+          mediaStatus: "aprobado",
+          mediaApprovedBy: user.id,
+          mediaApprovedAt: new Date(),
+          mediaReviewNote: null,
+        },
+      });
+      await this.prisma.containerHistory.create({
+        data: { iso, type: "Catálogo", detail: `Ficha publicada en el catálogo por ${user.name}. Publicación masiva.` },
+      });
+      published += 1;
+    }
+    await this.audit.log({
+      user,
+      action: "approve_media",
+      entity: "Container",
+      after: { published, already, skipped: skipped.length },
+      ip,
+    });
+    return { published, already, skipped };
+  }
+
   async hide(iso: string, user: AuthUser, ip?: string) {
     this.assertApprover(user);
     const c = await this.prisma.container.findUnique({ where: { iso } });
@@ -557,12 +607,13 @@ export class CatalogMediaService {
     this.assertApprover(user);
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c || c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
-    const [pricing, vis, refs, dry, overlays] = await Promise.all([
+    const [pricing, vis, refs, dry, overlays, safety] = await Promise.all([
       this.loadPricing(),
       this.loadVisibility(),
       this.loadAcquisitionRefs(),
       presentDryReferential(this.prisma),
       loadOverlayConcepts(this.prisma),
+      loadSafetyMarginRules(this.prisma),
     ]);
     const unit = {
       ...overlayUnitFrom(c, dry),
@@ -577,6 +628,7 @@ export class CatalogMediaService {
         pricing,
         refs,
         overlays,
+        safety,
       );
       priceList = computed.priceList;
       priceMin = computed.priceMin;
@@ -599,6 +651,7 @@ export class CatalogMediaService {
       },
       refs,
       overlays,
+      safety,
     );
     const history = await this.prisma.containerPriceChange.findMany({
       where: { iso },
@@ -629,6 +682,7 @@ export class CatalogMediaService {
       visibility?: OfferVisibilityMode | string;
       note?: string;
       recompute?: boolean;
+      visibilityOnly?: boolean;
     },
     user: AuthUser,
     ip?: string,
@@ -636,15 +690,50 @@ export class CatalogMediaService {
     this.assertApprover(user);
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c || c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
-    const [pricing, vis, refs, dry, overlays] = await Promise.all([
+    if (body.visibilityOnly) {
+      const showPriceOverride = body.visibility === "request" ? false : true;
+      const now = new Date();
+      await this.prisma.container.update({
+        where: { iso },
+        data: { showPriceOverride, priceAdjustedAt: now, priceAdjustedByName: user.name },
+      });
+      const described = await this.getOffer(iso, user);
+      const note = showPriceOverride ? "Precio visible en el catálogo" : "Precio oculto: el cliente solicita precio";
+      await this.prisma.containerPriceChange.create({
+        data: {
+          iso,
+          priceList: described.priceList,
+          priceMin: described.priceMin,
+          showPrice: described.showPrice,
+          source: described.source === "manual" ? "manual" : "rule",
+          note,
+          changedById: user.id,
+          changedByName: user.name,
+        },
+      });
+      await this.prisma.containerHistory.create({
+        data: { iso, type: "Precio", detail: `${note} por ${user.name}.` },
+      });
+      await this.audit.log({
+        user,
+        action: "update",
+        entity: "ContainerPrice",
+        entityId: iso,
+        after: { showPriceOverride, visibilityOnly: true },
+        ip,
+      });
+      return this.getOffer(iso, user);
+    }
+    const [pricing, vis, refs, dry, overlays, safety] = await Promise.all([
       this.loadPricing(),
       this.loadVisibility(),
       this.loadAcquisitionRefs(),
       presentDryReferential(this.prisma),
       loadOverlayConcepts(this.prisma),
+      loadSafetyMarginRules(this.prisma),
     ]);
     const unit = overlayUnitFrom(c, dry);
-    const computed = computeListPrices(unit, pricing, refs, overlays);
+    const computed = computeListPrices(unit, pricing, refs, overlays, safety);
     let priceList = computed.priceList;
     let priceMin = computed.priceMin;
     let source = "rule";
@@ -682,6 +771,7 @@ export class CatalogMediaService {
       },
       refs,
       overlays,
+      safety,
     );
     const note = (body.note || "").trim().slice(0, 240);
     await this.prisma.containerPriceChange.create({

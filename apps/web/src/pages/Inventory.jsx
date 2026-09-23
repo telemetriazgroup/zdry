@@ -1,15 +1,46 @@
 import { useEffect, useState } from "react";
-import { api } from "../api.js";
+import { api, ApiError } from "../api.js";
 import { hasRole, useAuth } from "../auth.jsx";
+import { useNotice } from "../notice.jsx";
 
 export default function Inventory() {
   const { user } = useAuth();
   const [rows, setRows] = useState([]);
   const [error, setError] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const canRecalc = hasRole(user, "admin", "gerente");
+  const { notify, toastNode } = useNotice();
 
   useEffect(() => {
+    if (msg) notify(msg);
+  }, [msg]);
+  useEffect(() => {
+    if (error) notify(error, "err");
+  }, [error]);
+
+  function load() {
     api("/inventory").then(setRows).catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    load();
   }, []);
+
+  async function recalculateLists() {
+    setBusy(true);
+    setError("");
+    setMsg("");
+    try {
+      const out = await api("/config/recalculate-prices", { method: "POST", body: {} });
+      setMsg(`Listas recalculadas: ${out.updated ?? 0}. Las ofertas fijadas a mano no se tocaron.`);
+      load();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const showCosts = rows.some((r) => r.costs);
   const showMargin = rows.some((r) => r.marginPct != null);
@@ -17,15 +48,25 @@ export default function Inventory() {
 
   return (
     <>
-      <h2 className="section-title">{hasRole(user, "admin", "compras") ? "Inventario y costos" : "Inventario disponible"}</h2>
-      <p className="section-sub">
-        Unidades reales en BD. El servidor oculta FOB y C_T según el rol — el vendedor y el operador no reciben esos campos aunque inspeccionen la red.
-      </p>
-      {error ? <div className="err">{error}</div> : null}
-      {!showCosts && user.role !== "almacen" ? (
-        <div className="locked-note">Costo real oculto para tu rol. Ves precio de lista y mínimo{showMargin ? " y margen %" : ""}.</div>
-      ) : null}
-      {user.role === "almacen" ? <div className="locked-note">Almacén no recibe precios ni costos.</div> : null}
+    <h2 className="section-title">{hasRole(user, "admin", "compras") ? "Inventario y costos" : "Inventario disponible"}</h2>
+    <p className="section-sub">
+      Unidades reales en BD. El servidor oculta FOB y C_T según el rol — el vendedor y el operador no reciben esos campos aunque inspeccionen la red.
+      {canRecalc ? " El precio de lista es el último guardado; si cambiaste margen o extras, recalcula para alinearlo con la regla." : ""}
+    </p>
+    {error ? <div className="err">{error}</div> : null}
+    {msg ? <div className="ok-msg">{msg}</div> : null}
+    {toastNode}
+    {!showCosts && user.role !== "almacen" ? (
+      <div className="locked-note">Costo real oculto para tu rol. Ves precio de lista y mínimo{showMargin ? " y margen %" : ""}.</div>
+    ) : null}
+    {user.role === "almacen" ? <div className="locked-note">Almacén no recibe precios ni costos.</div> : null}
+    {canRecalc ? (
+      <div className="action-row" style={{ marginBottom: 12 }}>
+        <button className="btn-primary" type="button" disabled={busy} onClick={recalculateLists}>
+          {busy ? "Recalculando…" : "Recalcular todas las listas"}
+        </button>
+      </div>
+    ) : null}
       <div className="panel">
         <div className="tablewrap">
           <table className="data">

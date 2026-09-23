@@ -34,7 +34,7 @@ import { randomUUID } from "crypto";
 import { inspectOdooIso } from "../domain/odoo-lot-map";
 import { assertConfirmMatch, pendingValuationWhere, proposeMatch, reconcileContainerPatch } from "../domain/odoo-reconcile";
 import { ACQUISITION_REFS_KEY, computeListPrices, DEFAULT_PRICING_RULES, normalizeAcquisitionRefs } from "../domain/pricing";
-import { loadOverlayConcepts, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
+import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 
 export type InvoiceLineInput = {
@@ -506,11 +506,12 @@ export class PurchasesService {
   private async refreshAcquisitionPrices(iso: string) {
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c || c.priceSource === "manual") return;
-    const [rules, refsRow, dry, overlays] = await Promise.all([
+    const [rules, refsRow, dry, overlays, safety] = await Promise.all([
       this.prisma.pricingRule.findMany(),
       this.prisma.appSetting.findUnique({ where: { key: ACQUISITION_REFS_KEY } }),
       presentDryReferential(this.prisma),
       loadOverlayConcepts(this.prisma),
+      loadSafetyMarginRules(this.prisma),
     ]);
     const pricing = rules.length
       ? rules.map((r) => ({
@@ -526,6 +527,7 @@ export class PurchasesService {
       pricing,
       normalizeAcquisitionRefs(refsRow?.value),
       overlays,
+      safety,
     );
     await this.prisma.container.update({
       where: { iso },

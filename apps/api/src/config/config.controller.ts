@@ -8,10 +8,10 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { LayoutRules, normalizeLayoutRules } from "../domain/yard";
 import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
-import { ACQUISITION_REFS_KEY, DEFAULT_ACQUISITION_REFS, effectiveAcquisitionRefs, normalizeAcquisitionRefs } from "../domain/pricing";
+import { ACQUISITION_REFS_KEY, DEFAULT_ACQUISITION_REFS, effectiveAcquisitionRefs, normalizeAcquisitionRefs, normalizeSafetyMarginRules, SAFETY_MARGIN_KEY } from "../domain/pricing";
 import { normalizeOverlayConcepts } from "../domain/acquisition-overlay";
 import { ODOO_WAREHOUSE_LABELS, ODOO_WAREHOUSE_PIURA, ODOO_WAREHOUSE_ZGROU } from "../domain/odoo-warehouse";
-import { loadOverlayConcepts, refreshRulePrices, saveOverlayConcepts } from "../odoo-import/acquisition-overlay.store";
+import { loadOverlayConcepts, loadSafetyMarginRules, refreshRulePrices, saveOverlayConcepts } from "../odoo-import/acquisition-overlay.store";
 import { DRY_REFERENTIAL_KEY, normalizeDryReferential } from "../domain/dry-referential";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { EvaluationService } from "../evaluation/evaluation.service";
@@ -22,6 +22,7 @@ export const CONFIG_SECTIONS = [
   { id: "catalog-copy", title: "Textos del catálogo", blurb: "Editor de la página pública: hero, pasos, pie y legales. Así lo ve el cliente." },
   { id: "watermark", title: "Marca de agua del catálogo", blurb: "Logo que se repite sobre las fotos públicas. Si no subes uno, se usa zg_marca.png." },
   { id: "visibility", title: "Visibilidad de precios", blurb: "Reglas jerárquicas global → tipo → fabricante → unidad." },
+  { id: "safety-margin", title: "Margen de seguridad", blurb: "Se suma al costo antes de la regla de precio. 20% sobre 1000 deja el costo base en 1200. El grupo con más criterios (tipo, condición, proveedor, procedencia, almacén) reemplaza al global." },
   { id: "acquisition-refs", title: "Costos de referencia", blurb: "Base USD por tipo y condición para calcular la lista (neto + margen)." },
   { id: "acquisition-overlays", title: "Extras de costo (almacén / proveedor)", blurb: "Conceptos que se suman a la OC o al referencial según plaza Odoo (ZGROU/Piura) o proveedor. No pisan el fobCif." },
   { id: "dry-referential", title: "Precio referencial DRY", blurb: "Promedio de OC por tipo, uso y plaza. Si el tipo no tiene OC, cae al promedio general (o al monto admin)." },
@@ -66,7 +67,7 @@ export class ConfigController {
     return {
       sections: CONFIG_SECTIONS.map((s) => ({
         ...s,
-        status: ["catalog-copy", "watermark", "yard-columns", "visibility", "acquisition-refs", "acquisition-overlays", "dry-referential", "commercial-services", "depot-services", "evaluation"].includes(s.id)
+        status: ["catalog-copy", "watermark", "yard-columns", "visibility", "acquisition-refs", "acquisition-overlays", "dry-referential", "commercial-services", "depot-services", "evaluation", "safety-margin"].includes(s.id)
           ? ("live" as const)
           : s.id === "freight"
             ? ("partial" as const)
@@ -190,30 +191,49 @@ export class ConfigController {
 
   @Get("acquisition-overlays")
   async getAcquisitionOverlays() {
-    const [concepts, vendorsRaw] = await Promise.all([
+    const [concepts, vendorsRaw, extra, originsRaw, warehousesRaw] = await Promise.all([
       loadOverlayConcepts(this.prisma),
       this.prisma.odooLotCandidate.findMany({
         where: { odooVendorName: { not: null } },
         select: { odooVendorName: true },
         distinct: ["odooVendorName"],
       }),
+      this.prisma.container.findMany({
+        where: { odooVendorName: { not: null } },
+        select: { odooVendorName: true },
+        distinct: ["odooVendorName"],
+      }),
+      this.prisma.container.findMany({
+        where: { originCountry: { not: null } },
+        select: { originCountry: true },
+        distinct: ["originCountry"],
+      }),
+      this.prisma.container.findMany({
+        where: { odooWarehouse: { not: null } },
+        select: { odooWarehouse: true },
+        distinct: ["odooWarehouse"],
+      }),
     ]);
-    const extra = await this.prisma.container.findMany({
-      where: { odooVendorName: { not: null } },
-      select: { odooVendorName: true },
-      distinct: ["odooVendorName"],
-    });
     const vendors = [...new Set([
       ...vendorsRaw.map((v) => String(v.odooVendorName || "").trim()),
       ...extra.map((v) => String(v.odooVendorName || "").trim()),
     ])].filter(Boolean).sort((a, b) => a.localeCompare(b, "es"));
+    const origins = [...new Set(originsRaw.map((v) => String(v.originCountry || "").trim().toUpperCase()))]
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, "es"));
+    const known = [
+      { code: ODOO_WAREHOUSE_ZGROU, label: ODOO_WAREHOUSE_LABELS[ODOO_WAREHOUSE_ZGROU] },
+      { code: ODOO_WAREHOUSE_PIURA, label: ODOO_WAREHOUSE_LABELS[ODOO_WAREHOUSE_PIURA] },
+    ];
+    const extraWh = [...new Set(warehousesRaw.map((v) => String(v.odooWarehouse || "").trim().toUpperCase()))]
+      .filter((code) => code && !known.some((k) => k.code === code))
+      .sort((a, b) => a.localeCompare(b, "es"))
+      .map((code) => ({ code, label: code }));
     return {
       concepts,
-      warehouses: [
-        { code: ODOO_WAREHOUSE_ZGROU, label: ODOO_WAREHOUSE_LABELS[ODOO_WAREHOUSE_ZGROU] },
-        { code: ODOO_WAREHOUSE_PIURA, label: ODOO_WAREHOUSE_LABELS[ODOO_WAREHOUSE_PIURA] },
-      ],
+      warehouses: [...known, ...extraWh],
       vendors,
+      origins,
     };
   }
 
@@ -293,7 +313,44 @@ export class ConfigController {
       ),
     ]);
     await this.audit.log({ user, action: "update", entity: "PricingRule", after: { count: rules.length }, ip: req.ip });
+    await refreshRulePrices(this.prisma);
     return this.getPricing();
+  }
+
+  @Get("safety-margin")
+  safetyMargin() {
+    return loadSafetyMarginRules(this.prisma);
+  }
+
+  @Put("safety-margin")
+  async putSafetyMargin(
+    @Body() body: { rules?: Record<string, unknown>[] },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const rules = normalizeSafetyMarginRules(body.rules || []);
+    const value = rules as unknown as Prisma.InputJsonValue;
+    await this.prisma.appSetting.upsert({
+      where: { key: SAFETY_MARGIN_KEY },
+      update: { value },
+      create: { key: SAFETY_MARGIN_KEY, value },
+    });
+    await this.audit.log({ user, action: "update", entity: "AppSetting", entityId: SAFETY_MARGIN_KEY, after: { count: rules.length }, ip: req.ip });
+    const recalc = await refreshRulePrices(this.prisma);
+    return { rules, recalculated: recalc.updated };
+  }
+
+  @Post("recalculate-prices")
+  async recalculatePrices(@CurrentUser() user: AuthUser, @Req() req: Request) {
+    const recalc = await refreshRulePrices(this.prisma);
+    await this.audit.log({
+      user,
+      action: "update",
+      entity: "PricingRule",
+      after: { recalculated: recalc.updated },
+      ip: req.ip,
+    });
+    return { updated: recalc.updated };
   }
 
   @Get("commercial-services")

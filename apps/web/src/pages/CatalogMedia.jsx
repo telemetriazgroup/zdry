@@ -7,6 +7,7 @@ import VideoMarks, { videoSilenceProps } from "../video-marks.jsx";
 import { EvalGrid } from "../eval-ratings.jsx";
 import OdooLotFicha, { ExpedientePanel } from "./OdooLotFicha.jsx";
 import { downloadCatalogStockExcel } from "../catalog-export.js";
+import { useNotice } from "../notice.jsx";
 
 function usd(n) {
   if (n == null || n === "" || !Number.isFinite(Number(n))) return "—";
@@ -50,8 +51,11 @@ export default function CatalogMedia() {
   const [conds, setConds] = useState({ conditionFloor: "", conditionRoof: "", conditionDoors: "", conditionPaint: "" });
   const [rejectNote, setRejectNote] = useState("");
   const [rejectingSlot, setRejectingSlot] = useState(null);
-  const [error, setError] = useState("");
-  const [msg, setMsg] = useState("");
+  const [error, setErrorState] = useState("");
+  const [msg, setMsgState] = useState("");
+  const { notify, toastNode } = useNotice();
+  const [selectMode, setSelectMode] = useState(false);
+  const [picked, setPicked] = useState(() => new Set());
   const [bust, setBust] = useState(0);
   const [preview, setPreview] = useState(null);
   const [histPreview, setHistPreview] = useState(null);
@@ -62,13 +66,60 @@ export default function CatalogMedia() {
   const [priceNote, setPriceNote] = useState("");
   const [priceBusy, setPriceBusy] = useState(false);
   const [q, setQ] = useState("");
+  const [onlyPhotos, setOnlyPhotos] = useState(false);
   const [page, setPage] = useState(1);
+  const [publishBusy, setPublishBusy] = useState(false);
   const [draftPrice, setDraftPrice] = useState({});
   const [listBusy, setListBusy] = useState("");
   const [sheet, setSheet] = useState(null);
   const [odooPhotos, setOdooPhotos] = useState([]);
   const [pickedAtt, setPickedAtt] = useState(null);
   const [assigning, setAssigning] = useState(false);
+
+  function setMsg(text) {
+    setMsgState(text || "");
+    if (text) notify(text, "ok");
+  }
+  function setError(text) {
+    setErrorState(text || "");
+    if (text) notify(text, "err");
+  }
+
+  function withPhotos(list) {
+    return (list || []).filter((r) => Number(r.photoCount) > 0);
+  }
+
+  function enterSelect() {
+    setSelectMode(true);
+    setPicked(new Set());
+    setMsg("Modo selección. Marca las unidades con fotos, o usa «Seleccionar con fotos». Salir vuelve a revisar una por una.");
+  }
+
+  function leaveSelect() {
+    setSelectMode(false);
+    setPicked(new Set());
+    setMsg("Saliste del modo selección. Abre cada unidad para revisarla.");
+  }
+
+  function togglePick(row) {
+    if (Number(row.photoCount) < 1) {
+      setError(`${row.iso} no tiene fotos. No se puede publicar.`);
+      return;
+    }
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(row.iso)) next.delete(row.iso);
+      else next.add(row.iso);
+      return next;
+    });
+  }
+
+  function selectAllWithPhotos() {
+    const ids = withPhotos(filteredRows).map((r) => r.iso);
+    setPicked(new Set(ids));
+    if (ids.length) setMsg(`${ids.length} unidades con fotos seleccionadas. Publica la selección o quita las que no van.`);
+    else setError("Ninguna unidad de este filtro tiene fotos.");
+  }
 
   async function loadOffer(nextIso) {
     if (!canPrice || !nextIso) {
@@ -96,7 +147,7 @@ export default function CatalogMedia() {
 
   useEffect(() => {
     setPage(1);
-  }, [q]);
+  }, [q, onlyPhotos]);
 
   async function open(nextIso) {
     setError("");
@@ -172,6 +223,74 @@ export default function CatalogMedia() {
       setError(e instanceof ApiError ? e.message : e.message);
     } finally {
       setListBusy("");
+    }
+  }
+
+  async function toggleListPrice(row, show) {
+    if (!canPrice || !row?.iso) return;
+    setListBusy(row.iso);
+    setError("");
+    try {
+      const o = await api(`/catalog-media/${row.iso}/price`, {
+        method: "PATCH",
+        body: { visibilityOnly: true, visibility: show ? "show" : "request" },
+      });
+      setRows((list) => list.map((r) => (r.iso === row.iso ? { ...r, showPrice: o.showPrice } : r)));
+      setMsg(show ? `${row.iso}: el catálogo muestra el precio.` : `${row.iso}: el cliente ve «Solicitar precio».`);
+      if (iso === row.iso) {
+        setOffer(o);
+        setShowMode(o.visibility || (show ? "show" : "request"));
+      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    } finally {
+      setListBusy("");
+    }
+  }
+
+  async function publishPicked() {
+    const chosen = rows.filter((r) => picked.has(r.iso) && Number(r.photoCount) > 0);
+    const pending = chosen.filter((r) => r.mediaStatus !== "aprobado");
+    if (!chosen.length) {
+      setError("Selecciona al menos una unidad con fotos.");
+      return;
+    }
+    if (!pending.length) {
+      setMsg("Las seleccionadas ya están publicadas en el catálogo.");
+      return;
+    }
+    if (!window.confirm(`¿Publicar ${pending.length} unidad${pending.length === 1 ? "" : "es"} seleccionada${pending.length === 1 ? "" : "s"}?`)) return;
+    setPublishBusy(true);
+    setError("");
+    try {
+      const out = await api("/catalog-media/publish-batch", { method: "POST", body: { isos: pending.map((r) => r.iso) } });
+      const skip = out.skipped?.length ? ` ${out.skipped.length} sin foto o no encontradas.` : "";
+      setMsg(`Publicadas ${out.published ?? 0} de la selección.${out.already ? ` ${out.already} ya estaban visibles.` : ""}${skip}`);
+      setPicked(new Set());
+      loadList();
+      if (iso && pending.some((r) => r.iso === iso)) {
+        const u = await api(`/catalog-media/${iso}`);
+        setUnit(u);
+      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    } finally {
+      setPublishBusy(false);
+    }
+  }
+
+  async function recalculateLists() {
+    setPublishBusy(true);
+    setError("");
+    try {
+      const out = await api("/config/recalculate-prices", { method: "POST", body: {} });
+      setMsg(`Listas recalculadas: ${out.updated ?? 0}. El precio guardado queda igual al cálculo. Las ofertas a mano no se tocaron.`);
+      loadList();
+      if (iso) await loadOffer(iso);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    } finally {
+      setPublishBusy(false);
     }
   }
 
@@ -347,15 +466,18 @@ export default function CatalogMedia() {
   const filteredRows = useMemo(() => {
     const raw = q.trim().toUpperCase();
     const compact = raw.replace(/[\s-]/g, "");
-    if (!raw) return rows;
     return rows.filter((r) => {
+      if (onlyPhotos && !(Number(r.photoCount) > 0)) return false;
+      if (!raw) return true;
       const hay = [r.iso, r.type, r.cat, r.depotName, r.manufacturer, r.registeredByName, STATUS[r.mediaStatus]?.label]
         .filter(Boolean)
         .join(" ")
         .toUpperCase();
       return hay.includes(raw) || hay.replace(/[\s-]/g, "").includes(compact);
     });
-  }, [rows, q]);
+  }, [rows, q, onlyPhotos]);
+  const photoRows = withPhotos(filteredRows);
+  const allPhotoPicked = photoRows.length > 0 && photoRows.every((r) => picked.has(r.iso));
   const pages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const safePage = Math.min(page, pages);
   const pageRows = filteredRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
@@ -387,13 +509,15 @@ export default function CatalogMedia() {
     <div className="catalog-media-page">
       <h2 className="section-title">Ficha multimedia del catálogo</h2>
       <p className="section-sub">
-        Primero el precio: costo de compra o referencial, extras y rango de venta. Expediente y extras son internos; el cliente no los ve.
-        Publicar sigue deshabilitado si no hay fotos.
+        El costo de la lista ya incluye el margen de seguridad. El rango sale de la regla de precio sobre ese costo base.
+        Filtra o entra en «Seleccionar para publicar»: marcas las que tienen fotos, publicas esa selección y sales para revisar una por una.
       </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
+      {toastNode}
 
       <div className="dash-grid catalog-media-grid">
+        <div className="catalog-list-col">
         <div className="panel catalog-stock-panel">
           <h3>Unidades en stock</h3>
           {canApprove ? (
@@ -413,6 +537,10 @@ export default function CatalogMedia() {
               placeholder="Buscar ISO, tipo, depósito o quien ingresó…"
               aria-label="Buscar unidades del catálogo"
             />
+            <label className="catalog-photo-filter">
+              <input type="checkbox" checked={onlyPhotos} onChange={(e) => setOnlyPhotos(e.target.checked)} />
+              Solo con fotos
+            </label>
             {canApprove ? (
               <button
                 className="btn-ghost"
@@ -423,7 +551,33 @@ export default function CatalogMedia() {
                 Descargar Excel
               </button>
             ) : null}
+            {canApprove ? (
+              <button
+                className="btn-ghost"
+                type="button"
+                disabled={publishBusy}
+                onClick={recalculateLists}
+              >
+                Recalcular listas
+              </button>
+            ) : null}
+            {canApprove && !selectMode ? (
+              <button className="btn-primary" type="button" disabled={publishBusy} onClick={enterSelect}>
+                Seleccionar para publicar
+              </button>
+            ) : null}
           </div>
+          {canApprove && selectMode ? (
+            <div className="catalog-select-bar">
+              <b>{picked.size} seleccionada{picked.size === 1 ? "" : "s"}</b>
+              <button className="btn-ghost" type="button" onClick={selectAllWithPhotos}>Seleccionar con fotos</button>
+              <button className="btn-ghost" type="button" onClick={() => setPicked(new Set())}>Quitar selección</button>
+              <button className="btn-primary" type="button" disabled={publishBusy || picked.size < 1} onClick={publishPicked}>
+                {publishBusy ? "Publicando…" : "Publicar selección"}
+              </button>
+              <button className="btn-ghost" type="button" onClick={leaveSelect}>Salir</button>
+            </div>
+          ) : null}
           <p className="section-sub">
             {filteredRows.length} unidad{filteredRows.length === 1 ? "" : "es"}
             {q.trim() ? ` de ${rows.length}` : ""}. Máximo {PAGE_SIZE} por página.
@@ -432,24 +586,52 @@ export default function CatalogMedia() {
             <table className="data">
               <thead>
                 <tr>
+                  {selectMode ? (
+                    <th>
+                      <input
+                        type="checkbox"
+                        checked={allPhotoPicked}
+                        disabled={!photoRows.length}
+                        aria-label="Seleccionar unidades con fotos"
+                        onChange={() => (allPhotoPicked ? setPicked(new Set()) : selectAllWithPhotos())}
+                      />
+                    </th>
+                  ) : null}
                   <th>ISO</th>
                   <th>Tipo</th>
-                  <th>Costo</th>
+                  <th>Costo base</th>
                   <th>Extras</th>
                   <th>Venta sug.</th>
                   <th>Rango</th>
                   <th>Precio</th>
+                  <th>Precio público</th>
                   <th>Fotos</th>
                   {canApprove ? <th></th> : null}
                 </tr>
               </thead>
               <tbody>
                 {pageRows.map((r) => (
-                  <tr key={r.iso} className={`expandable${iso === r.iso ? " on" : ""}`} onClick={() => open(r.iso)}>
+                  <tr
+                    key={r.iso}
+                    className={`expandable${iso === r.iso ? " on" : ""}${selectMode && picked.has(r.iso) ? " row-picked" : ""}`}
+                    onClick={() => (selectMode ? togglePick(r) : open(r.iso))}
+                  >
+                    {selectMode ? (
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={picked.has(r.iso)}
+                          disabled={Number(r.photoCount) < 1}
+                          aria-label={`Seleccionar ${r.iso}`}
+                          title={Number(r.photoCount) < 1 ? "Sin fotos: no se puede publicar" : "Incluir en la publicación"}
+                          onChange={() => togglePick(r)}
+                        />
+                      </td>
+                    ) : null}
                     <td className="card-iso">{r.iso}{r.demo ? <span className="demo-chip">DEMO</span> : null}</td>
                     <td>{r.type}{r.cat ? ` · ${r.cat}` : ""}</td>
-                    <td title={r.baseKind === "fobCif" ? "FOB/CIF de OC" : "Referencial DRY / tipo"}>
-                      {usd(r.rawBase)}
+                    <td title={`Origen ${usd(r.rawBase)}${r.safetyPct ? ` + margen de seguridad ${r.safetyPct}%` : ""}`}>
+                      {usd(r.securedBase ?? r.base ?? r.rawBase)}
                     </td>
                     <td title={(r.overlayLines || []).map((l) => `${l.label} ${usd(l.amount)}`).join(" · ") || "Sin extras"}>
                       {r.overlayTotal ? usd(r.overlayTotal) : "—"}
@@ -477,6 +659,20 @@ export default function CatalogMedia() {
                         />
                       ) : (
                         usd(r.priceList)
+                      )}
+                    </td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      {canPrice ? (
+                        <input
+                          type="checkbox"
+                          checked={!!r.showPrice}
+                          disabled={listBusy === r.iso}
+                          aria-label={`Publicar precio de ${r.iso}`}
+                          title={r.showPrice ? "El catálogo muestra este precio" : "El cliente ve Solicitar precio"}
+                          onChange={(e) => toggleListPrice(r, e.target.checked)}
+                        />
+                      ) : (
+                        r.showPrice ? "Sí" : "No"
                       )}
                     </td>
                     <td style={{ color: (STATUS[r.mediaStatus] || STATUS.pendiente).color }} title={(STATUS[r.mediaStatus] || STATUS.pendiente).label}>
@@ -510,6 +706,97 @@ export default function CatalogMedia() {
           ) : null}
         </div>
 
+        {unit && sheet === "expediente" && unit.candidateId ? (
+          <div className="panel catalog-internal-sheet">
+            <p className="section-sub">Expediente interno. No se publica a clientes: OC, MO, facturas, notas y evolución de campos.</p>
+            <ExpedientePanel id={unit.candidateId} />
+          </div>
+        ) : null}
+
+        {unit && sheet === "extras" ? (
+          <div className="panel catalog-internal-sheet">
+            <h3>Control previo a la publicación</h3>
+            <p className="section-sub">
+              Fotos de Odoo ya copiadas a ZDRY al asimilar. Elige una y asígnala a una casilla. Corregir campos escribe en Odoo. El cliente no ve esta sección.
+            </p>
+            <div className="odoo-web-photos">
+              <h4>Fotos de Odoo no consideradas</h4>
+              {(unit.history || []).length ? (
+                <p className="section-sub">
+                  {unit.history.length} foto{unit.history.length === 1 ? "" : "s"} rechazada{unit.history.length === 1 ? "" : "s"} o reemplazada{unit.history.length === 1 ? "" : "s"} están en el historial de casillas, arriba. El cliente no las ve.
+                </p>
+              ) : null}
+              {!odooPhotos.length ? (
+                <p className="section-sub">Esta unidad no tiene fotos de Odoo en ZDRY. Si se asimiló antes, el primer uso las copia; si Odoo no respondió, no hay adjuntos.</p>
+              ) : (
+                <>
+                  <div className="odoo-assign-thumbs">
+                    {odooPhotos.map((p, idx) => (
+                      <div key={p.id} className={`odoo-assign-thumb ${pickedAtt === p.id ? "on" : ""}`}>
+                        <button
+                          type="button"
+                          className="thumb-zoom"
+                          onClick={() => lb.open(
+                            odooPhotos.map((x) => ({
+                              src: apiUrl(`/catalog-media/${unit.iso}/odoo-photos/${x.id}`),
+                              type: "image",
+                              label: x.name,
+                            })),
+                            idx,
+                          )}
+                        >
+                          <img src={apiUrl(`/catalog-media/${unit.iso}/odoo-photos/${p.id}`)} alt={p.name} />
+                        </button>
+                        <button
+                          type="button"
+                          className="thumb-pick"
+                          onClick={() => setPickedAtt(pickedAtt === p.id ? null : p.id)}
+                        >
+                          {p.kind === "zdry_ref" ? "Cara ZDRY · " : ""}{p.name} · Elegir
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  {pickedAtt ? (
+                    <div className="odoo-assign-slots">
+                      <b>Asignar a casilla</b>
+                      {labels.slice(0, 9).map((lab, i) => (
+                        <button
+                          key={lab}
+                          type="button"
+                          className="btn-ghost"
+                          disabled={assigning}
+                          onClick={() => assignOdoo(pickedAtt, i)}
+                        >
+                          {i + 1}. {lab}{unit.photoSlots?.[i] ? " (reemplazar)" : ""}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="section-sub">Toca la imagen para verla. Pulsa «Elegir» y luego la casilla donde debe quedar.</p>
+                  )}
+                </>
+              )}
+            </div>
+            {canSeeExpediente && unit.candidateId ? (
+              <div style={{ marginTop: 16 }}>
+                <h4>Corregir ficha (se escribe en Odoo)</h4>
+                <p className="section-sub">Cualquier campo de la ficha. Guardar pisa Odoo, igual que en regularización.</p>
+                <OdooLotFicha
+                  id={unit.candidateId}
+                  initialTab="ficha"
+                  hideAssimilate
+                  onClose={() => setSheet(null)}
+                  onSaved={() => loadList()}
+                />
+              </div>
+            ) : !unit.candidateId ? (
+              <p className="section-sub">Esta unidad no tiene expediente Odoo. Puedes cambiar fotos y evaluación en el detalle.</p>
+            ) : null}
+          </div>
+        ) : null}
+        </div>
+
         {unit ? (
           <div className="panel catalog-detail-panel">
             <h3>{unit.iso}</h3>
@@ -523,21 +810,29 @@ export default function CatalogMedia() {
                 <h4>Precio de oferta</h4>
                 <p className="section-sub"><b>{offer.title}</b></p>
                 <p className="section-sub">{offer.detail}</p>
-                {offer.overlayLines?.length ? (
-                  <ul className="section-sub" style={{ margin: "4px 0 8px 18px" }}>
-                    <li>Costo Odoo {usd(offer.rawBase)}</li>
-                    {offer.overlayLines.map((l) => (
-                      <li key={l.key}>+ {l.label} ({l.scope}) {usd(l.amount)}</li>
-                    ))}
-                    <li>Base ajustada {usd(offer.base)}</li>
-                  </ul>
-                ) : (
-                  <p className="section-sub">Costo {usd(offer.rawBase)} · venta sugerida {usd(offer.suggestedList)} · rango {usd(offer.suggestedMin)}–{usd(offer.suggestedList)}</p>
-                )}
+                <ul className="section-sub" style={{ margin: "4px 0 8px 18px" }}>
+                  <li>Costo origen {usd(offer.rawBase)}</li>
+                  {(offer.overlayLines || []).map((l) => (
+                    <li key={l.key}>+ {l.label} {usd(l.amount)}</li>
+                  ))}
+                  <li>
+                    Margen de seguridad {offer.safetyPct || 0}%
+                    {offer.safetyLines?.[0]?.label ? ` (${offer.safetyLines[0].label})` : offer.safetyLines?.length ? ` (${offer.safetyLines.map((l) => l.label || [l.type, l.cat, l.supplier, l.origin, l.warehouse].filter(Boolean).join(" · ") || "global").join(", ")})` : ""}
+                    {" "}+{usd(offer.safetyAdd || 0)} → costo base {usd(offer.securedBase ?? offer.base)}
+                  </li>
+                  <li>Regla de precio {offer.marginPct}% sobre el costo base → venta {usd(offer.suggestedList)}</li>
+                  <li>Descuento máximo {offer.maxDiscountPct}% → piso {usd(offer.suggestedMin)} (sin gerencia)</li>
+                </ul>
                 <p className="section-sub">{offer.visibilityLabel}</p>
+                {offer.outdated ? (
+                  <p className="err">
+                    Inventario todavía guarda {usd(offer.storedList)}. El cálculo actual es {usd(offer.suggestedList)}. Pulsa Recalcular listas para alinearlos. Una oferta fijada a mano no entra en ese recálculo.
+                  </p>
+                ) : null}
                 <div className="offer-kpis">
-                  <div className="offer-kpi"><span>Costo</span><b>{usd(offer.rawBase)}</b></div>
-                  <div className="offer-kpi"><span>Extras</span><b>{offer.overlayTotal ? usd(offer.overlayTotal) : "—"}</b></div>
+                  <div className="offer-kpi"><span>Costo origen</span><b>{usd(offer.rawBase)}</b></div>
+                  <div className="offer-kpi"><span>Margen seg.</span><b>{offer.safetyPct ? `${offer.safetyPct}%` : "—"}</b></div>
+                  <div className="offer-kpi"><span>Costo base</span><b>{usd(offer.securedBase ?? offer.base)}</b></div>
                   <div className="offer-kpi"><span>Venta sugerida</span><b>{usd(offer.suggestedList)}</b></div>
                   <div className="offer-kpi"><span>Rango</span><b>{usd(offer.suggestedMin)}–{usd(offer.suggestedList)}</b></div>
                 </div>
@@ -838,95 +1133,6 @@ export default function CatalogMedia() {
         )}
       </div>
 
-      {unit && sheet === "expediente" && unit.candidateId ? (
-        <div className="panel catalog-internal-sheet">
-          <p className="section-sub">Expediente interno. No se publica a clientes: OC, MO, facturas, notas y evolución de campos.</p>
-          <ExpedientePanel id={unit.candidateId} />
-        </div>
-      ) : null}
-
-      {unit && sheet === "extras" ? (
-        <div className="panel catalog-internal-sheet">
-          <h3>Control previo a la publicación</h3>
-          <p className="section-sub">
-            Fotos de Odoo ya copiadas a ZDRY al asimilar. Elige una y asígnala a una casilla. Corregir campos escribe en Odoo. El cliente no ve esta sección.
-          </p>
-          <div className="odoo-web-photos">
-            <h4>Fotos de Odoo no consideradas</h4>
-            {(unit.history || []).length ? (
-              <p className="section-sub">
-                {unit.history.length} foto{unit.history.length === 1 ? "" : "s"} rechazada{unit.history.length === 1 ? "" : "s"} o reemplazada{unit.history.length === 1 ? "" : "s"} están en el historial de casillas, arriba. El cliente no las ve.
-              </p>
-            ) : null}
-            {!odooPhotos.length ? (
-              <p className="section-sub">Esta unidad no tiene fotos de Odoo en ZDRY. Si se asimiló antes, el primer uso las copia; si Odoo no respondió, no hay adjuntos.</p>
-            ) : (
-              <>
-                <div className="odoo-assign-thumbs">
-                  {odooPhotos.map((p, idx) => (
-                    <div key={p.id} className={`odoo-assign-thumb ${pickedAtt === p.id ? "on" : ""}`}>
-                      <button
-                        type="button"
-                        className="thumb-zoom"
-                        onClick={() => lb.open(
-                          odooPhotos.map((x) => ({
-                            src: apiUrl(`/catalog-media/${unit.iso}/odoo-photos/${x.id}`),
-                            type: "image",
-                            label: x.name,
-                          })),
-                          idx,
-                        )}
-                      >
-                        <img src={apiUrl(`/catalog-media/${unit.iso}/odoo-photos/${p.id}`)} alt={p.name} />
-                      </button>
-                      <button
-                        type="button"
-                        className="thumb-pick"
-                        onClick={() => setPickedAtt(pickedAtt === p.id ? null : p.id)}
-                      >
-                        {p.kind === "zdry_ref" ? "Cara ZDRY · " : ""}{p.name} · Elegir
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                {pickedAtt ? (
-                  <div className="odoo-assign-slots">
-                    <b>Asignar a casilla</b>
-                    {labels.slice(0, 9).map((lab, i) => (
-                      <button
-                        key={lab}
-                        type="button"
-                        className="btn-ghost"
-                        disabled={assigning}
-                        onClick={() => assignOdoo(pickedAtt, i)}
-                      >
-                        {i + 1}. {lab}{unit.photoSlots?.[i] ? " (reemplazar)" : ""}
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="section-sub">Toca la imagen para verla. Pulsa «Elegir» y luego la casilla donde debe quedar.</p>
-                )}
-              </>
-            )}
-          </div>
-          {canSeeExpediente && unit.candidateId ? (
-            <div style={{ marginTop: 16 }}>
-              <h4>Corregir ficha (se escribe en Odoo)</h4>
-              <p className="section-sub">Cualquier campo de la ficha. Guardar pisa Odoo, igual que en regularización.</p>
-              <OdooLotFicha
-                id={unit.candidateId}
-                initialTab="ficha"
-                hideAssimilate
-                onClose={() => setSheet(null)}
-                onSaved={() => loadList()}
-              />
-            </div>
-          ) : !unit.candidateId ? (
-            <p className="section-sub">Esta unidad no tiene expediente Odoo. Puedes cambiar fotos y evaluación en el detalle.</p>
-          ) : null}
-        </div>
-      ) : null}
       {lb.node}
     </div>
   );
