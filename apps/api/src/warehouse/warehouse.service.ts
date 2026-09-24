@@ -28,7 +28,6 @@ import { canApplyGateIn, GATE_IN_KEY, presentDepotCost } from "../domain/depot-c
 import { visitPhotoStatus } from "../domain/gate-visit";
 import { EvaluationService } from "../evaluation/evaluation.service";
 import {
-  isZgrouAssignablePatio,
   needsPatioChoice,
   warehouseFromLocation,
   warehouseLabel,
@@ -1117,6 +1116,37 @@ export class WarehouseService {
     return this.registerActivity(iso, { conceptKey: key, note: "" }, user, ip);
   }
 
+  async migrateDepot(iso: string, depotId: string, user: AuthUser, ip?: string) {
+    if (user.role === "almacen") {
+      throw new ForbiddenException("Solo el coordinador o el administrador migran el almacén.");
+    }
+    const c = await this.loadUnit(iso);
+    const depot = await this.prisma.depot.findUnique({ where: { id: depotId || "" } });
+    if (!depot || depot.archivedAt) throw new BadRequestException("Elige un almacén disponible.");
+    if (depot.id === c.depotId) throw new BadRequestException("La unidad ya está en ese almacén.");
+    await this.prisma.container.update({
+      where: { iso: c.iso },
+      data: { depotId: depot.id, lado: null, ruma: null, columna: null, nivel: null },
+    });
+    await this.prisma.containerHistory.create({
+      data: {
+        iso: c.iso,
+        type: "Almacén",
+        detail: `Almacén migrado de ${c.depot.name} a ${depot.name} por ${user.name}. La posición de patio queda libre.`,
+      },
+    });
+    await this.audit.log({
+      user,
+      action: "migrate_depot",
+      entity: "Container",
+      entityId: c.iso,
+      before: { depotId: c.depotId, depotName: c.depot.name },
+      after: { depotId: depot.id, depotName: depot.name },
+      ip,
+    });
+    return this.presentFor(c.iso, user);
+  }
+
   async enableCampo(iso: string, user: AuthUser, ip?: string, depotId?: string) {
     if (user.role === "almacen") {
       throw new ForbiddenException("Solo el coordinador o el administrador envían unidades a campo.");
@@ -1130,15 +1160,12 @@ export class WarehouseService {
     await ensureOperationalDepots(this.prisma);
     const warehouse = c.odooWarehouse || warehouseFromLocation(c.odooLocation);
     let nextDepotId = c.depotId;
-    if (needsPatioChoice(warehouse, c.depot.code)) {
-      if (!depotId) {
-        throw new BadRequestException("Esta unidad viene de ZGROU/Existencias. Elige patio: Principal, Gambeta 1 o Gambeta 2.");
-      }
+    if (depotId) {
       const chosen = await this.prisma.depot.findUnique({ where: { id: depotId } });
-      if (!chosen || !isZgrouAssignablePatio(chosen.code)) {
-        throw new BadRequestException("El patio debe ser Principal, Gambeta 1 o Gambeta 2.");
-      }
+      if (!chosen || chosen.archivedAt) throw new BadRequestException("Elige un almacén disponible.");
       nextDepotId = chosen.id;
+    } else if (needsPatioChoice(warehouse, c.depot.code)) {
+      throw new BadRequestException("Elige el almacén antes de enviar a campo.");
     }
     const nextStatus = c.status === "Pendiente de ingreso" ? "Disponible" : c.status;
     await this.prisma.container.update({

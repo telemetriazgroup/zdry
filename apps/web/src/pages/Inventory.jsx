@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api.js";
 import { hasRole, useAuth } from "../auth.jsx";
 import { useNotice } from "../notice.jsx";
+import { downloadCsv } from "../csv.js";
 
 export default function Inventory() {
   const { user } = useAuth();
@@ -9,6 +10,9 @@ export default function Inventory() {
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [filterType, setFilterType] = useState("");
+  const [filterCat, setFilterCat] = useState("");
+  const [filterDepot, setFilterDepot] = useState("");
   const canRecalc = hasRole(user, "admin", "gerente");
   const { notify, toastNode } = useNotice();
 
@@ -45,6 +49,29 @@ export default function Inventory() {
   const showCosts = rows.some((r) => r.costs);
   const showMargin = rows.some((r) => r.marginPct != null);
   const showPrice = rows.some((r) => r.priceList != null);
+  const typeOptions = useMemo(() => [...new Set(rows.map((r) => r.type).filter(Boolean))].sort(), [rows]);
+  const catOptions = useMemo(() => [...new Set(rows.map((r) => r.cat).filter(Boolean))].sort(), [rows]);
+  const depotOptions = useMemo(() => [...new Set(rows.map((r) => r.depot).filter(Boolean))].sort(), [rows]);
+  const visible = rows.filter((r) => (
+    (!filterType || r.type === filterType)
+    && (!filterCat || r.cat === filterCat)
+    && (!filterDepot || r.depot === filterDepot)
+  ));
+
+  function downloadInventory() {
+    const headers = ["ISO", "Tipo", "Condición", "Estado", "Depósito", "Posición"];
+    if (showPrice) headers.push("Precio min", "Precio lista");
+    if (showMargin) headers.push("Margen %");
+    if (showCosts) headers.push("FOB", "C_T", "C_T real");
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(`zdry-inventario-${stamp}.csv`, headers, visible.map((r) => {
+      const line = [r.iso, r.type, r.cat, r.status, r.depot, r.posLabel || ""];
+      if (showPrice) line.push(r.priceMin ?? "", r.priceList ?? "");
+      if (showMargin) line.push(r.marginPct ?? "");
+      if (showCosts) line.push(r.costs?.fob ?? "", r.costs?.cT ?? "", r.costs?.cTReal ?? "");
+      return line;
+    }));
+  }
 
   return (
     <>
@@ -68,6 +95,23 @@ export default function Inventory() {
       </div>
     ) : null}
       <div className="panel">
+        <div className="odoo-toolbar">
+          <select value={filterType} onChange={(e) => setFilterType(e.target.value)} aria-label="Filtrar por tipo">
+            <option value="">Tipo</option>
+            {typeOptions.map((code) => <option key={code} value={code}>{code}</option>)}
+          </select>
+          <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)} aria-label="Filtrar por condición">
+            <option value="">Condición</option>
+            {catOptions.map((code) => <option key={code} value={code}>{code}</option>)}
+          </select>
+          <select value={filterDepot} onChange={(e) => setFilterDepot(e.target.value)} aria-label="Filtrar por depósito">
+            <option value="">Depósito</option>
+            {depotOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+          <button className="btn-ghost" type="button" disabled={!visible.length} onClick={downloadInventory}>
+            Descargar{visible.length !== rows.length ? ` (${visible.length})` : ""}
+          </button>
+        </div>
         <div className="tablewrap">
           <table className="data">
             <thead>
@@ -79,9 +123,9 @@ export default function Inventory() {
               </tr>
             </thead>
             <tbody>
-              {rows.length === 0 ? (
-                <tr><td colSpan={showCosts ? 8 : 5} style={{ color: "var(--text-2)" }}>Aún no hay contenedores. Compras los crea al registrar una factura.</td></tr>
-              ) : rows.map((r) => (
+              {visible.length === 0 ? (
+                <tr><td colSpan={showCosts ? 8 : 5} style={{ color: "var(--text-2)" }}>{rows.length ? "Ninguna unidad coincide con el filtro." : "Aún no hay contenedores. Compras los crea al registrar una factura."}</td></tr>
+              ) : visible.map((r) => (
                 <tr key={r.iso}>
                   <td>{r.iso}{r.demo ? <span className="demo-chip">DEMO</span> : null}</td>
                   <td>{r.type}</td>

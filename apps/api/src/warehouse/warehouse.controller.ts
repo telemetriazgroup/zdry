@@ -158,6 +158,17 @@ export class WarehouseController {
     return this.warehouse.setUnitRating(iso, body, user, req.ip);
   }
 
+  @Post("units/:iso/migrate-depot")
+  @Roles("admin", "coordinador")
+  migrateDepot(
+    @Param("iso") iso: string,
+    @Body() body: { depotId?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.migrateDepot(iso, body?.depotId || "", user, req.ip);
+  }
+
   @Post("units/:iso/enable-campo")
   @Roles("admin", "coordinador")
   enableCampo(

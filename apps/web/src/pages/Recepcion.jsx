@@ -6,6 +6,7 @@ import SearchCreate from "../search-create.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 import { parseIso6346 } from "../iso6346.js";
 import { EvalCorrect } from "../eval-ratings.jsx";
+import { downloadCsv } from "../csv.js";
 
 const ARCHIVE_PRESETS = ["Contenedor mal ingresado", "Información incorrecta"];
 const PAGE_SIZE = 20;
@@ -226,6 +227,11 @@ export default function Recepcion() {
   const [assigning, setAssigning] = useState(false);
   const [visits, setVisits] = useState([]);
   const [patioChoice, setPatioChoice] = useState("");
+  const [filterType, setFilterType] = useState("");
+  const [filterDepot, setFilterDepot] = useState("");
+  const [filterCat, setFilterCat] = useState("");
+  const [migrateDepotId, setMigrateDepotId] = useState("");
+  const [migrating, setMigrating] = useState(false);
   const [visitForm, setVisitForm] = useState(EMPTY_VISIT);
   const [visitMode, setVisitMode] = useState("pick");
   const [editingVisitId, setEditingVisitId] = useState("");
@@ -389,12 +395,15 @@ export default function Recepcion() {
   const filteredPending = useMemo(() => {
     const raw = pendingQ.trim().toUpperCase();
     const compact = raw.replace(/[\s-]/g, "");
-    if (!raw) return board;
     return board.filter((u) => {
+      if (filterType && u.type !== filterType) return false;
+      if (filterDepot && u.depotId !== filterDepot) return false;
+      if (filterCat && u.cat !== filterCat) return false;
+      if (!raw) return true;
       const hay = pendingSearchText(u);
       return hay.includes(raw) || hay.replace(/[\s-]/g, "").includes(compact);
     });
-  }, [board, pendingQ]);
+  }, [board, pendingQ, filterType, filterDepot, filterCat]);
 
   const pendingPages = Math.max(1, Math.ceil(filteredPending.length / PAGE_SIZE));
   const safePendingPage = Math.min(pendingPage, pendingPages);
@@ -402,7 +411,63 @@ export default function Recepcion() {
 
   useEffect(() => {
     setPendingPage(1);
-  }, [pendingQ]);
+  }, [pendingQ, filterType, filterDepot, filterCat, listTab]);
+
+  const typeOptions = useMemo(() => {
+    const map = new Map();
+    for (const u of board) map.set(u.type, u.typeLabel || u.type);
+    return [...map.entries()];
+  }, [board]);
+  const catOptions = useMemo(() => {
+    const map = new Map();
+    for (const u of board) map.set(u.cat, u.catLabel || u.cat);
+    return [...map.entries()];
+  }, [board]);
+  const depotOptions = useMemo(() => {
+    const map = new Map();
+    for (const u of board) map.set(u.depotId, u.depotName || u.depotId);
+    return [...map.entries()];
+  }, [board]);
+
+  function downloadBoard() {
+    const stamp = new Date().toISOString().slice(0, 10);
+    const name = listTab === "campo" ? "en-campo" : "pendientes";
+    downloadCsv(`zdry-recepcion-${name}-${stamp}.csv`, [
+      "ISO", "Tipo", "Condición", "Depósito", "Plaza Odoo", "Origen", "Registró", "Fecha", "Motivo",
+    ], filteredPending.map((u) => [
+      u.iso,
+      u.typeLabel || u.type,
+      u.catLabel || u.cat,
+      u.depotName,
+      u.odooWarehouseLabel || "",
+      u.intakeLabel || "",
+      u.registeredByName || "",
+      u.createdAt ? formatWhen(u.createdAt) : "",
+      (u.missing || []).join(" · "),
+    ]));
+  }
+
+  async function migrateDepot() {
+    if (!unit || !migrateDepotId || migrateDepotId === unit.depotId) return;
+    const dest = (meta?.depots || []).find((d) => d.id === migrateDepotId);
+    if (!window.confirm(`¿Migrar ${unit.iso} a ${dest?.name || "ese almacén"}? La posición de patio se libera.`)) return;
+    setMigrating(true);
+    setError("");
+    try {
+      const next = await api(`/warehouse/units/${unit.iso}/migrate-depot`, {
+        method: "POST",
+        body: { depotId: migrateDepotId },
+      });
+      setUnit(next);
+      setMigrateDepotId("");
+      setMsg(`Almacén de ${next.iso} actualizado a ${next.depotName}.`);
+      await loadPending();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setMigrating(false);
+    }
+  }
 
   async function submitNuevo() {
     setError("");
@@ -1519,6 +1584,23 @@ export default function Recepcion() {
               <p style={{ fontSize: 11, color: "#2f9e44", marginTop: 6, fontWeight: 700 }}>✓ Ficha con año y fabricante</p>
             )}
             <div className="cost-line" style={{ marginTop: 12 }}><span>Depósito y posición actual</span><b>{unit.depotName} — {unit.posLabel}</b></div>
+            {canCoord ? (
+              <div className="recv-migrate" style={{ marginTop: 8 }}>
+                <label>Migrar almacén</label>
+                <p className="section-sub">Si no está en el almacén adecuado, muévela a cualquiera de los disponibles. No cambia la plaza de Odoo. La posición de patio se libera.</p>
+                <div className="action-row">
+                  <select value={migrateDepotId} onChange={(e) => setMigrateDepotId(e.target.value)} aria-label="Almacén destino">
+                    <option value="">Elegir almacén…</option>
+                    {(meta?.depots || []).filter((d) => d.id !== unit.depotId).map((d) => (
+                      <option key={d.id} value={d.id}>{d.name}</option>
+                    ))}
+                  </select>
+                  <button className="btn-primary" type="button" disabled={!migrateDepotId || migrating} onClick={migrateDepot}>
+                    {migrating ? "Migrando…" : "Migrar almacén"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
             {unit.hasOdooChatter || unit.odooLotId ? (
               <div style={{ marginTop: 10 }}>
                 <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-2)", textTransform: "uppercase" }}>Descripción (Odoo)</label>
@@ -1703,10 +1785,10 @@ export default function Recepcion() {
             <>
               {unit.needsPatioChoice ? (
                 <div style={{ marginBottom: 8 }}>
-                  <p className="section-sub">Viene de ZGROU/Existencias. Elige el patio físico antes de enviar a campo.</p>
-                  <select value={patioChoice} onChange={(e) => setPatioChoice(e.target.value)}>
-                    <option value="">Principal / Gambeta 1 / Gambeta 2…</option>
-                    {(meta.zgrouPatios || []).map((d) => (
+                  <p className="section-sub">Elige el almacén antes de enviar a campo. Puedes usar cualquiera de los disponibles.</p>
+                  <select value={patioChoice} onChange={(e) => setPatioChoice(e.target.value)} aria-label="Almacén al enviar a campo">
+                    <option value="">Elegir almacén…</option>
+                    {(meta.depots || []).map((d) => (
                       <option key={d.id} value={d.id}>{d.name}</option>
                     ))}
                   </select>
@@ -1783,7 +1865,7 @@ export default function Recepcion() {
       {board.length ? (
         <>
           <h3 style={{ marginTop: 0 }}>
-            {listTab === "campo" ? "En campo" : "Pendientes"} ({filteredPending.length}{pendingQ.trim() ? ` de ${board.length}` : ""})
+            {listTab === "campo" ? "En campo" : "Pendientes"} ({filteredPending.length}{(pendingQ.trim() || filterType || filterDepot || filterCat) ? ` de ${board.length}` : ""})
           </h3>
           <p className="section-sub">
             {listTab === "campo"
@@ -1799,6 +1881,21 @@ export default function Recepcion() {
               placeholder="Buscar ISO, tipo, depósito, origen o quien registró…"
               aria-label="Buscar pendientes"
             />
+            <select value={filterType} onChange={(e) => setFilterType(e.target.value)} aria-label="Filtrar por tipo">
+              <option value="">Tipo</option>
+              {typeOptions.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+            </select>
+            <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)} aria-label="Filtrar por condición">
+              <option value="">Condición</option>
+              {catOptions.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+            </select>
+            <select value={filterDepot} onChange={(e) => setFilterDepot(e.target.value)} aria-label="Filtrar por depósito">
+              <option value="">Depósito</option>
+              {depotOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+            <button className="btn-ghost" type="button" disabled={!filteredPending.length} onClick={downloadBoard}>
+              Descargar
+            </button>
           </div>
           {pagePending.length ? (
             <>

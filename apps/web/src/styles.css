@@ -403,6 +403,7 @@ tr.iso-review-row:hover { background: #ffe3e3; }
 .odoo-watch b { color: var(--navy); }
 .odoo-watch .action-row { margin: 8px 0; }
 .odoo-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+.odoo-toolbar select { padding: 9px 12px; border: 1px solid var(--line); border-radius: 7px; font: inherit; background: #fff; }
 .odoo-search { flex: 1 1 220px; min-width: 180px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 7px; font: inherit; }
 .odoo-filter { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
 .odoo-pager { display: flex; align-items: center; gap: 12px; margin-top: 12px; font-size: 13px; font-weight: 700; }
