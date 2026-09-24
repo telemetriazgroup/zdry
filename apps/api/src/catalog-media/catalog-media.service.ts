@@ -183,7 +183,7 @@ export class CatalogMediaService {
     });
   }
 
-  async get(iso: string) {
+  async get(iso: string, user?: AuthUser) {
     const c = await this.prisma.container.findUnique({
       where: { iso },
       include: { depot: true, photos: true },
@@ -209,7 +209,7 @@ export class CatalogMediaService {
       inspectionNotes: c.inspectionNotes,
       photoSlots: Array.from({ length: 9 }, (_, i) => !!active.find((p) => p.slot === i)),
       photos: [...active.map((p) => p.slot)].sort((a, b) => a - b),
-      history: history.map((p) => ({
+      history: isSuperadmin(user?.role) ? history.map((p) => ({
         id: p.id,
         slot: p.slot,
         label: PHOTO_LABELS[p.slot] || `Foto ${p.slot + 1}`,
@@ -218,7 +218,7 @@ export class CatalogMediaService {
         rejectedByName: p.rejectedByName,
         rejectNote: p.rejectNote,
         createdAt: p.createdAt,
-      })),
+      })) : [],
       hasVideo: !!c.video360Key,
       mediaStatus: c.mediaStatus,
       mediaReviewNote: c.mediaReviewNote,
@@ -259,7 +259,7 @@ export class CatalogMediaService {
   async assignOdooPhoto(iso: string, attId: string, slot: string, user: AuthUser, ip?: string) {
     await this.requireUnit(iso);
     await this.warehouse.assignOdooPhoto(iso, attId, slot, user, ip);
-    return this.get(iso);
+    return this.get(iso, user);
   }
 
   async patchUnit(
@@ -307,7 +307,7 @@ export class CatalogMediaService {
       after: data as object,
       ip,
     });
-    return this.get(iso);
+    return this.get(iso, user);
   }
 
   async setRating(
@@ -319,7 +319,7 @@ export class CatalogMediaService {
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c || c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
     await this.evaluation.setRating(iso, { ...body, source: "catalogo" }, user, ip);
-    return this.get(iso);
+    return this.get(iso, user);
   }
 
   async putWatermark(file: { buffer: Buffer; originalname?: string } | undefined, user: AuthUser, ip?: string) {
@@ -376,12 +376,12 @@ export class CatalogMediaService {
       after: { inspectionNotes: inspectionNotes || "" },
       ip,
     });
-    return this.get(iso);
+    return this.get(iso, user);
   }
 
   async upload(iso: string, slot: string, file: Express.Multer.File | undefined, user: AuthUser, ip?: string) {
     await this.warehouse.uploadMedia(iso, slot, file, user, ip);
-    return this.get(iso);
+    return this.get(iso, user);
   }
 
   async openPhoto(iso: string, slot: string) {
@@ -423,7 +423,7 @@ export class CatalogMediaService {
       data: { iso, type: "Catálogo", detail: `Ficha publicada en el catálogo por ${user.name}. Marca de agua aplicada a copias públicas.` },
     });
     await this.audit.log({ user, action: "approve_media", entity: "Container", entityId: iso, ip });
-    return this.get(iso);
+    return this.get(iso, user);
   }
 
   async publishMany(isos: string[], user: AuthUser, ip?: string) {
@@ -497,7 +497,7 @@ export class CatalogMediaService {
       data: { iso, type: "Catálogo", detail: `Ficha oculta del catálogo por ${user.name}.` },
     });
     await this.audit.log({ user, action: "hide_media", entity: "Container", entityId: iso, ip });
-    return this.get(iso);
+    return this.get(iso, user);
   }
 
   async rejectPhoto(iso: string, slot: number, note: string, user: AuthUser, ip?: string) {
@@ -532,11 +532,13 @@ export class CatalogMediaService {
       after: { iso, slot, note: note.trim() },
       ip,
     });
-    return this.get(iso);
+    return this.get(iso, user);
   }
 
   async restorePhoto(iso: string, id: string, user: AuthUser, ip?: string) {
-    this.assertApprover(user);
+    if (!isSuperadmin(user.role)) {
+      throw new ForbiddenException("Solo el superusuario restaura fotos archivadas.");
+    }
     const photo = await this.prisma.inspectionPhoto.findFirst({
       where: { id, iso, status: PHOTO_STATUS_REJECTED },
     });
@@ -563,7 +565,7 @@ export class CatalogMediaService {
       data: { iso, type: "Catálogo", detail: `Foto ${photo.slot + 1} restaurada desde el historial por ${user.name}.` },
     });
     await this.audit.log({ user, action: "restore_photo", entity: "InspectionPhoto", entityId: photo.id, after: { iso, slot: photo.slot }, ip });
-    return this.get(iso);
+    return this.get(iso, user);
   }
 
   private async customWatermarkKey() {

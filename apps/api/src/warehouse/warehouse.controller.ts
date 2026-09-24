@@ -407,11 +407,39 @@ export class WarehouseController {
   @Roles("admin", "coordinador")
   archive(
     @Param("iso") iso: string,
-    @Body() body: { reason?: string },
+    @Body() body: { kind?: string; comment?: string },
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
-    return this.warehouse.archive(iso, body.reason || "", user, req.ip);
+    return this.warehouse.archive(iso, { kind: body.kind, comment: body.comment }, user, req.ip);
+  }
+
+  @Post("units/:iso/unarchive")
+  @Roles("superadmin")
+  unarchive(@Param("iso") iso: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.warehouse.unarchive(iso, user, req.ip);
+  }
+
+  @Post("units/:iso/captures/:id/restore")
+  @Roles("superadmin")
+  restoreCapture(
+    @Param("iso") iso: string,
+    @Param("id") id: string,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.restoreCapture(iso, id, user, req.ip);
+  }
+
+  @Post("units/:iso/photo-history/:id/restore")
+  @Roles("superadmin")
+  restoreArchivedPhoto(
+    @Param("iso") iso: string,
+    @Param("id") id: string,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.restoreArchivedPhoto(iso, id, user, req.ip);
   }
 
   @Post("units/:iso/confirm")

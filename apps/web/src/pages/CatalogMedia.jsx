@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, apiUpload, ApiError, apiUrl, formatWhen } from "../api.js";
-import { hasRole, useAuth } from "../auth.jsx";
+import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 import VideoMarks, { videoSilenceProps } from "../video-marks.jsx";
 import { EvalGrid } from "../eval-ratings.jsx";
@@ -1060,7 +1060,7 @@ export default function CatalogMedia() {
               </div>
             ) : null}
 
-            {(unit.history || []).length ? (
+            {isSuperadmin(user) && (unit.history || []).length ? (
               <div style={{ marginTop: 18 }}>
                 <h4 style={{ fontSize: 14, marginBottom: 8 }}>Historial de fotos de esta unidad</h4>
                 <p className="section-sub">Fotos que pertenecieron al contenedor y fueron rechazadas o reemplazadas. No se muestran al cliente.</p>
@@ -1088,9 +1088,7 @@ export default function CatalogMedia() {
                   return (
                     <div className="section-sub" style={{ marginTop: 8 }}>
                       {h.rejectNote || "Sin motivo"} · {h.rejectedByName || "—"} · {h.rejectedAt ? new Date(h.rejectedAt).toLocaleString("es-PE") : ""}
-                      {canApprove ? (
-                        <button className="btn-ghost" type="button" style={{ marginLeft: 8 }} onClick={() => restore(h.id)}>Restaurar a hueco {h.slot + 1}</button>
-                      ) : null}
+                      <button className="btn-ghost" type="button" style={{ marginLeft: 8 }} onClick={() => restore(h.id)}>Desarchivar a hueco {h.slot + 1}</button>
                     </div>
                   );
                 })() : null}

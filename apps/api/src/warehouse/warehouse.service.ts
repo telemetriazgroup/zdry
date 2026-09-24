@@ -10,7 +10,7 @@ import { Prisma } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
-import { AuthUser } from "../auth/auth.types";
+import { AuthUser, isSuperadmin } from "../auth/auth.types";
 import { StorageService } from "../storage/storage.service";
 import { YardLockService } from "../redis/yard-lock.service";
 import { inspectIntakeIso } from "../domain/intake-iso";
@@ -286,11 +286,16 @@ export class WarehouseService {
   }
 
   private async receptionRows(user: AuthUser | undefined, sent: boolean) {
+    const live = await this.prisma.liveContainers();
+    const seeArchived = isSuperadmin(user?.role);
     const [types, categories, rows] = await Promise.all([
       this.prisma.containerType.findMany(),
       this.prisma.category.findMany(),
       this.prisma.container.findMany({
-        where: { status: { not: "Vendido" }, ...(await this.prisma.liveContainers()) },
+        where: {
+          status: { not: "Vendido" },
+          ...(seeArchived ? (live.demo === false ? { demo: false as const } : {}) : live),
+        },
         include: { depot: true, photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { id: true } } },
         orderBy: { createdAt: "desc" },
       }),
@@ -330,7 +335,13 @@ export class WarehouseService {
           campoEnabledAt: c.campoEnabledAt,
           campoEnabledByName: c.campoEnabledByName || "",
           waitingCampo,
-          missing: sent
+          archived: !!c.archivedAt,
+          archiveReason: c.archiveReason || "",
+          archivedByName: c.archivedByName || "",
+          archivedAt: c.archivedAt,
+          missing: c.archivedAt
+            ? [`Archivada${c.archiveReason ? `: ${c.archiveReason}` : ""}`]
+            : sent
             ? (missing.length ? missing : [`En campo${c.campoEnabledByName ? ` · ${c.campoEnabledByName}` : ""}`])
             : waitingCampo && !missing.length ? ["Pendiente de enviar a campo"] : missing,
         };
@@ -340,7 +351,7 @@ export class WarehouseService {
 
   async getUnit(iso: string, opts: { hideOdoo?: boolean; hideOdooIds?: boolean; hideRates?: boolean; includeArchive?: boolean } = {}) {
     await this.odooImport.hydrateReceptionFicha(iso).catch(() => undefined);
-    const c = await this.loadUnit(iso);
+    const c = await this.loadUnit(iso, !!opts.includeArchive);
     await this.evaluation.importLegacyForUnit(c.iso, c);
     const [types, categories, rules, extras] = await Promise.all([
       this.prisma.containerType.findMany(),
@@ -1002,9 +1013,8 @@ export class WarehouseService {
     return { ...obj, contentType: mimeType || obj.contentType };
   }
 
-  async archive(iso: string, reason: string, user: AuthUser, ip?: string) {
-    const why = (reason || "").trim();
-    if (why.length < 4) throw new BadRequestException("Indica el motivo del archivo (mínimo 4 caracteres).");
+  async archive(iso: string, input: { kind?: string; comment?: string }, user: AuthUser, ip?: string) {
+    const why = archiveMotive(input.kind, input.comment);
     const c = await this.loadUnit(iso);
     if (c.archivedAt) throw new BadRequestException("Esta unidad ya está archivada.");
     if (c.status === "Vendido") throw new BadRequestException("No se puede archivar una unidad vendida.");
@@ -1043,6 +1053,21 @@ export class WarehouseService {
       archiveReason: updated.archiveReason,
       archivedByName: updated.archivedByName,
     };
+  }
+
+  async unarchive(iso: string, user: AuthUser, ip?: string) {
+    if (!isSuperadmin(user.role)) throw new ForbiddenException("Solo el superusuario desarchiva.");
+    const c = await this.loadUnit(iso, true);
+    if (!c.archivedAt) throw new BadRequestException("Esta unidad no está archivada.");
+    await this.prisma.container.update({
+      where: { iso: c.iso },
+      data: { archivedAt: null, archiveReason: null, archivedById: null, archivedByName: null },
+    });
+    await this.prisma.containerHistory.create({
+      data: { iso: c.iso, type: "Archivo", detail: `Unidad desarchivada por ${user.name}.` },
+    });
+    await this.audit.log({ user, action: "unarchive", entity: "Container", entityId: c.iso, ip });
+    return this.presentFor(c.iso, user);
   }
 
   async confirm(iso: string, user: AuthUser, ip?: string) {
@@ -1340,6 +1365,46 @@ export class WarehouseService {
       after: { iso: c.iso },
       ip,
     });
+    return this.presentFor(c.iso, user);
+  }
+
+  async restoreCapture(iso: string, id: string, user: AuthUser, ip?: string) {
+    if (!isSuperadmin(user.role)) throw new ForbiddenException("Solo el superusuario desarchiva imágenes.");
+    const c = await this.loadUnit(iso, true);
+    const cap = await this.prisma.fieldCapture.findFirst({ where: { id, iso: c.iso, archivedAt: { not: null } } });
+    if (!cap) throw new NotFoundException("Toma archivada no encontrada.");
+    await this.prisma.fieldCapture.update({
+      where: { id: cap.id },
+      data: { archivedAt: null, archivedById: null, archivedByName: null, assignedSlot: null },
+    });
+    await this.prisma.containerHistory.create({
+      data: { iso: c.iso, type: "Foto", detail: `${user.name} desarchivó una toma de campo.` },
+    });
+    await this.audit.log({ user, action: "restore_capture", entity: "FieldCapture", entityId: cap.id, after: { iso: c.iso }, ip });
+    return this.presentFor(c.iso, user);
+  }
+
+  async restoreArchivedPhoto(iso: string, id: string, user: AuthUser, ip?: string) {
+    if (!isSuperadmin(user.role)) throw new ForbiddenException("Solo el superusuario desarchiva imágenes.");
+    const c = await this.loadUnit(iso, true);
+    const photo = await this.prisma.inspectionPhoto.findFirst({
+      where: { id, iso: c.iso, status: PHOTO_STATUS_REJECTED },
+    });
+    if (!photo) throw new NotFoundException("Foto archivada no encontrada.");
+    const occupied = await this.prisma.inspectionPhoto.findFirst({
+      where: { iso: c.iso, slot: photo.slot, status: PHOTO_STATUS_ACTIVE },
+    });
+    if (occupied) {
+      throw new BadRequestException(`La casilla ${photo.slot + 1} ya tiene una foto. Quítala antes de desarchivar esta.`);
+    }
+    await this.prisma.inspectionPhoto.update({
+      where: { id: photo.id },
+      data: { status: PHOTO_STATUS_ACTIVE, rejectedAt: null, rejectedById: null, rejectedByName: null, rejectNote: null },
+    });
+    await this.prisma.containerHistory.create({
+      data: { iso: c.iso, type: "Foto", detail: `${user.name} desarchivó la foto de la casilla ${photo.slot + 1}.` },
+    });
+    await this.audit.log({ user, action: "restore_photo", entity: "InspectionPhoto", entityId: photo.id, after: { iso: c.iso, slot: photo.slot }, ip });
     return this.presentFor(c.iso, user);
   }
 
@@ -1842,7 +1907,7 @@ export class WarehouseService {
     };
   }
 
-  private async loadUnit(iso: string): Promise<ContainerRow> {
+  private async loadUnit(iso: string, allowArchived = false): Promise<ContainerRow> {
     const c = await this.prisma.container.findUnique({
       where: { iso },
       include: {
@@ -1852,7 +1917,7 @@ export class WarehouseService {
       },
     });
     if (!c) throw new NotFoundException("Contenedor no encontrado.");
-    if (c.archivedAt) throw new BadRequestException("Esta unidad está archivada.");
+    if (c.archivedAt && !allowArchived) throw new BadRequestException("Esta unidad está archivada.");
     return c;
   }
 
@@ -2180,6 +2245,7 @@ export class WarehouseService {
       registeredByName: c.registeredByName || "—",
       createdAt: c.createdAt,
       archivedAt: c.archivedAt,
+      archiveReason: c.archiveReason,
       ownerCustomer: c.ownerCustomer,
       storageDiscountPct: Number(c.storageDiscountPct),
       photos: photoSlots,
@@ -2250,6 +2316,17 @@ function lotFichaOf(c: { year: number | null; color: string; odooSource: unknown
     yearToken: lotText(src.yearToken) || (c.year ? String(c.year) : ""),
     color: c.color && c.color !== "—" ? c.color : lotText(src.color),
   };
+}
+
+function archiveMotive(kind?: string, comment?: string): string {
+  const key = String(kind || "").trim().toLowerCase();
+  if (key === "activo") return "Activo";
+  if (key === "otro") {
+    const note = String(comment || "").trim();
+    if (note.length < 4) throw new BadRequestException("Si el motivo es Otro, el comentario es obligatorio.");
+    return `Otro: ${note}`;
+  }
+  throw new BadRequestException("Elige el motivo: Activo u Otro.");
 }
 
 function toYardUnit(c: {

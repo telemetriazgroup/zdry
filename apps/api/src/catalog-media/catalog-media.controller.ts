@@ -75,6 +75,7 @@ export class CatalogMediaController {
   }
 
   @Get(":iso/history/:id")
+  @Roles("superadmin")
   async historyPhoto(@Param("iso") iso: string, @Param("id") id: string) {
     const obj = await this.media.openHistoryPhoto(iso, id);
     return new StreamableFile(obj.stream, {
@@ -147,8 +148,8 @@ export class CatalogMediaController {
   }
 
   @Get(":iso")
-  get(@Param("iso") iso: string) {
-    return this.media.get(iso);
+  get(@Param("iso") iso: string, @CurrentUser() user: AuthUser) {
+    return this.media.get(iso, user);
   }
 
   @Patch(":iso")
@@ -210,7 +211,7 @@ export class CatalogMediaController {
   }
 
   @Post(":iso/history/:id/restore")
-  @Roles("admin", "gerente")
+  @Roles("superadmin")
   restorePhoto(
     @Param("iso") iso: string,
     @Param("id") id: string,

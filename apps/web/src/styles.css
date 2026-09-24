@@ -1101,6 +1101,12 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .archive-box select, .archive-box textarea {
   width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; font: inherit;
 }
+.archive-modal { max-width: 440px; }
+.archive-modal textarea { width: 100%; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; font: inherit; }
+.archive-choice { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-weight: 700; }
+tr.archived-row, .recv-card.archived-row { background: #ffe3e3; }
+tr.archived-row td, tr.archived-row b, .recv-card.archived-row, .recv-card.archived-row .card-iso { color: #c92a2a; }
+.odoo-assign-thumb .thumb-arch { color: #c92a2a; }
 .recv-card-open {
   display: block; width: 100%; text-align: left;
   background: none; border: 0; padding: 0; color: inherit; font: inherit;

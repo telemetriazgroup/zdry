@@ -8,7 +8,6 @@ import { parseIso6346 } from "../iso6346.js";
 import { EvalCorrect } from "../eval-ratings.jsx";
 import { downloadCsv } from "../csv.js";
 
-const ARCHIVE_PRESETS = ["Contenedor mal ingresado", "Información incorrecta"];
 const PAGE_SIZE = 20;
 const EMPTY_VISIT = {
   tractorPlate: "",
@@ -51,23 +50,22 @@ function newDocRow() {
   return { key: `${Date.now()}-${Math.random()}`, concept: "Recibo de intercambio de equipo (EIR)", file: null };
 }
 
-function ArchiveForm({ iso, onDone, onCancel }) {
-  const [preset, setPreset] = useState(ARCHIVE_PRESETS[0]);
-  const [other, setOther] = useState("");
+function ArchiveModal({ iso, onDone, onCancel }) {
+  const [kind, setKind] = useState("activo");
+  const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   async function submit() {
-    const reason = preset === "otro" ? other.trim() : preset;
-    if (reason.length < 4) {
-      setErr("Indica el motivo (mínimo 4 caracteres).");
+    if (kind === "otro" && comment.trim().length < 4) {
+      setErr("Si el motivo es Otro, el comentario es obligatorio.");
       return;
     }
     setBusy(true);
     setErr("");
     try {
-      await api(`/warehouse/units/${iso}/archive`, { method: "POST", body: { reason } });
-      onDone(iso, reason);
+      await api(`/warehouse/units/${iso}/archive`, { method: "POST", body: { kind, comment: comment.trim() } });
+      onDone(iso);
     } catch (e) {
       setErr(e.message);
       setBusy(false);
@@ -75,25 +73,31 @@ function ArchiveForm({ iso, onDone, onCancel }) {
   }
 
   return (
-    <div className="archive-box" onClick={(e) => e.stopPropagation()}>
-      <b>Archivar {iso}</b>
-      <p className="section-sub">Sale de recepción, patio y catálogo. El ISO queda reservado.</p>
-      <select value={preset} onChange={(e) => setPreset(e.target.value)}>
-        {ARCHIVE_PRESETS.map((r) => <option key={r} value={r}>{r}</option>)}
-        <option value="otro">Otro motivo…</option>
-      </select>
-      {preset === "otro" ? (
-        <textarea
-          rows={2}
-          value={other}
-          onChange={(e) => setOther(e.target.value)}
-          placeholder="Describe el motivo"
-        />
-      ) : null}
-      {err ? <div className="err">{err}</div> : null}
-      <div className="action-row">
-        <button className="btn-primary" type="button" disabled={busy} onClick={submit}>Archivar</button>
-        <button className="btn-ghost" type="button" disabled={busy} onClick={onCancel}>Cancelar</button>
+    <div className="overlay open" role="dialog" aria-modal="true" onClick={onCancel}>
+      <div className="modal archive-modal" onClick={(e) => e.stopPropagation()}>
+        <h3>Archivar {iso}</h3>
+        <p className="section-sub">Sale de recepción, patio y catálogo. El superusuario sigue viéndola y puede desarchivarla.</p>
+        <label className="archive-choice">
+          <input type="radio" name="archive-kind" checked={kind === "activo"} onChange={() => setKind("activo")} />
+          Activo
+        </label>
+        <label className="archive-choice">
+          <input type="radio" name="archive-kind" checked={kind === "otro"} onChange={() => setKind("otro")} />
+          Otro
+        </label>
+        {kind === "otro" ? (
+          <textarea
+            rows={3}
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="Comentario obligatorio"
+          />
+        ) : null}
+        {err ? <div className="err">{err}</div> : null}
+        <div className="action-row">
+          <button className="btn-primary" type="button" disabled={busy} onClick={submit}>Archivar</button>
+          <button className="btn-ghost" type="button" disabled={busy} onClick={onCancel}>Cancelar</button>
+        </div>
       </div>
     </div>
   );
@@ -830,6 +834,44 @@ export default function Recepcion() {
     }
   }
 
+  async function unarchiveUnit(iso) {
+    if (!window.confirm(`¿Desarchivar ${iso}? Vuelve a la lista operativa.`)) return;
+    try {
+      await api(`/warehouse/units/${iso}/unarchive`, { method: "POST", body: {} });
+      setMsg(`${iso} desarchivada.`);
+      if (inspectIso === iso) {
+        const next = await api(`/warehouse/units/${iso}`);
+        setUnit(next);
+      }
+      await loadPending();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function restoreCapture(id) {
+    if (!inspectIso) return;
+    try {
+      const next = await api(`/warehouse/units/${inspectIso}/captures/${id}/restore`, { method: "POST", body: {} });
+      setUnit(next);
+      setMsg("Toma desarchivada. Quedó en tomas de campo.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function restoreArchivedPhoto(id) {
+    if (!inspectIso) return;
+    try {
+      const next = await api(`/warehouse/units/${inspectIso}/photo-history/${id}/restore`, { method: "POST", body: {} });
+      setUnit(next);
+      setBust(Date.now());
+      setMsg("Foto desarchivada y devuelta a su casilla.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   async function archiveCapture(id) {
     if (!inspectIso) return;
     if (!window.confirm("¿Archivar esta toma? Sale de la bandeja. El superusuario puede verla.")) return;
@@ -1266,6 +1308,7 @@ export default function Recepcion() {
                         {c.kind === "video" ? <span>Video archivado</span> : <img src={apiUrl(`/warehouse/units/${unit.iso}/captures/${c.id}`)} alt="" />}
                       </button>
                       <span>{c.archivedByName || "Archivada"}{c.assignedSlot == null ? "" : c.assignedSlot === 9 ? " · Video" : ` · Casilla ${c.assignedSlot + 1}`}</span>
+                      <button type="button" className="thumb-arch" onClick={() => restoreCapture(c.id)}>Desarchivar</button>
                     </div>
                   ))}
                   {(unit.archivedPhotos || []).map((p) => (
@@ -1281,7 +1324,8 @@ export default function Recepcion() {
                       >
                         <img src={apiUrl(`/warehouse/units/${unit.iso}/photo-history/${p.id}`)} alt="" />
                       </button>
-                      <span>{p.label} · {p.rejectedByName || "Archivada"}</span>
+                      <span>{p.label} · {p.rejectedByName || "Archivada"}{p.rejectNote ? ` · ${p.rejectNote}` : ""}</span>
+                      <button type="button" className="thumb-arch" onClick={() => restoreArchivedPhoto(p.id)}>Desarchivar</button>
                     </div>
                   ))}
                 </div>
@@ -1807,12 +1851,8 @@ export default function Recepcion() {
             <button className="btn-ghost" type="button" style={{ marginTop: 8 }} onClick={confirm}>Confirmar recepción → Patio</button>
           ) : null}
           <p className="recv-confirm-hint">Año, fabricante y fotos no son requisito para habilitar campo.</p>
-          {archiving === unit.iso ? (
-            <ArchiveForm
-              iso={unit.iso}
-              onDone={(iso) => { setArchiving(null); setInspectIso(null); setMode("bandeja"); setMsg(`${iso} archivado.`); loadPending(); }}
-              onCancel={() => setArchiving(null)}
-            />
+          {unit.archivedAt && isSuperadmin(user) ? (
+            <button className="btn-primary recv-archive-btn" type="button" onClick={() => unarchiveUnit(unit.iso)}>Desarchivar unidad</button>
           ) : (
             <button className="btn-ghost recv-archive-btn" type="button" onClick={() => setArchiving(unit.iso)}>Archivar esta unidad</button>
           )}
@@ -1871,6 +1911,7 @@ export default function Recepcion() {
             {listTab === "campo"
               ? "Unidades ya enviadas a campo. Ábrelas para corregir la ficha, las fotos o la evaluación."
               : "Toca una unidad para continuar la inspección. Al enviarla a campo pasa a la otra pestaña."}
+            {isSuperadmin(user) ? " Las archivadas se ven en rojo y se pueden desarchivar." : ""}
           </p>
           <div className="odoo-toolbar">
             <input
@@ -1906,21 +1947,18 @@ export default function Recepcion() {
               </thead>
               <tbody>
                 {pagePending.map((u) => (
-                  <tr key={u.iso} className={`expandable ${u.isoException ? "iso-review-row" : ""}`} onClick={() => { if (archiving !== u.iso) { setInspectIso(u.iso); setMode("inspect"); setError(""); } }}>
-                    <td onClick={(e) => { if (archiving === u.iso) e.stopPropagation(); }}>
+                  <tr key={u.iso} className={`expandable ${u.archived ? "archived-row" : ""} ${u.isoException ? "iso-review-row" : ""}`} onClick={() => { setInspectIso(u.iso); setMode("inspect"); setError(""); }}>
+                    <td>
                       <div className="recv-iso-cell">
                         <div className="recv-iso-row">
                           <b>{u.iso}</b>
-                          <ArchiveIconBtn onClick={() => setArchiving((cur) => (cur === u.iso ? null : u.iso))} />
+                          {u.archived && isSuperadmin(user) ? (
+                            <button type="button" className="btn-ghost" onClick={(e) => { e.stopPropagation(); unarchiveUnit(u.iso); }}>Desarchivar</button>
+                          ) : (
+                            <ArchiveIconBtn onClick={() => setArchiving(u.iso)} />
+                          )}
                           <OriginBadges u={u} />
                         </div>
-                        {archiving === u.iso ? (
-                          <ArchiveForm
-                            iso={u.iso}
-                            onDone={(iso) => { setArchiving(null); setMsg(`${iso} archivado.`); loadPending(); }}
-                            onCancel={() => setArchiving(null)}
-                          />
-                        ) : null}
                       </div>
                     </td>
                     <td>{u.typeLabel}</td>
@@ -1937,7 +1975,7 @@ export default function Recepcion() {
           </div>
           <div className="recv-cards">
             {pagePending.map((u) => (
-              <div key={u.iso} className={`recv-card ${u.isoException ? "iso-review-row" : ""}`}>
+              <div key={u.iso} className={`recv-card ${u.archived ? "archived-row" : ""} ${u.isoException ? "iso-review-row" : ""}`}>
                 <div className="recv-card-top">
                   <span className="recv-iso-row">
                     <button
@@ -1947,7 +1985,11 @@ export default function Recepcion() {
                     >
                       <b className="card-iso">{u.iso}</b>
                     </button>
-                    <ArchiveIconBtn onClick={() => setArchiving((cur) => (cur === u.iso ? null : u.iso))} />
+                    {u.archived && isSuperadmin(user) ? (
+                      <button type="button" className="btn-ghost" onClick={(e) => { e.stopPropagation(); unarchiveUnit(u.iso); }}>Desarchivar</button>
+                    ) : (
+                      <ArchiveIconBtn onClick={() => setArchiving(u.iso)} />
+                    )}
                   </span>
                   <span className="badge-scope" style={{ background: intakeColor(u.intakeType) }}>{u.intakeLabel}</span>
                   <OriginBadges u={u} />
@@ -1964,13 +2006,6 @@ export default function Recepcion() {
                     {u.missing.map((r) => <span key={r} className="badge-scope" style={{ background: "#c9720b" }}>{r}</span>)}
                   </div>
                 </button>
-                {archiving === u.iso ? (
-                  <ArchiveForm
-                    iso={u.iso}
-                    onDone={(iso) => { setArchiving(null); setMsg(`${iso} archivado.`); loadPending(); }}
-                    onCancel={() => setArchiving(null)}
-                  />
-                ) : null}
               </div>
             ))}
           </div>
@@ -1991,6 +2026,13 @@ export default function Recepcion() {
           {listTab === "campo" ? "Todavía no hay unidades enviadas a campo." : "✓ No hay contenedores pendientes de enviar a campo."}
         </p>
       )}
+      {archiving ? (
+        <ArchiveModal
+          iso={archiving}
+          onDone={(iso) => { setArchiving(null); if (inspectIso === iso) { setInspectIso(null); setMode("bandeja"); } setMsg(`${iso} archivada.`); loadPending(); }}
+          onCancel={() => setArchiving(null)}
+        />
+      ) : null}
       {syncModal ? (
         <div className="overlay open odoo-link-overlay" role="dialog" aria-modal="true">
           <div className="modal odoo-link-modal">
