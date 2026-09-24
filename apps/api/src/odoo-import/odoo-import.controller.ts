@@ -140,6 +140,16 @@ export class OdooImportController {
     return this.svc.flushWritebacks(id);
   }
 
+  @Get("watch")
+  watch() {
+    return this.svc.watchState();
+  }
+
+  @Put("watch")
+  setWatch(@Body() body: { mode?: string }, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.svc.setWatchMode(body?.mode === "auto" ? "auto" : "manual", user, req.ip);
+  }
+
   @Post("sync")
   sync(@CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.svc.sync(user, req.ip);

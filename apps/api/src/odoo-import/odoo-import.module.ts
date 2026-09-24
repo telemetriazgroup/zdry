@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { OdooModule } from "../odoo/odoo.module";
 import { OdooImportController } from "./odoo-import.controller";
 import { OdooImportService } from "./odoo-import.service";
+import { OdooImportWatchWorker } from "./odoo-import-watch.worker";
 import { QuoteIssueService } from "./quote-issue.service";
 import { QuoteIssueWorker } from "./quote-issue-worker.service";
 import { QuotePdfService } from "./quote-pdf.service";
@@ -16,6 +17,7 @@ import { QuoteOdooFollowService } from "./quote-odoo-follow.service";
   controllers: [OdooImportController],
   providers: [
     OdooImportService,
+    OdooImportWatchWorker,
     QuoteIssueService,
     QuoteIssueWorker,
     QuotePdfService,

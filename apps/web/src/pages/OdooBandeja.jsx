@@ -60,6 +60,7 @@ export default function OdooBandeja() {
   const [logFrom, setLogFrom] = useState("");
   const [logTo, setLogTo] = useState("");
   const [openLogId, setOpenLogId] = useState("");
+  const [watch, setWatch] = useState({ mode: "manual", lastRunAt: null, lastMessage: "", lastNew: 0, lastAssimilated: 0 });
 
   async function load() {
     const list = await api("/odoo-import/candidates");
@@ -82,6 +83,7 @@ export default function OdooBandeja() {
   useEffect(() => {
     load().catch((e) => setError(e.message));
     loadLog().catch(() => {});
+    api("/odoo-import/watch").then((w) => { if (w?.mode) setWatch(w); }).catch(() => {});
     if (canProbe) {
       api("/odoo-import/probe").then(setProbe).catch(() => {});
     }
@@ -125,6 +127,31 @@ export default function OdooBandeja() {
     const t = setInterval(tick, 1000);
     return () => { stop = true; clearInterval(t); };
   }, [busy, logLevel]);
+
+  useEffect(() => {
+    if (watch.mode !== "auto") return undefined;
+    const tick = () => {
+      api("/odoo-import/watch").then((w) => { if (w?.mode) setWatch(w); }).catch(() => {});
+      api("/odoo-import/progress").then(setProgress).catch(() => {});
+      loadLog().catch(() => {});
+      load().catch(() => {});
+    };
+    const t = setInterval(tick, 15000);
+    return () => clearInterval(t);
+  }, [watch.mode, logLevel, logTake, logFrom, logTo]);
+
+  async function setWatchMode(mode) {
+    setError("");
+    try {
+      const next = await api("/odoo-import/watch", { method: "PUT", body: { mode } });
+      setWatch(next);
+      setMsg(mode === "auto"
+        ? "Cada 5 minutos se buscan equipos nuevos y se asimilan. Los que ya están no se reprocesan."
+        : "Búsqueda automática apagada. Buscar en Odoo sigue siendo manual.");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
 
   async function waitForPass() {
     for (let i = 0; i < 1800; i += 1) {
@@ -210,7 +237,7 @@ export default function OdooBandeja() {
             <div>
               <b>Diario de asimilación</b>
               <div className="section-sub">
-                {diary.current.kind === "sync" ? "Buscar en Odoo" : diary.current.kind === "reset" ? "Reinicio" : "Asimilar a Recepción"}
+                {diary.current.kind === "sync" ? "Buscar en Odoo" : diary.current.kind === "watch" ? "Búsqueda automática" : diary.current.kind === "reset" ? "Reinicio" : "Asimilar a Recepción"}
                 {" · "}
                 {diary.current.status === "running"
                   ? "en curso"
@@ -333,6 +360,20 @@ export default function OdooBandeja() {
           <div className="section-sub">{progress.message || "Un pase de Odoo a la copia local."}</div>
         </div>
       ) : null}
+
+      <div className="odoo-watch">
+        <b>Equipos nuevos</b>
+        <div className="action-row">
+          <button className={watch.mode === "manual" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setWatchMode("manual")}>Manual</button>
+          <button className={watch.mode === "auto" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setWatchMode("auto")}>Cada 5 minutos</button>
+        </div>
+        <p className="section-sub">
+          {watch.mode === "auto"
+            ? "Cada 5 minutos recorre Odoo y asimila solo los equipos que aún no están. Los ya cargados no se vuelven a procesar."
+            : "Como ahora: el stock se recorre solo cuando pulsas Buscar en Odoo."}
+          {watch.lastRunAt ? ` Última revisión: ${new Date(watch.lastRunAt).toLocaleString("es-PE")}. ${watch.lastMessage || ""}` : ""}
+        </p>
+      </div>
 
       <div className="odoo-toolbar">
         <input

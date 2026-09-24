@@ -33,6 +33,7 @@ import {
   withPayloadExtras,
   lotExtraPatch,
 } from "../domain/odoo-lot-map";
+import { freshOdooLotIds, normalizeOdooWatch, ODOO_WATCH_KEY, type OdooWatchMode } from "../domain/odoo-import-watch";
 import { warehouseFromLocation } from "../domain/odoo-warehouse";
 import { listOdooLotNotes } from "../odoo/odoo-lot-photos";
 import { cacheOdooLotPhotos, listOrCacheOdooPhotos, openOrCacheOdooPhoto } from "./odoo-photo-cache.store";
@@ -299,6 +300,62 @@ export class OdooImportService {
     };
   }
 
+  async watchState() {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: ODOO_WATCH_KEY } });
+    return normalizeOdooWatch(row?.value);
+  }
+
+  async setWatchMode(mode: OdooWatchMode, user: AuthUser, ip?: string) {
+    const current = await this.watchState();
+    const next = { ...current, mode };
+    await this.prisma.appSetting.upsert({
+      where: { key: ODOO_WATCH_KEY },
+      update: { value: next },
+      create: { key: ODOO_WATCH_KEY, value: next },
+    });
+    await this.audit.log({
+      user,
+      action: "odoo_import_watch",
+      entity: "AppSetting",
+      entityId: ODOO_WATCH_KEY,
+      after: { mode },
+      ip,
+    });
+    if (mode === "auto") void this.syncNewOnly();
+    return next;
+  }
+
+  async syncNewIfAuto() {
+    const state = await this.watchState();
+    if (state.mode !== "auto") return { ok: true, skipped: true as const };
+    return this.syncNewOnly();
+  }
+
+  /** Recorre Odoo y asimila solo lotes que aún no están en ZDRY. */
+  async syncNewOnly() {
+    const running = await this.logs.currentRunning();
+    const live = await this.progress();
+    if (running || live.status === "running" || this.runId) {
+      return { ok: true, skipped: true as const, message: "Ya hay una pasada en curso." };
+    }
+    const actor = await this.autoActor();
+    if (!actor) return { ok: false, message: "No hay un superadmin para registrar la asimilación." };
+    const probe = await this.odoo.probe();
+    if (!probe.ok) {
+      await this.touchWatch({ lastRunAt: new Date().toISOString(), lastMessage: probe.message || "Odoo no respondió.", lastNew: 0, lastAssimilated: 0 });
+      return { ok: false, message: probe.message };
+    }
+    const run = await this.logs.start("watch", "Asimilación automática");
+    this.abortFlag = false;
+    this.aborted.delete(run.id);
+    this.runId = run.id;
+    await this.writeProgress({ status: "running", step: "lotes", current: 0, total: 5, iso: "", message: "Buscando equipos nuevos en Odoo…" });
+    void this.runSyncNew(run.id, actor).finally(() => {
+      if (this.runId === run.id) this.runId = null;
+    });
+    return { ok: true, running: true, runId: run.id, message: "Buscando solo equipos nuevos." };
+  }
+
   private async runSync(runId: string, user: AuthUser, ip?: string) {
     this.runId = runId;
     try {
@@ -546,6 +603,212 @@ export class OdooImportService {
       await this.writeProgress({ status: "error", step: "error", message: (e as Error).message || "Error al asimilar" });
       await this.logs.fail(runId, e, "sync");
     }
+  }
+
+  private async runSyncNew(runId: string, user: AuthUser) {
+    this.runId = runId;
+    try {
+      const rawProducts = await this.odoo.searchRead("product.product", DRY_DOMAIN, ["id", "name", "default_code", "categ_id"], { limit: 400 });
+      if (this.isAborted(runId)) return;
+      const products = rawProducts.filter((p) => isDryContainerProduct(String(p.name || ""), String(p.default_code || "")));
+      const productIds = products.map((p) => Number(p.id));
+      if (!productIds.length) {
+        const empty = "Odoo no devolvió productos DRY.";
+        await this.prisma.odooAssimilateRun.delete({ where: { id: runId } }).catch(() => undefined);
+        await this.writeProgress({ status: "idle", step: "", current: 0, total: 0, iso: "", message: empty });
+        await this.touchWatch({ lastRunAt: new Date().toISOString(), lastMessage: empty, lastNew: 0, lastAssimilated: 0 });
+        return;
+      }
+      const productMap = new Map(products.map((p) => [Number(p.id), p]));
+      const quants = await this.odoo.searchRead(
+        "stock.quant",
+        [["product_id", "in", productIds], ["quantity", ">", 0], ["lot_id", "!=", false], ["location_id.usage", "=", "internal"]],
+        ["id", "lot_id", "location_id", "quantity", "product_id"],
+        { limit: 2000 },
+      );
+      if (this.isAborted(runId)) return;
+      const lotIds = [...new Set(quants.map((q) => this.relId(q.lot_id)).filter((n): n is number => n > 0))];
+      const [knownCands, knownBoxes] = await Promise.all([
+        this.prisma.odooLotCandidate.findMany({ select: { odooLotId: true } }),
+        this.prisma.container.findMany({ where: { odooLotId: { not: null } }, select: { odooLotId: true } }),
+      ]);
+      const fresh = freshOdooLotIds(lotIds, [
+        ...knownCands.map((r) => r.odooLotId),
+        ...knownBoxes.map((r) => r.odooLotId || 0),
+      ]);
+      if (!fresh.length) {
+        const message = `Sin equipos nuevos. ${lotIds.length} lote(s) ya estaban en ZDRY y no se reprocesaron.`;
+        await this.prisma.odooAssimilateRun.delete({ where: { id: runId } }).catch(() => undefined);
+        await this.writeProgress({ status: "idle", step: "", current: 0, total: 0, iso: "", message });
+        await this.touchWatch({ lastRunAt: new Date().toISOString(), lastMessage: message, lastNew: 0, lastAssimilated: 0 });
+        return;
+      }
+
+      const lotMeta = await this.lotMeta();
+      const lots = await this.hydrateLots(fresh, lotMeta);
+      const lotMap = new Map(lots.map((l) => [Number(l.id), l]));
+      const now = new Date();
+      const created: number[] = [];
+      for (const lotId of fresh) {
+        if (this.isAborted(runId)) return;
+        const q = quants.find((row) => this.relId(row.lot_id) === lotId);
+        const lot = lotMap.get(lotId);
+        const product = productMap.get(this.relId(q?.product_id) || this.relId(lot?.product_id));
+        const attrs = readLotAttrs(lot, lotMeta.fields);
+        const serialRaw = attrs.serialRaw || this.relName(q?.lot_id);
+        const iso = inspectOdooIso(serialRaw);
+        if (!iso.isoNormalized) {
+          await this.logs.add(runId, { level: "warn", step: "lotes", serialRaw, odooLotId: lotId, message: "Sin serial normalizable; se omite." });
+          continue;
+        }
+        const qty = this.sumQty(quants, lotId);
+        const locationName = this.relName(q?.location_id);
+        const productName = String(product?.name || this.relName(lot?.product_id) || "");
+        const productCode = String(product?.default_code || "");
+        try {
+          await this.prisma.odooLotCandidate.create({
+            data: {
+              odooLotId: lotId,
+              odooWriteDate: this.asDate(lot?.write_date),
+              serialRaw,
+              isoNormalized: iso.isoNormalized,
+              iso6346Ok: iso.iso6346Ok,
+              productName,
+              productCode,
+              locationName,
+              odooWarehouse: warehouseFromLocation(locationName),
+              locationOdooId: this.relId(q?.location_id) || null,
+              qtyOnHand: qty,
+              color: attrs.color,
+              tareKg: attrs.tareKg,
+              mgwKg: attrs.mgwKg,
+              year: attrs.year,
+              manufacturer: attrs.manufacturer,
+              dua: attrs.dua,
+              originCountry: attrs.originCountry,
+              material: attrs.material,
+              zgroupCode: attrs.zgroupCode,
+              odooDescription: attrs.description || "",
+              payload: { lot, quantLocation: q?.location_id, attrs, fieldMap: lotMeta.map, productName, productCode } as Prisma.InputJsonValue,
+              lastSyncedAt: now,
+              status: qty === 1 ? "pending" : "qty_anomaly",
+              zdryType: inferTypeFromProduct(productName, productCode, "40HC"),
+              zdryCat: inferCatFromProduct(productName, "ASIS"),
+            },
+          });
+          created.push(lotId);
+          await this.logs.add(runId, {
+            level: "ok",
+            step: "lotes",
+            iso: iso.isoNormalized,
+            serialRaw,
+            odooLotId: lotId,
+            product: `${productCode ? `[${productCode}] ` : ""}${productName}`.trim(),
+            message: `Nuevo · ${locationName || "sin almacén"} · qty ${qty}`,
+          });
+        } catch (e) {
+          const { message, detail } = errorDetail(e);
+          await this.logs.add(runId, { level: "error", step: "lotes", iso: iso.isoNormalized, serialRaw, odooLotId: lotId, message, detail });
+        }
+      }
+      if (!created.length || this.isAborted(runId)) {
+        const message = created.length ? "Búsqueda cancelada." : "No se pudo cargar ningún equipo nuevo.";
+        await this.logs.finish(runId, message);
+        await this.writeProgress({ status: "done", step: "listo", current: 5, total: 5, message });
+        await this.touchWatch({ lastRunAt: new Date().toISOString(), lastMessage: message, lastNew: 0, lastAssimilated: 0 });
+        return;
+      }
+      await this.writeProgress({ status: "running", step: "origenes", current: 1, total: 5, message: `Clasificando ${created.length} equipo(s) nuevo(s)…` });
+      try {
+        await this.attachPurchaseRefs(created);
+        await this.attachIntakeOrigins(created);
+        await this.attachFabricationLineage(created);
+      } catch (e) {
+        const { message, detail } = errorDetail(e);
+        await this.logs.add(runId, { level: "error", step: "origenes", message, detail });
+      }
+      if (this.isAborted(runId)) return;
+      await this.hydrateDossiers(created);
+      await this.hydrateMoCosts(created);
+      await this.pullMissingNotes(created);
+      const ready = await this.prisma.odooLotCandidate.findMany({
+        where: { odooLotId: { in: created }, status: "pending", iso6346Ok: true },
+      });
+      let assimilated = 0;
+      let i = 0;
+      for (const cand of ready) {
+        if (this.isAborted(runId)) return;
+        i += 1;
+        await this.writeProgress({
+          status: "running",
+          step: "assimilate",
+          current: i,
+          total: ready.length,
+          iso: cand.isoNormalized,
+          message: `Asimilando nuevo ${i}/${ready.length} · ${cand.isoNormalized}`,
+        });
+        try {
+          const item = await this.assimilateOne(cand, user);
+          assimilated += 1;
+          await this.logs.add(runId, {
+            level: "ok",
+            step: "assimilate",
+            iso: item.iso,
+            serialRaw: cand.serialRaw,
+            odooLotId: cand.odooLotId,
+            product: cand.productName,
+            message: item.created ? "Creado en Recepción." : `Ya existía ${item.iso}; se marcó asimilado.`,
+          });
+        } catch (e) {
+          const { message, detail } = errorDetail(e);
+          await this.logs.add(runId, { level: "error", step: "assimilate", iso: cand.isoNormalized, odooLotId: cand.odooLotId, message, detail });
+        }
+      }
+      const held = created.length - assimilated;
+      const message = [
+        `${created.length} equipo(s) nuevo(s).`,
+        `${assimilated} asimilado(s) a Recepción.`,
+        held > 0 ? `${held} queda(n) en la bandeja (ISO por revisar o cantidad distinta de 1).` : "",
+        "Los que ya estaban no se reprocesaron.",
+      ].filter(Boolean).join(" ");
+      await this.logs.finish(runId, message);
+      await this.logs.add(runId, { level: "info", step: "listo", message });
+      await this.writeProgress({ status: "done", step: "listo", current: 5, total: 5, iso: "", message });
+      await this.touchWatch({ lastRunAt: new Date().toISOString(), lastMessage: message, lastNew: created.length, lastAssimilated: assimilated });
+      await this.audit.log({
+        user,
+        action: "odoo_lot_watch",
+        entity: "OdooLotCandidate",
+        after: { newLots: created.length, assimilated },
+      });
+    } catch (e) {
+      if (this.isAborted(runId)) return;
+      const message = (e as Error).message || "Error al buscar equipos nuevos";
+      await this.writeProgress({ status: "error", step: "error", message });
+      await this.logs.fail(runId, e, "watch");
+      await this.touchWatch({ lastRunAt: new Date().toISOString(), lastMessage: message, lastNew: 0, lastAssimilated: 0 });
+    }
+  }
+
+  private async autoActor(): Promise<AuthUser | null> {
+    const row = await this.prisma.user.findFirst({
+      where: { role: "superadmin", active: true },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, email: true, name: true, role: true },
+    });
+    if (!row) return null;
+    return { id: row.id, email: row.email, name: "Asimilación automática", role: row.role };
+  }
+
+  private async touchWatch(patch: Partial<ReturnType<typeof normalizeOdooWatch>>) {
+    const current = await this.watchState();
+    const next = { ...current, ...patch };
+    await this.prisma.appSetting.upsert({
+      where: { key: ODOO_WATCH_KEY },
+      update: { value: next },
+      create: { key: ODOO_WATCH_KEY, value: next },
+    });
+    return next;
   }
 
   async assimilate(ids: string[], user: AuthUser, ip?: string) {
