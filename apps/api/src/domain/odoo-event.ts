@@ -234,7 +234,11 @@ export function applyOdooEvent(input: {
   }
 
   if (ev.event === "sale_state" || ev.event === "invoice_posted") {
-    return { action: "record", reason: `${ev.event} se aplica a la Quote (Q7)` };
+    return {
+      action: "refresh",
+      isos: listIsos(ev.payload, ev.iso),
+      lotIds: listLotIds(ev.payload, ev.model === "stock.lot" ? ev.resId : 0),
+    };
   }
 
   return { action: "record", reason: `evento ${ev.event} registrado` };

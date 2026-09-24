@@ -22,6 +22,108 @@ const EMPTY_VISIT = {
   equipmentCode: "",
 };
 
+const TRACE_LABEL = {
+  picking_in: "Entrada",
+  transfer: "Traslado",
+  picking_out: "Despacho",
+  repair: "Reparación",
+};
+
+function DispatchExpediente({ iso }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let stop = false;
+    setData(null);
+    setError("");
+    api(`/warehouse/units/${iso}/expediente`)
+      .then((d) => { if (!stop) setData(d); })
+      .catch((e) => { if (!stop) setError(e.message); });
+    return () => { stop = true; };
+  }, [iso]);
+
+  if (error) return <div className="err">{error}</div>;
+  if (!data) return <p className="section-sub">Cargando expediente…</p>;
+  const empty = !data.sale?.length && !data.repairs?.length && !data.dispatch?.length && !data.trace?.length;
+  return (
+    <div className="dispatch-exp">
+      <h4>Expediente</h4>
+      {empty ? <p className="section-sub">Esta serie no tiene venta, trazabilidad, reparación ni despacho.</p> : null}
+      {data.sale?.length ? (
+        <div>
+          <b>Venta</b>
+          <p className="section-sub">Referencia, sin precio.</p>
+          {data.sale.map((d) => (
+            <div key={d.id} className="odoo-doc-card">
+              <div className="odoo-doc-head"><b>{d.title}</b></div>
+              {d.rows?.length ? (
+                <dl className="odoo-doc-rows">
+                  {d.rows.map((r) => (
+                    <div key={r.label}><dt>{r.label}</dt><dd>{r.value}</dd></div>
+                  ))}
+                </dl>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {data.trace?.length ? (
+        <div>
+          <b>Trazabilidad</b>
+          <table className="data">
+            <thead><tr><th>Fecha</th><th>Movimiento</th><th>Desde</th><th>Hacia</th></tr></thead>
+            <tbody>
+              {data.trace.map((t) => (
+                <tr key={`${t.kind}-${t.name}`}>
+                  <td>{t.date || "—"}</td>
+                  <td>{TRACE_LABEL[t.kind] || t.kind} · {t.name}</td>
+                  <td>{t.from || "—"}</td>
+                  <td>{t.to || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {data.repairs?.length ? (
+        <div>
+          <b>Reparaciones</b>
+          {data.repairs.map((d) => (
+            <div key={d.id} className="odoo-doc-card">
+              <div className="odoo-doc-head"><b>{d.title}</b></div>
+              {d.rows?.length ? (
+                <dl className="odoo-doc-rows">
+                  {d.rows.map((r) => (
+                    <div key={r.label}><dt>{r.label}</dt><dd>{r.value}</dd></div>
+                  ))}
+                </dl>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {data.dispatch?.length ? (
+        <div>
+          <b>Despacho</b>
+          {data.dispatch.map((d) => (
+            <div key={d.id} className="odoo-doc-card">
+              <div className="odoo-doc-head"><b>{d.title}</b></div>
+              {d.rows?.length ? (
+                <dl className="odoo-doc-rows">
+                  {d.rows.map((r) => (
+                    <div key={r.label}><dt>{r.label}</dt><dd>{r.value}</dd></div>
+                  ))}
+                </dl>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function visitToForm(v) {
   if (!v) return { ...EMPTY_VISIT };
   return {
@@ -209,6 +311,7 @@ export default function Recepcion() {
   const canCoord = hasRole(user, "admin", "coordinador");
   const lb = useLightbox();
   const [meta, setMeta] = useState(null);
+  const [atCustomer, setAtCustomer] = useState([]);
   const [pending, setPending] = useState([]);
   const [validated, setValidated] = useState([]);
   const [listTab, setListTab] = useState("pendientes");
@@ -244,6 +347,8 @@ export default function Recepcion() {
   const [filterDepot, setFilterDepot] = useState("");
   const [filterCat, setFilterCat] = useState("");
   const [migrateDepotId, setMigrateDepotId] = useState("");
+  const [nextType, setNextType] = useState("");
+  const [changingType, setChangingType] = useState(false);
   const [migrating, setMigrating] = useState(false);
   const [visitForm, setVisitForm] = useState(EMPTY_VISIT);
   const [visitMode, setVisitMode] = useState("pick");
@@ -260,12 +365,14 @@ export default function Recepcion() {
   const [bulkBusy, setBulkBusy] = useState(false);
 
   async function loadPending() {
-    const [rows, sent] = await Promise.all([
+    const [rows, sent, left] = await Promise.all([
       api("/warehouse/pending"),
       api("/warehouse/validated"),
+      user.role === "almacen" ? Promise.resolve([]) : api("/warehouse/at-customer").catch(() => []),
     ]);
     setPending(rows);
     setValidated(sent);
+    setAtCustomer(left);
   }
 
   async function loadRentalReturns() {
@@ -404,7 +511,7 @@ export default function Recepcion() {
     };
   }, [form.iso, mode]);
 
-  const board = listTab === "campo" ? validated : pending;
+  const board = listTab === "campo" ? validated : listTab === "cliente" ? atCustomer : pending;
   const filteredPending = useMemo(() => {
     const raw = pendingQ.trim().toUpperCase();
     const compact = raw.replace(/[\s-]/g, "");
@@ -444,7 +551,7 @@ export default function Recepcion() {
 
   function downloadBoard() {
     const stamp = new Date().toISOString().slice(0, 10);
-    const name = listTab === "campo" ? "en-campo" : "pendientes";
+    const name = listTab === "campo" ? "en-campo" : listTab === "cliente" ? "venta-en-cliente" : "pendientes";
     downloadCsv(`zdry-recepcion-${name}-${stamp}.csv`, [
       "ISO", "Tipo", "Condición", "Depósito", "Plaza Odoo", "Origen", "Registró", "Fecha", "Motivo",
     ], filteredPending.map((u) => [
@@ -479,6 +586,29 @@ export default function Recepcion() {
       setError(e.message);
     } finally {
       setMigrating(false);
+    }
+  }
+
+  async function changeType() {
+    if (!unit || !nextType || nextType === unit.type) return;
+    const dest = (meta?.types || []).find((t) => t.code === nextType);
+    if (!window.confirm(`¿Cambiar ${unit.iso} a ${dest?.label || nextType}? No cambia el producto en Odoo.`)) return;
+    setChangingType(true);
+    setError("");
+    try {
+      const next = await api(`/warehouse/units/${unit.iso}/change-type`, {
+        method: "POST",
+        body: { type: nextType },
+      });
+      setUnit(next);
+      setFicha(fichaFrom(next));
+      setNextType("");
+      setMsg(`Tipo actualizado a ${dest?.label || nextType}.`);
+      await loadPending();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setChangingType(false);
     }
   }
 
@@ -1140,6 +1270,7 @@ export default function Recepcion() {
                 </div>
               </div>
             ) : null}
+            {user.role === "coordinador" ? <DispatchExpediente iso={unit.iso} /> : null}
             <p className="section-sub">
               {unit.campoEnabledAt
                 ? `En campo desde ${formatWhen(unit.campoEnabledAt)}${unit.campoEnabledByName ? ` · ${unit.campoEnabledByName}` : ""}.`
@@ -1652,6 +1783,19 @@ export default function Recepcion() {
                     {migrating ? "Migrando…" : "Migrar almacén"}
                   </button>
                 </div>
+                <label style={{ marginTop: 10 }}>Cambiar tipo</label>
+                <p className="section-sub">Si el tipo no corresponde, cámbialo por cualquiera de los disponibles. No cambia el producto en Odoo.</p>
+                <div className="action-row">
+                  <select value={nextType} onChange={(e) => setNextType(e.target.value)} aria-label="Tipo destino">
+                    <option value="">Elegir tipo…</option>
+                    {(meta?.types || []).filter((t) => t.code !== unit.type).map((t) => (
+                      <option key={t.code} value={t.code}>{t.label || t.code}</option>
+                    ))}
+                  </select>
+                  <button className="btn-primary" type="button" disabled={!nextType || changingType} onClick={changeType}>
+                    {changingType ? "Cambiando…" : "Cambiar tipo"}
+                  </button>
+                </div>
               </div>
             ) : null}
             {unit.hasOdooChatter || unit.odooLotId ? (
@@ -1910,15 +2054,22 @@ export default function Recepcion() {
         <button type="button" className={listTab === "campo" ? "on" : ""} onClick={() => { setListTab("campo"); setPendingPage(1); }}>
           En campo ({validated.length})
         </button>
+        {user.role !== "almacen" ? (
+          <button type="button" className={listTab === "cliente" ? "on" : ""} onClick={() => { setListTab("cliente"); setPendingPage(1); }}>
+            Venta / en cliente ({atCustomer.length})
+          </button>
+        ) : null}
       </div>
       {board.length ? (
         <>
           <h3 style={{ marginTop: 0 }}>
-            {listTab === "campo" ? "En campo" : "Pendientes"} ({filteredPending.length}{(pendingQ.trim() || filterType || filterDepot || filterCat) ? ` de ${board.length}` : ""})
+            {listTab === "campo" ? "En campo" : listTab === "cliente" ? "Venta / en cliente" : "Pendientes"} ({filteredPending.length}{(pendingQ.trim() || filterType || filterDepot || filterCat) ? ` de ${board.length}` : ""})
           </h3>
           <p className="section-sub">
             {listTab === "campo"
               ? "Unidades ya enviadas a campo. Ábrelas para corregir la ficha, las fotos o la evaluación."
+              : listTab === "cliente"
+              ? "Asimiladas cuyo último movimiento es una salida a cliente. No están en pendientes y no se publican. Ábrelas para ver el expediente y subir imágenes si hace falta."
               : "Toca una unidad para continuar la inspección. Al enviarla a campo pasa a la otra pestaña."}
             {isSuperadmin(user) ? " Las archivadas se ven en rojo y se pueden desarchivar." : ""}
           </p>
@@ -1952,7 +2103,7 @@ export default function Recepcion() {
           <div className="tablewrap recv-table">
             <table className="data">
               <thead>
-                <tr><th>ISO</th><th>Tipo</th><th>Condición</th><th>Depósito</th><th>Plaza Odoo</th><th>Origen</th><th>Registró</th><th>Motivo pendiente</th></tr>
+                <tr><th>ISO</th><th>Tipo</th><th>Condición</th><th>Depósito</th><th>Plaza Odoo</th><th>Origen</th><th>Registró</th><th>{listTab === "cliente" ? "Por qué no está en pendientes" : "Motivo pendiente"}</th></tr>
               </thead>
               <tbody>
                 {pagePending.map((u) => (
@@ -1963,7 +2114,7 @@ export default function Recepcion() {
                           <b>{u.iso}</b>
                           {u.archived && isSuperadmin(user) ? (
                             <button type="button" className="btn-ghost" onClick={(e) => { e.stopPropagation(); unarchiveUnit(u.iso); }}>Desarchivar</button>
-                          ) : (
+                          ) : listTab === "cliente" ? null : (
                             <ArchiveIconBtn onClick={() => setArchiving(u.iso)} />
                           )}
                           <OriginBadges u={u} />
@@ -2032,7 +2183,7 @@ export default function Recepcion() {
         </>
       ) : (
         <p style={{ color: "#2f9e44", fontWeight: 700 }}>
-          {listTab === "campo" ? "Todavía no hay unidades enviadas a campo." : "✓ No hay contenedores pendientes de enviar a campo."}
+          {listTab === "campo" ? "Todavía no hay unidades enviadas a campo." : listTab === "cliente" ? "Ninguna serie asimilada tiene como último movimiento una salida." : "✓ No hay contenedores pendientes de enviar a campo."}
         </p>
       )}
       {archiving ? (

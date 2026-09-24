@@ -109,11 +109,11 @@ describe("applyOdooEvent", () => {
     expect(r).toMatchObject({ action: "record", reason: "nota de serie" });
   });
 
-  it("sale_state e invoice_posted se registran (Q7 / J5)", () => {
-    const r = applyOdooEvent({ event: { event: "sale_state", payload: { state: "sale" } } });
-    expect(r.action).toBe("record");
+  it("sale_state e invoice_posted refrescan el expediente de esa serie", () => {
+    const r = applyOdooEvent({ event: { event: "sale_state", iso: "MSKU073435-5", payload: { state: "sale" } } });
+    expect(r.action).toBe("refresh");
     const inv = applyOdooEvent({ event: { event: "invoice_posted", payload: { move_type: "out_invoice" } } });
-    expect(inv.action).toBe("record");
+    expect(inv.action).toBe("refresh");
   });
 });
 

@@ -457,6 +457,9 @@ tr.iso-review-row:hover { background: #ffe3e3; }
 .evo-chip.src-prev { background: #f1f3f5; }
 .evo-chip.not-applied { opacity: .55; border-style: dashed; }
 .odoo-doc-card { margin: 0 0 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: #f8f9fb; }
+.dispatch-exp { margin: 14px 0 18px; display: grid; gap: 12px; }
+.dispatch-exp h4 { margin: 0; }
+.dispatch-exp table { width: 100%; }
 .odoo-doc-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 8px; }
 .odoo-doc-head b { color: var(--navy); }
 .odoo-doc-pending { margin: 0 0 10px; padding: 8px 10px; border-radius: 6px; background: #fff4e6; border: 1px solid #e8590c; color: #d9480f; font-size: 12px; font-weight: 700; white-space: normal; }

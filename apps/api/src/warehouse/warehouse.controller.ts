@@ -41,6 +41,12 @@ export class WarehouseController {
     return this.warehouse.rentalReturns();
   }
 
+  @Get("at-customer")
+  @Roles("admin", "coordinador")
+  atCustomer(@CurrentUser() user: AuthUser) {
+    return this.warehouse.atCustomer(user);
+  }
+
   @Get("pending")
   pending(@CurrentUser() user: AuthUser) {
     return this.warehouse.pending(user);
@@ -101,6 +107,12 @@ export class WarehouseController {
     return this.warehouse.intake(body, user, req.ip);
   }
 
+  @Get("units/:iso/expediente")
+  @Roles("coordinador")
+  dispatchExpediente(@Param("iso") iso: string) {
+    return this.warehouse.dispatchExpediente(iso);
+  }
+
   @Get("units/:iso")
   getUnit(@Param("iso") iso: string, @CurrentUser() user: AuthUser) {
     return this.warehouse.getUnit(iso, {
@@ -156,6 +168,17 @@ export class WarehouseController {
     @Req() req: Request,
   ) {
     return this.warehouse.setUnitRating(iso, body, user, req.ip);
+  }
+
+  @Post("units/:iso/change-type")
+  @Roles("admin", "coordinador")
+  changeType(
+    @Param("iso") iso: string,
+    @Body() body: { type?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.changeType(iso, body?.type || "", user, req.ip);
   }
 
   @Post("units/:iso/migrate-depot")

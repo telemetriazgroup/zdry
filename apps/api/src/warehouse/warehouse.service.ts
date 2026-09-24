@@ -34,6 +34,8 @@ import {
   zgrouPatioCodes,
 } from "../domain/odoo-warehouse";
 import { ensureOperationalDepots } from "../odoo-import/depot-map.store";
+import { ExpedienteStore } from "../odoo-events/expediente.store";
+import { toDispatchExpediente } from "../domain/odoo-doc-present";
 import {
   extForInspectionMime,
   MAX_INSPECTION_PHOTO_BYTES,
@@ -67,7 +69,6 @@ import { PHOTO_STATUS_ACTIVE, PHOTO_STATUS_REJECTED } from "../domain/catalog-me
 import { OdooClient } from "../odoo/odoo.client";
 import { limaDayRange, listOdooLotNotes } from "../odoo/odoo-lot-photos";
 import { listOrCacheOdooPhotos, openOrCacheOdooPhoto } from "../odoo-import/odoo-photo-cache.store";
-import { ExpedienteStore } from "../odoo-events/expediente.store";
 import { ODOO_LOT_SELECT_FALLBACK, receptionOwnedPatch } from "../domain/odoo-lot-map";
 import { OdooImportService } from "../odoo-import/odoo-import.service";
 import { toOdooRefJpeg } from "../domain/odoo-ref-jpeg";
@@ -285,6 +286,57 @@ export class WarehouseService {
     return this.receptionRows(user, true);
   }
 
+  /** Asimiladas cuyo último movimiento es una salida. No están en pendientes ni en el catálogo. */
+  async atCustomer(user?: AuthUser) {
+    const live = await this.prisma.liveContainers();
+    const seeArchived = isSuperadmin(user?.role);
+    const [types, categories, rows] = await Promise.all([
+      this.prisma.containerType.findMany(),
+      this.prisma.category.findMany(),
+      this.prisma.container.findMany({
+        where: {
+          status: "Vendido",
+          intakeOrigin: "odoo",
+          ...(seeArchived ? (live.demo === false ? { demo: false as const } : {}) : live),
+        },
+        include: { depot: true, photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { id: true } } },
+        orderBy: { updatedAt: "desc" },
+      }),
+    ]);
+    const typeMap = Object.fromEntries(types.map((t) => [t.code, t]));
+    const catMap = Object.fromEntries(categories.map((c) => [c.code, c]));
+    return rows.map((c) => ({
+      iso: c.iso,
+      type: c.type,
+      typeLabel: typeMap[c.type]?.label || c.type,
+      cat: c.cat,
+      catLabel: catMap[c.cat]?.label || c.cat,
+      catColor: catMap[c.cat]?.color || "#495057",
+      depotId: c.depotId,
+      depotName: c.depot.name,
+      intakeType: c.intakeType,
+      intakeLabel: intakeTypeLabel(c.intakeType),
+      intakeOrigin: c.intakeOrigin,
+      isoException: c.isoException,
+      odooLocation: c.odooLocation,
+      odooWarehouse: c.odooWarehouse || warehouseFromLocation(c.odooLocation),
+      odooWarehouseLabel: warehouseLabel(c.odooWarehouse || warehouseFromLocation(c.odooLocation)),
+      needsPatioChoice: false,
+      depotCode: c.depot.code,
+      status: c.status,
+      registeredByName: c.registeredByName || "—",
+      createdAt: c.createdAt,
+      campoEnabledAt: c.campoEnabledAt,
+      campoEnabledByName: c.campoEnabledByName || "",
+      waitingCampo: false,
+      archived: !!c.archivedAt,
+      archiveReason: c.archiveReason || "",
+      archivedByName: c.archivedByName || "",
+      archivedAt: c.archivedAt,
+      missing: ["Salida a cliente. No está en pendientes ni en el catálogo."],
+    }));
+  }
+
   private async receptionRows(user: AuthUser | undefined, sent: boolean) {
     const live = await this.prisma.liveContainers();
     const seeArchived = isSuperadmin(user?.role);
@@ -347,6 +399,13 @@ export class WarehouseService {
         };
       })
       .filter((x): x is NonNullable<typeof x> => !!x);
+  }
+
+  async dispatchExpediente(iso: string) {
+    const row = await this.prisma.container.findUnique({ where: { iso }, select: { iso: true } });
+    if (!row) throw new NotFoundException("Unidad no encontrada.");
+    const presented = await this.expediente.present(row.iso);
+    return toDispatchExpediente(presented);
   }
 
   async getUnit(iso: string, opts: { hideOdoo?: boolean; hideOdooIds?: boolean; hideRates?: boolean; includeArchive?: boolean } = {}) {
@@ -1167,6 +1226,34 @@ export class WarehouseService {
       entityId: c.iso,
       before: { depotId: c.depotId, depotName: c.depot.name },
       after: { depotId: depot.id, depotName: depot.name },
+      ip,
+    });
+    return this.presentFor(c.iso, user);
+  }
+
+  async changeType(iso: string, typeCode: string, user: AuthUser, ip?: string) {
+    if (user.role === "almacen") {
+      throw new ForbiddenException("Solo el coordinador o el administrador cambian el tipo.");
+    }
+    const c = await this.loadUnit(iso);
+    const typeRow = await this.prisma.containerType.findUnique({ where: { code: typeCode || "" } });
+    if (!typeRow || typeRow.archivedAt) throw new BadRequestException("Elige un tipo disponible.");
+    if (typeRow.code === c.type) throw new BadRequestException("La unidad ya es de ese tipo.");
+    await this.prisma.container.update({ where: { iso: c.iso }, data: { type: typeRow.code } });
+    await this.prisma.containerHistory.create({
+      data: {
+        iso: c.iso,
+        type: "Tipo",
+        detail: `Tipo cambiado de ${c.type} a ${typeRow.code} por ${user.name}. No cambia el producto en Odoo.`,
+      },
+    });
+    await this.audit.log({
+      user,
+      action: "change_type",
+      entity: "Container",
+      entityId: c.iso,
+      before: { type: c.type },
+      after: { type: typeRow.code },
       ip,
     });
     return this.presentFor(c.iso, user);

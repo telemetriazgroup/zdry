@@ -204,3 +204,83 @@ export function presentOdooDocument(input: {
     isos,
   };
 }
+
+const DISPATCH_KINDS = new Set(["sale", "repair", "picking_out", "transfer", "picking_in"]);
+const MONEY_LABEL = /precio|total|importe|monto|costo|tarifa|fob|igv|descuento/i;
+
+function hideMoney(label: string, value: string) {
+  if (MONEY_LABEL.test(label)) return true;
+  return /USD|US\$|S\/\s*\d/i.test(value);
+}
+
+function stripMoneyText(value: string) {
+  return value
+    .replace(/USD\s*[\d.,]+/gi, "")
+    .replace(/\s*·\s*·\s*/g, " · ")
+    .replace(/^\s*·\s*|\s*·\s*$/g, "")
+    .trim();
+}
+
+export type DispatchExpediente = {
+  iso: string;
+  sale: Array<{ id: string; title: string; rows: Array<{ label: string; value: string }> }>;
+  repairs: Array<{ id: string; title: string; rows: Array<{ label: string; value: string }> }>;
+  dispatch: Array<{ id: string; title: string; rows: Array<{ label: string; value: string }> }>;
+  trace: Array<{ kind: string; name: string; date: string; from: string; to: string; state: string }>;
+};
+
+function dispatchCard(doc: { current?: { id?: string; name?: string }; view?: OdooDocView }) {
+  const view = doc.view;
+  const stateLabel: Record<string, string> = {
+    sale: "Orden de venta",
+    draft: "Cotización",
+    sent: "Cotización enviada",
+    done: "Hecho",
+    cancel: "Cancelado",
+    assigned: "Reservado",
+  };
+  const rows = (view?.rows || [])
+    .filter((r) => !hideMoney(r.label, r.value))
+    .map((r) => ({
+      label: r.label === "Origen (OC/MO)" ? "Referencia" : r.label,
+      value: r.label === "Estado" ? stateLabel[r.value] || stripMoneyText(r.value) : stripMoneyText(r.value),
+    }))
+    .filter((r) => r.value);
+  return {
+    id: String(doc.current?.id || view?.title || ""),
+    title: stripMoneyText(view?.title || doc.current?.name || ""),
+    rows,
+  };
+}
+
+function rowValue(rows: Array<{ label: string; value: string }>, label: string) {
+  return rows.find((r) => r.label === label)?.value || "";
+}
+
+/** Vista de despacho: venta sin precio, trazabilidad, reparaciones y salida. Sin OC, factura ni costos. */
+export function toDispatchExpediente(input: {
+  isoNormalized: string;
+  documents?: Array<{ current?: { id?: string; kind?: string; name?: string }; view?: OdooDocView }>;
+}): DispatchExpediente {
+  const cards = (input.documents || [])
+    .filter((d) => DISPATCH_KINDS.has(String(d.view?.kind || d.current?.kind || "")))
+    .map((d) => ({ kind: String(d.view?.kind || d.current?.kind), card: dispatchCard(d) }));
+  const trace = cards
+    .filter((d) => d.kind !== "sale")
+    .map((d) => ({
+      kind: d.kind,
+      name: d.card.title,
+      date: rowValue(d.card.rows, "Fecha"),
+      from: rowValue(d.card.rows, "Desde"),
+      to: rowValue(d.card.rows, "Hacia"),
+      state: rowValue(d.card.rows, "Estado"),
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  return {
+    iso: input.isoNormalized,
+    sale: cards.filter((d) => d.kind === "sale").map((d) => d.card),
+    repairs: cards.filter((d) => d.kind === "repair").map((d) => d.card),
+    dispatch: cards.filter((d) => d.kind === "picking_out").map((d) => d.card),
+    trace,
+  };
+}

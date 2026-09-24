@@ -161,7 +161,9 @@ export function dossierKindForMove(m: LotMoveFact): LotDocKind {
 }
 
 function moveStamp(m: LotMoveFact): number {
-  const t = Date.parse(String(m.date || ""));
+  const raw = String(m.date || "").trim();
+  if (!raw) return 0;
+  const t = Date.parse(raw.includes("T") ? raw : raw.replace(" ", "T"));
   return Number.isFinite(t) ? t : 0;
 }
 

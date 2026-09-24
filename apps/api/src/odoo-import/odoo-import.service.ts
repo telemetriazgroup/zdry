@@ -965,9 +965,6 @@ export class OdooImportService {
     const cand = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
     if (!cand) throw new NotFoundException("Candidato no encontrado.");
     await this.expediente.backfillCandidate(cand);
-    if (cand.odooLotId && !this.runId && this.expedienteJob.status !== "running") {
-      await this.refreshLotCases([cand.odooLotId]).catch(() => undefined);
-    }
     if (opts.refresh || !(await this.notesAlreadyFetched(cand))) {
       await this.pullOdooNotes(cand).catch(() => undefined);
     }
@@ -1164,6 +1161,7 @@ export class OdooImportService {
     await this.attachFabricationLineage(ids);
     await this.hydrateDossiers(ids);
     await this.hydrateMoCosts(ids);
+    await this.refreshLotCases(ids);
     return { refreshed: ids.length };
   }
 
@@ -2949,6 +2947,24 @@ export class OdooImportService {
           iso: row.iso,
           type: "Salida Odoo",
           detail: `Salida ${avail.pickingName || "OUT"} hecha${avail.destName ? ` hacia ${avail.destName}` : ""}. Ya no se publica ni queda en recepción.`,
+        },
+      });
+      return;
+    }
+    if (avail.availability === "stock" && row.status === "Vendido" && row.commercialStatus === "vendido") {
+      await this.prisma.container.update({
+        where,
+        data: {
+          status: row.campoEnabledAt ? "Disponible" : "Pendiente de ingreso",
+          commercialStatus: "disponible",
+          gateOut: false,
+        },
+      });
+      await this.prisma.containerHistory.create({
+        data: {
+          iso: row.iso,
+          type: "Retorno Odoo",
+          detail: "Volvió a existencias. Sale de Venta / en cliente y puede quedar otra vez en pendientes.",
         },
       });
       return;
