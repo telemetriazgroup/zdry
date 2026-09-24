@@ -35,7 +35,7 @@ export default function Home() {
     api("/dashboard")
       .then(setDash)
       .catch((e) => setError(e.message || "No se pudo cargar el dashboard."));
-    if (hasRole(user, "admin", "compras")) {
+    if (hasRole(user, "admin", "compras", "coordinador")) {
       api("/purchases/badges")
         .then((b) => setHits(Array.isArray(b.hits) ? b.hits : []))
         .catch(() => setHits([]));
@@ -47,7 +47,7 @@ export default function Home() {
   const series = dash?.series;
   const pendingValue = dash?.pendingValue;
   const odooChanges = dash?.odooChanges;
-  const canConciliar = hasRole(user, "superadmin", "admin", "compras");
+  const canConciliar = hasRole(user, "superadmin", "admin", "compras", "coordinador");
 
   return (
     <div className="home-dashboard">
@@ -206,7 +206,7 @@ export default function Home() {
         <div className="panel">
           <h3>Reentregas sin OC / sin valor</h3>
           <p className="section-sub">
-            Ingresos por reentrega (u OC pendiente) que aún no tienen proveedor ni valor de referencia. Hay que conciliarlos con una OC.
+            Reentregas pendientes de match. No se publican en el catálogo hasta conciliar la orden de compra: sin OC no hay precio.
           </p>
           <div className="tablewrap">
             <table className="data">

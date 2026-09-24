@@ -263,9 +263,17 @@ export default function CatalogMedia() {
     setPublishBusy(true);
     setError("");
     try {
-      const out = await api("/catalog-media/publish-batch", { method: "POST", body: { isos: pending.map((r) => r.iso) } });
+      const ready = pending.filter((r) => !r.awaitingReconcile);
+      const heldLocal = pending.length - ready.length;
+      if (!ready.length) {
+        setError("Las seleccionadas son reentregas sin conciliar. No se publican hasta el match con una orden de compra.");
+        return;
+      }
+      const out = await api("/catalog-media/publish-batch", { method: "POST", body: { isos: ready.map((r) => r.iso) } });
       const skip = out.skipped?.length ? ` ${out.skipped.length} sin foto o no encontradas.` : "";
-      setMsg(`Publicadas ${out.published ?? 0} de la selección.${out.already ? ` ${out.already} ya estaban visibles.` : ""}${skip}`);
+      const held = (out.blocked?.length || 0) + heldLocal;
+      const heldMsg = held ? ` ${held} reentrega(s) sin conciliar no se publicaron.` : "";
+      setMsg(`Publicadas ${out.published ?? 0} de la selección.${out.already ? ` ${out.already} ya estaban visibles.` : ""}${skip}${heldMsg}`);
       setPicked(new Set());
       loadList();
       if (iso && pending.some((r) => r.iso === iso)) {
@@ -296,6 +304,11 @@ export default function CatalogMedia() {
 
   async function publishIso(nextIso, photoCount, fromList = false) {
     if (photoCount < 1) return;
+    const row = rows.find((r) => r.iso === nextIso);
+    if (row?.awaitingReconcile || (iso === nextIso && unit?.awaitingReconcile)) {
+      setError("Reentrega sin conciliar: no se publica en el catálogo hasta el match con una orden de compra. Sin OC no hay precio.");
+      return;
+    }
     setError("");
     if (fromList) setListBusy(nextIso);
     try {
@@ -683,8 +696,8 @@ export default function CatalogMedia() {
                         <button
                           className="btn-primary"
                           type="button"
-                          disabled={r.photoCount < 1 || listBusy === r.iso}
-                          title={r.photoCount < 1 ? "Carga al menos una foto para publicar" : "Publicar en catálogo"}
+                          disabled={r.photoCount < 1 || r.awaitingReconcile || listBusy === r.iso}
+                          title={r.awaitingReconcile ? "Reentrega sin conciliar: no se publica hasta el match con la OC" : r.photoCount < 1 ? "Carga al menos una foto para publicar" : "Publicar en catálogo"}
                           onClick={() => publishIso(r.iso, r.photoCount, true)}
                         >
                           Publicar
@@ -886,7 +899,10 @@ export default function CatalogMedia() {
 
             {canApprove ? (
               <div className="action-row" style={{ marginTop: 16 }}>
-                <button className="btn-primary" type="button" onClick={publish} disabled={photoCount < 1} title={photoCount < 1 ? "Carga al menos una foto para publicar" : ""}>
+                {unit.awaitingReconcile ? (
+                  <p className="section-sub">Reentrega sin conciliar. No se publica hasta el match con una orden de compra: sin OC no hay precio.</p>
+                ) : null}
+                <button className="btn-primary" type="button" onClick={publish} disabled={photoCount < 1 || unit.awaitingReconcile} title={unit.awaitingReconcile ? "Reentrega sin conciliar: no se publica hasta el match con la OC" : photoCount < 1 ? "Carga al menos una foto para publicar" : ""}>
                   Publicar en catálogo
                 </button>
                 <button className="btn-ghost" type="button" onClick={hide} disabled={unit.mediaStatus !== "aprobado"}>Ocultar del catálogo</button>

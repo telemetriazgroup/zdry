@@ -1163,6 +1163,12 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .side-link:hover { background: rgba(255,255,255,.08); color: #fff; }
 .side-link.active-link { background: rgba(255,255,255,.14); color: #fff; }
 .side-link svg { flex-shrink: 0; }
+.nav-alert {
+  margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  background: #e8590c; color: #fff; font-size: 11px; font-weight: 800; line-height: 18px; text-align: center;
+}
+.app-frame.sidebar-collapsed .nav-alert { position: absolute; top: 4px; right: 6px; margin: 0; }
+.side-link { position: relative; }
 .sidebar-foot {
   padding: 10px 8px 14px;
   border-top: 1px solid rgba(255,255,255,.1);

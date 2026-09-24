@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ROLE_DESC, ROLE_LABELS, useAuth } from "../auth.jsx";
-import { publicUrl } from "../api.js";
+import { api, publicUrl } from "../api.js";
 import { NavIcon, iconFor } from "../nav-icons.jsx";
 import Home from "./Home.jsx";
 import Inventory from "./Inventory.jsx";
@@ -32,6 +32,7 @@ const SIDEBAR_KEY = "zdry.sidebarCollapsed";
 function allowed(nav, pathname, role) {
   if (role === "superadmin" && pathname.startsWith("/app")) return true;
   if ((role === "admin" || role === "compras") && pathname.startsWith("/app/compras")) return true;
+  if (role === "coordinador" && pathname.startsWith("/app/compras/conciliar")) return true;
   if ((role === "admin" || role === "coordinador") && pathname.startsWith("/app/almacen/recepcion")) return true;
   if ((role === "admin" || role === "coordinador") && pathname.startsWith("/app/almacen/visitas")) return true;
   if ((role === "admin" || role === "almacen" || role === "coordinador") && (pathname.startsWith("/app/almacen/patio") || pathname.startsWith("/app/almacen/campo"))) return true;
@@ -44,6 +45,7 @@ export default function Shell() {
   const navigate = useNavigate();
   const loc = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [pendingNotice, setPendingNotice] = useState({ count: 0, isos: [] });
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return localStorage.getItem(SIDEBAR_KEY) === "1";
@@ -55,6 +57,23 @@ export default function Shell() {
   useEffect(() => {
     setMobileOpen(false);
   }, [loc.pathname]);
+
+  useEffect(() => {
+    if (user?.role !== "coordinador") return;
+    let cancel = false;
+    api("/purchases/badges")
+      .then((b) => {
+        if (cancel) return;
+        const pending = Array.isArray(b.pending) ? b.pending : [];
+        setPendingNotice({ count: Number(b.reconcile) || pending.length, isos: pending.map((p) => p.iso) });
+      })
+      .catch(() => {
+        if (!cancel) setPendingNotice({ count: 0, isos: [] });
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [user?.role, loc.pathname]);
 
   useEffect(() => {
     document.body.classList.toggle("nav-locked", mobileOpen);
@@ -91,6 +110,9 @@ export default function Shell() {
     >
       <NavIcon name={item.icon} />
       <span className="nav-label">{item.label}</span>
+      {item.to === "/app/compras/conciliar" && pendingNotice.count > 0 ? (
+        <span className="nav-alert" title={`${pendingNotice.count} reentregas sin conciliar`}>{pendingNotice.count}</span>
+      ) : null}
     </NavLink>
   ));
 
@@ -152,6 +174,15 @@ export default function Shell() {
 
         <div className="page">
           <div className="role-desc">{ROLE_DESC[user.role]}</div>
+          {user.role === "coordinador" && pendingNotice.count > 0 && !loc.pathname.startsWith("/app/compras/conciliar") ? (
+            <div className="reconcile-banner">
+              Tienes {pendingNotice.count} reentrega{pendingNotice.count === 1 ? "" : "s"} pendiente{pendingNotice.count === 1 ? "" : "s"} de conciliar.
+              No se publican en el catálogo hasta el match con la orden de compra.
+              {pendingNotice.isos.length ? ` ${pendingNotice.isos.slice(0, 6).join(", ")}${pendingNotice.count > 6 ? "…" : ""}.` : ""}
+              {" "}
+              <Link to="/app/compras/conciliar">Conciliar ingresos</Link>
+            </div>
+          ) : null}
           {odooLink.open && odooLink.status ? (
             <OdooLinkModal
               status={odooLink.status}

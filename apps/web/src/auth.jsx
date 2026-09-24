@@ -31,7 +31,7 @@ export const ROLE_DESC = {
   gerente: "Define reglas de precio y visibilidad. No ve FOB ni C_T.",
   vendedor: "Cotiza, valida comprobantes y confirma asignación. Nunca ve el costo real.",
   compras: "Facturas de compra, conciliar reentrega con OC/IN, deuda Odoo, extras y DAM. Ve costos de adquisición.",
-  coordinador: "Alta de reentrega, visitas de puerta, ficha, imágenes, costos sin monto y varios documentos por unidad. No publica el catálogo ni ve tarifas ni Odoo.",
+  coordinador: "Alta de reentrega, visitas de puerta, ficha, imágenes y conciliación del ingreso de Odoo con la unidad de patio. No publica el catálogo ni ve tarifas.",
   almacen: "Patio de campo: lista de visitas y DRY, fotos, video, diagnóstico y registro de emergencia si el contenedor no está. No ve Odoo ni precios.",
   cliente: "Reserva, negocia descuento con tu comercial y sube el comprobante de pago.",
 };
@@ -88,6 +88,7 @@ export const ROLE_NAV = {
   ],
   coordinador: [
     { to: "/app", label: "Inicio", end: true },
+    { to: "/app/compras/conciliar", label: "Conciliar ingresos" },
     { to: "/app/almacen/recepcion", label: "Recepción" },
     { to: "/app/almacen/visitas", label: "Visitas" },
     { to: "/app/almacen/campo", label: "Patio — campo" },

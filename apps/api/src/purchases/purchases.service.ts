@@ -82,7 +82,7 @@ export class PurchasesService {
       ? { status: "pending" }
       : { status: "pending", invoice: { demo: false } };
     const live = await this.prisma.liveContainers();
-    const [extras, dam, odoo, reconcile] = await Promise.all([
+    const [extras, dam, odoo, reconcile, pendingRows] = await Promise.all([
       this.prisma.pendingExtraCost.count({ where: extrasWhere }),
       this.prisma.container.count({
         where: { intakeType: { in: ["compra", "pendiente_factura"] }, damNumber: null, ...live },
@@ -96,6 +96,12 @@ export class PurchasesService {
           ...live,
         },
       }),
+      this.prisma.container.findMany({
+        where: { ...pendingValuationWhere(), ...live },
+        select: { iso: true, type: true, depot: { select: { name: true } } },
+        orderBy: { createdAt: "desc" },
+        take: 30,
+      }),
     ]);
     const hits = (await this.listReconcile()).proposals
       .filter((p) => p.mode === "auto" || p.mode === "proposal")
@@ -105,7 +111,14 @@ export class PurchasesService {
         odooPoName: p.odooPoName,
         mode: p.mode,
       }));
-    return { extras, dam, odoo, reconcile: Math.max(reconcile, hits.length), hits };
+    return {
+      extras,
+      dam,
+      odoo,
+      reconcile: Math.max(reconcile, hits.length),
+      hits,
+      pending: pendingRows.map((c) => ({ iso: c.iso, type: c.type, depot: c.depot?.name || "—" })),
+    };
   }
 
   async listInvoices() {

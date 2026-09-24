@@ -44,6 +44,18 @@ export function pendingValuationWhere() {
   };
 }
 
+export const UNRECONCILED_PUBLISH_MESSAGE =
+  "Reentrega sin conciliar: no se publica en el catálogo hasta el match con una orden de compra. Sin OC no hay precio.";
+
+export function catalogPublishBlock(c: {
+  odooPoId?: number | null;
+  status?: string | null;
+  invoicePending?: boolean | null;
+  intakeType?: string | null;
+}): string | null {
+  return isPendingValuation(c) ? UNRECONCILED_PUBLISH_MESSAGE : null;
+}
+
 export function isPickingDone(state?: string | null): boolean {
   const s = String(state || "").trim().toLowerCase();
   if (!s) return true;

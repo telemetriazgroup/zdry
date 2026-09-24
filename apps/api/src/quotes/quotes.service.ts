@@ -56,6 +56,7 @@ import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
 import { CATALOG_COMMERCE_KEY, normalizeCatalogCommerce, publicQuotesBlockedMessage } from "../domain/catalog-commerce";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { isOwnSaleStock } from "../domain/iso6346";
+import { isPendingValuation, pendingValuationWhere } from "../domain/odoo-reconcile";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import {
@@ -215,6 +216,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       physicallyReceived: true,
       status: { in: ["Disponible", "Reservado"] },
       mediaStatus: "aprobado",
+      NOT: pendingValuationWhere(),
     };
   }
 
@@ -227,7 +229,8 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       isOwnSaleStock(c.intakeType) &&
       c.physicallyReceived &&
       (c.status === "Disponible" || c.status === "Reservado") &&
-      isMediaApproved(c.mediaStatus)
+      isMediaApproved(c.mediaStatus) &&
+      !isPendingValuation(c)
     );
   }
 

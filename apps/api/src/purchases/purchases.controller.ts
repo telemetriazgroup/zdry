@@ -31,6 +31,7 @@ export class PurchasesController {
   }
 
   @Get("badges")
+  @Roles("admin", "compras", "coordinador")
   badges() {
     return this.purchases.badges();
   }
@@ -51,11 +52,13 @@ export class PurchasesController {
   }
 
   @Get("reconcile")
+  @Roles("admin", "compras", "coordinador")
   reconcile() {
     return this.purchases.listReconcile();
   }
 
   @Post("reconcile")
+  @Roles("admin", "compras", "coordinador")
   confirmReconcile(
     @Body() body: { iso?: string; candidateId?: string; rightId?: string },
     @CurrentUser() user: AuthUser,

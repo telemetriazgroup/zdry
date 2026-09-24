@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { api, apiBlob, apiUpload, ApiError } from "../api.js";
+import { useAuth } from "../auth.jsx";
 import { damFormatOk, parseIso6346 } from "../iso6346.js";
 import {
   PURCHASE_EXTRA_SERVICES,
@@ -50,6 +51,8 @@ function yearOptions() {
 }
 
 export default function Compras() {
+  const { user } = useAuth();
+  const onlyReconcile = user?.role === "coordinador";
   const loc = useLocation();
   const tab = loc.pathname.includes("/extras")
     ? "extras"
@@ -70,8 +73,12 @@ export default function Compras() {
 
   return (
     <>
-      <h2 className="section-title">Compras</h2>
-      <p className="section-sub">Facturas de importación, cola de extras reglada por la logística y DAM antes de despachar.</p>
+      <h2 className="section-title">{onlyReconcile ? "Conciliar ingresos" : "Compras"}</h2>
+      <p className="section-sub">
+        {onlyReconcile
+          ? "Valida el match entre el ingreso que registraste en Odoo y la unidad de patio."
+          : "Facturas de importación, cola de extras reglada por la logística y DAM antes de despachar."}
+      </p>
       {badges.hits?.length ? (
         <div className="reconcile-banner">
           {badges.hits.length} match(es) reentrega ↔ IN/OC listos para validar
@@ -79,19 +86,23 @@ export default function Compras() {
         </div>
       ) : null}
       <div className="subtab-row">
-        <NavLink to="/app/compras/facturas" className={`subtab ${tab === "facturas" ? "active" : ""}`}>Facturas de compra</NavLink>
+        {onlyReconcile ? null : <NavLink to="/app/compras/facturas" className={`subtab ${tab === "facturas" ? "active" : ""}`}>Facturas de compra</NavLink>}
         <NavLink to="/app/compras/conciliar" className={`subtab ${tab === "conciliar" ? "active" : ""}`}>
-          Conciliar <AmberBadge n={badges.reconcile} />
+          Conciliar ingresos <AmberBadge n={badges.reconcile} />
         </NavLink>
-        <NavLink to="/app/compras/odoo" className={`subtab ${tab === "odoo" ? "active" : ""}`}>
-          Deuda Odoo <AmberBadge n={badges.odoo} />
-        </NavLink>
-        <NavLink to="/app/compras/extras" className={`subtab ${tab === "extras" ? "active" : ""}`}>
-          Costos adicionales <AmberBadge n={badges.extras} />
-        </NavLink>
-        <NavLink to="/app/compras/dam" className={`subtab ${tab === "dam" ? "active" : ""}`}>
-          Nacionalización (DAM) <AmberBadge n={badges.dam} />
-        </NavLink>
+        {onlyReconcile ? null : (
+          <>
+            <NavLink to="/app/compras/odoo" className={`subtab ${tab === "odoo" ? "active" : ""}`}>
+              Deuda Odoo <AmberBadge n={badges.odoo} />
+            </NavLink>
+            <NavLink to="/app/compras/extras" className={`subtab ${tab === "extras" ? "active" : ""}`}>
+              Costos adicionales <AmberBadge n={badges.extras} />
+            </NavLink>
+            <NavLink to="/app/compras/dam" className={`subtab ${tab === "dam" ? "active" : ""}`}>
+              Nacionalización (DAM) <AmberBadge n={badges.dam} />
+            </NavLink>
+          </>
+        )}
       </div>
       {tab === "facturas" ? <PurchaseTab onChanged={refreshBadges} /> : null}
       {tab === "conciliar" ? <ReconcileTab onChanged={refreshBadges} /> : null}

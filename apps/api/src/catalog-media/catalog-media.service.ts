@@ -37,6 +37,7 @@ import { OdooLinkService } from "../odoo/odoo-link.service";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import { DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
+import { catalogPublishBlock, isPendingValuation } from "../domain/odoo-reconcile";
 
 const ACTIVE_PHOTOS = { where: { status: PHOTO_STATUS_ACTIVE } };
 export const WATERMARK_KEY = "catalog_watermark";
@@ -176,7 +177,8 @@ export class CatalogMediaService {
         priceList: offer.priceList,
         priceMin: offer.priceMin,
         priceSource: offer.source,
-        canPublish: active.length >= 1,
+        awaitingReconcile: isPendingValuation(c),
+        canPublish: active.length >= 1 && !isPendingValuation(c),
       };
     });
   }
@@ -240,6 +242,7 @@ export class CatalogMediaService {
       odooWarehouse: (await this.odooLinks.viewerLocked()) ? null : c.odooWarehouse,
       odooVendorName: (await this.odooLinks.viewerLocked()) ? null : c.odooVendorName,
       odooLocked: await this.odooLinks.viewerLocked(),
+      awaitingReconcile: isPendingValuation(c),
     };
   }
 
@@ -401,6 +404,8 @@ export class CatalogMediaService {
     });
     if (!c) throw new NotFoundException("Unidad no encontrada.");
     if (c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
+    const blocked = catalogPublishBlock(c);
+    if (blocked) throw new BadRequestException(blocked);
     if (c.photos.length < 1) {
       throw new BadRequestException("Publica al menos una foto de inspección para el catálogo.");
     }
@@ -427,12 +432,21 @@ export class CatalogMediaService {
     let published = 0;
     let already = 0;
     const skipped: string[] = [];
+    const blocked: string[] = [];
     for (const iso of unique) {
       const c = await this.prisma.container.findUnique({
         where: { iso },
         include: { photos: ACTIVE_PHOTOS },
       });
-      if (!c || c.archivedAt || c.photos.length < 1) {
+      if (!c || c.archivedAt) {
+        skipped.push(iso);
+        continue;
+      }
+      if (catalogPublishBlock(c)) {
+        blocked.push(iso);
+        continue;
+      }
+      if (c.photos.length < 1) {
         skipped.push(iso);
         continue;
       }
@@ -459,10 +473,10 @@ export class CatalogMediaService {
       user,
       action: "approve_media",
       entity: "Container",
-      after: { published, already, skipped: skipped.length },
+      after: { published, already, skipped: skipped.length, blocked: blocked.length },
       ip,
     });
-    return { published, already, skipped };
+    return { published, already, skipped, blocked };
   }
 
   async hide(iso: string, user: AuthUser, ip?: string) {
