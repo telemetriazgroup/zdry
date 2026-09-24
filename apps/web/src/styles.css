@@ -374,7 +374,9 @@ table.data td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-s
 .recv-iso.iso-review-input {
   outline: 2px solid #c9720b; background: #fff8f0;
 }
-.recv-iso-title { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 18px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.recv-iso-title { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 18px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: space-between; width: 100%; }
+.recv-iso-main { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.recv-exp-toggle { margin-left: auto; flex: 0 0 auto; }
 .recv-services { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .recv-confirm-bar { margin-top: 14px; }
 .recv-confirm-bar .btn-primary { width: 100%; }

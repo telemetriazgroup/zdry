@@ -253,6 +253,13 @@ function dispatchCard(doc: { current?: { id?: string; name?: string }; view?: Od
   };
 }
 
+function traceStamp(raw: string): number {
+  const value = String(raw || "").trim();
+  if (!value) return Number.MAX_SAFE_INTEGER;
+  const t = Date.parse(value.includes("T") ? value : value.replace(" ", "T"));
+  return Number.isFinite(t) ? t : Number.MAX_SAFE_INTEGER;
+}
+
 function rowValue(rows: Array<{ label: string; value: string }>, label: string) {
   return rows.find((r) => r.label === label)?.value || "";
 }
@@ -275,7 +282,7 @@ export function toDispatchExpediente(input: {
       to: rowValue(d.card.rows, "Hacia"),
       state: rowValue(d.card.rows, "Estado"),
     }))
-    .sort((a, b) => a.date.localeCompare(b.date));
+    .sort((a, b) => traceStamp(a.date) - traceStamp(b.date) || a.name.localeCompare(b.name));
   return {
     iso: input.isoNormalized,
     sale: cards.filter((d) => d.kind === "sale").map((d) => d.card),

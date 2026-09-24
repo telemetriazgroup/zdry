@@ -29,11 +29,19 @@ const TRACE_LABEL = {
   repair: "Reparación",
 };
 
-function DispatchExpediente({ iso }) {
+function traceStamp(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return Number.MAX_SAFE_INTEGER;
+  const t = Date.parse(value.includes("T") ? value : value.replace(" ", "T"));
+  return Number.isFinite(t) ? t : Number.MAX_SAFE_INTEGER;
+}
+
+function DispatchExpediente({ iso, open }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (!open) return undefined;
     let stop = false;
     setData(null);
     setError("");
@@ -41,11 +49,19 @@ function DispatchExpediente({ iso }) {
       .then((d) => { if (!stop) setData(d); })
       .catch((e) => { if (!stop) setError(e.message); });
     return () => { stop = true; };
-  }, [iso]);
+  }, [iso, open]);
+
+  if (!open) return null;
 
   if (error) return <div className="err">{error}</div>;
   if (!data) return <p className="section-sub">Cargando expediente…</p>;
   const empty = !data.sale?.length && !data.repairs?.length && !data.dispatch?.length && !data.trace?.length;
+  const trace = [...(data.trace || [])].sort((a, b) => traceStamp(a.date) - traceStamp(b.date) || String(a.name).localeCompare(String(b.name)));
+  const byDate = (list) => [...(list || [])].sort((a, b) => {
+    const da = (a.rows || []).find((r) => r.label === "Fecha")?.value;
+    const db = (b.rows || []).find((r) => r.label === "Fecha")?.value;
+    return traceStamp(da) - traceStamp(db) || String(a.title).localeCompare(String(b.title));
+  });
   return (
     <div className="dispatch-exp">
       <h4>Expediente</h4>
@@ -54,7 +70,7 @@ function DispatchExpediente({ iso }) {
         <div>
           <b>Venta</b>
           <p className="section-sub">Referencia, sin precio.</p>
-          {data.sale.map((d) => (
+          {byDate(data.sale).map((d) => (
             <div key={d.id} className="odoo-doc-card">
               <div className="odoo-doc-head"><b>{d.title}</b></div>
               {d.rows?.length ? (
@@ -68,13 +84,13 @@ function DispatchExpediente({ iso }) {
           ))}
         </div>
       ) : null}
-      {data.trace?.length ? (
+      {trace.length ? (
         <div>
           <b>Trazabilidad</b>
           <table className="data">
             <thead><tr><th>Fecha</th><th>Movimiento</th><th>Desde</th><th>Hacia</th></tr></thead>
             <tbody>
-              {data.trace.map((t) => (
+              {trace.map((t) => (
                 <tr key={`${t.kind}-${t.name}`}>
                   <td>{t.date || "—"}</td>
                   <td>{TRACE_LABEL[t.kind] || t.kind} · {t.name}</td>
@@ -89,7 +105,7 @@ function DispatchExpediente({ iso }) {
       {data.repairs?.length ? (
         <div>
           <b>Reparaciones</b>
-          {data.repairs.map((d) => (
+          {byDate(data.repairs).map((d) => (
             <div key={d.id} className="odoo-doc-card">
               <div className="odoo-doc-head"><b>{d.title}</b></div>
               {d.rows?.length ? (
@@ -106,7 +122,7 @@ function DispatchExpediente({ iso }) {
       {data.dispatch?.length ? (
         <div>
           <b>Despacho</b>
-          {data.dispatch.map((d) => (
+          {byDate(data.dispatch).map((d) => (
             <div key={d.id} className="odoo-doc-card">
               <div className="odoo-doc-head"><b>{d.title}</b></div>
               {d.rows?.length ? (
@@ -317,6 +333,7 @@ export default function Recepcion() {
   const [listTab, setListTab] = useState("pendientes");
   const [mode, setMode] = useState("bandeja");
   const [inspectIso, setInspectIso] = useState(null);
+  const [expOpen, setExpOpen] = useState(false);
   const [unit, setUnit] = useState(null);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
@@ -406,6 +423,7 @@ export default function Recepcion() {
   }, []);
 
   useEffect(() => {
+    setExpOpen(false);
     if (!inspectIso) {
       setUnit(null);
       setOdooPhotos([]);
@@ -1250,9 +1268,21 @@ export default function Recepcion() {
         <div className="dash-grid recv-inspect">
           <div className="panel">
             <h3 className="recv-iso-title">
-              {unit.iso}{" "}
-              <span className="badge-scope" style={{ background: unit.intakeType === "compra" ? "#2f9e44" : unit.intakeType === "almacenaje_cliente" ? "#495057" : "#c9720b" }}>{unit.intakeLabel}</span>
-              <OriginBadges u={unit} />
+              <span className="recv-iso-main">
+                {unit.iso}{" "}
+                <span className="badge-scope" style={{ background: unit.intakeType === "compra" ? "#2f9e44" : unit.intakeType === "almacenaje_cliente" ? "#495057" : "#c9720b" }}>{unit.intakeLabel}</span>
+                <OriginBadges u={unit} />
+              </span>
+              {user.role === "coordinador" ? (
+                <button
+                  type="button"
+                  className={`recv-exp-toggle ${expOpen ? "btn-primary" : "btn-ghost"}`}
+                  aria-pressed={expOpen}
+                  onClick={() => setExpOpen((v) => !v)}
+                >
+                  Expediente
+                </button>
+              ) : null}
             </h3>
             <p className="recv-who">{whoLine(unit)}</p>
             {unit.isoException ? (
@@ -1270,7 +1300,7 @@ export default function Recepcion() {
                 </div>
               </div>
             ) : null}
-            {user.role === "coordinador" ? <DispatchExpediente iso={unit.iso} /> : null}
+            {user.role === "coordinador" ? <DispatchExpediente iso={unit.iso} open={expOpen} /> : null}
             <p className="section-sub">
               {unit.campoEnabledAt
                 ? `En campo desde ${formatWhen(unit.campoEnabledAt)}${unit.campoEnabledByName ? ` · ${unit.campoEnabledByName}` : ""}.`
