@@ -73,30 +73,39 @@ function ArchiveModal({ iso, onDone, onCancel }) {
   }
 
   return (
-    <div className="overlay open" role="dialog" aria-modal="true" onClick={onCancel}>
+    <div className="overlay open archive-overlay" role="dialog" aria-modal="true" onClick={onCancel}>
       <div className="modal archive-modal" onClick={(e) => e.stopPropagation()}>
-        <h3>Archivar {iso}</h3>
-        <p className="section-sub">Sale de recepción, patio y catálogo. El superusuario sigue viéndola y puede desarchivarla.</p>
-        <label className="archive-choice">
-          <input type="radio" name="archive-kind" checked={kind === "activo"} onChange={() => setKind("activo")} />
-          Activo
-        </label>
-        <label className="archive-choice">
-          <input type="radio" name="archive-kind" checked={kind === "otro"} onChange={() => setKind("otro")} />
-          Otro
-        </label>
-        {kind === "otro" ? (
-          <textarea
-            rows={3}
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            placeholder="Comentario obligatorio"
-          />
-        ) : null}
-        {err ? <div className="err">{err}</div> : null}
-        <div className="action-row">
-          <button className="btn-primary" type="button" disabled={busy} onClick={submit}>Archivar</button>
-          <button className="btn-ghost" type="button" disabled={busy} onClick={onCancel}>Cancelar</button>
+        <div className="archive-modal-head">
+          <p className="archive-kicker">Archivar unidad</p>
+          <h3>{iso}</h3>
+          <p>Sale de recepción, patio y catálogo.</p>
+        </div>
+        <div className="archive-modal-body">
+          <p className="archive-ask">Motivo</p>
+          <div className="archive-options">
+            <button type="button" className={`archive-option ${kind === "activo" ? "on" : ""}`} onClick={() => setKind("activo")}>
+              <b>Activo</b>
+              <span>La unidad es un activo.</span>
+            </button>
+            <button type="button" className={`archive-option ${kind === "otro" ? "on" : ""}`} onClick={() => setKind("otro")}>
+              <b>Otro</b>
+              <span>Escribe el motivo. El comentario es obligatorio.</span>
+            </button>
+          </div>
+          {kind === "otro" ? (
+            <textarea
+              rows={4}
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder="Comentario"
+              aria-label="Comentario del archivo"
+            />
+          ) : null}
+          {err ? <div className="err">{err}</div> : null}
+          <div className="archive-actions">
+            <button className="btn-primary" type="button" disabled={busy} onClick={submit}>{busy ? "Archivando…" : "Archivar"}</button>
+            <button className="btn-ghost" type="button" disabled={busy} onClick={onCancel}>Cancelar</button>
+          </div>
         </div>
       </div>
     </div>
