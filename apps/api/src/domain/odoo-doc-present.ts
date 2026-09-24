@@ -117,12 +117,15 @@ export function presentOdooDocument(input: {
     add("Total", data.amountTotal ?? data.amount_total);
     add("Precio unitario DRY", data.unitPrice ?? data.price_unit);
     add("Cant. recibida", data.qtyReceived ?? data.qty_received, false);
-  } else if (kind === "picking_in" || kind === "picking_out") {
-    add("Tipo", data.pickingType || (kind === "picking_in" ? "Entrada" : "Salida"));
+  } else if (kind === "picking_in" || kind === "picking_out" || kind === "transfer" || kind === "repair" || kind === "sale") {
+    add("Tipo", data.pickingType || (kind === "picking_in" ? "Entrada" : kind === "picking_out" ? "Salida" : kind === "repair" ? "Reparación" : kind === "sale" ? "Venta" : "Traslado"));
+    add("Cliente / destino", data.partner);
+    add("Estado", data.state);
     add("Origen (OC/MO)", data.origin);
     add("Fecha", data.date);
     add("Desde", data.locationSrc);
     add("Hacia", data.locationDest);
+    add("Total", data.amountTotal ?? data.amount_total);
   } else if (kind === "bill") {
     add("Proveedor", data.partner);
     add("Estado", data.state);

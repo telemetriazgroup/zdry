@@ -18,6 +18,7 @@ export type LotMoveFact = {
   destUsage?: string | null;
   srcName?: string | null;
   destName?: string | null;
+  date?: string | null;
 };
 
 export type LotOrigin = {
@@ -137,6 +138,61 @@ export function classifyLotOrigin(moves: LotMoveFact[] | null | undefined): LotO
   }
 
   return { ...EMPTY_ORIGIN };
+}
+
+export type LotDocKind = "picking_in" | "picking_out" | "transfer" | "repair" | "sale";
+export type LotAvailability = "stock" | "reserved" | "left";
+
+function moveText(m: LotMoveFact): string {
+  return `${m.pickingName || ""} ${m.reference || ""} ${m.origin || ""}`;
+}
+
+export function isRepairMove(m: LotMoveFact): boolean {
+  return /\/RO\//i.test(moveText(m));
+}
+
+export function dossierKindForMove(m: LotMoveFact): LotDocKind {
+  if (isRepairMove(m)) return "repair";
+  if (m.destUsage === "customer" || (m.pickingCode === "outgoing" && m.destUsage !== "internal" && m.destUsage !== "supplier")) {
+    return "picking_out";
+  }
+  if (m.pickingCode === "incoming" || m.srcUsage === "supplier") return "picking_in";
+  return "transfer";
+}
+
+function moveStamp(m: LotMoveFact): number {
+  const t = Date.parse(String(m.date || ""));
+  return Number.isFinite(t) ? t : 0;
+}
+
+function isOpen(m: LotMoveFact): boolean {
+  const state = String(m.pickingState || m.state || "").toLowerCase();
+  return state !== "done" && state !== "cancel" && state !== "cancelled";
+}
+
+/** La salida a cliente más reciente cierra el equipo. Un retorno posterior lo vuelve a stock. */
+export function lotAvailability(moves: LotMoveFact[] | null | undefined): {
+  availability: LotAvailability;
+  pickingName: string | null;
+  destName: string | null;
+} {
+  const list = (Array.isArray(moves) ? moves : []).filter((m) => m.pickingName || m.reference);
+  const departures = list.filter((m) => dossierKindForMove(m) === "picking_out");
+  const done = departures.filter(isDone).sort((a, b) => moveStamp(b) - moveStamp(a));
+  const latestOut = done[0];
+  if (latestOut) {
+    const back = list
+      .filter((m) => isDone(m) && m.srcUsage === "customer" && (m.destUsage === "internal" || m.pickingCode === "incoming"))
+      .sort((a, b) => moveStamp(b) - moveStamp(a))[0];
+    if (!back || moveStamp(back) <= moveStamp(latestOut)) {
+      return { availability: "left", pickingName: latestOut.pickingName || latestOut.reference || null, destName: latestOut.destName || null };
+    }
+  }
+  const open = departures.filter(isOpen).sort((a, b) => moveStamp(b) - moveStamp(a))[0];
+  if (open) {
+    return { availability: "reserved", pickingName: open.pickingName || open.reference || null, destName: open.destName || null };
+  }
+  return { availability: "stock", pickingName: null, destName: null };
 }
 
 export function inferKindFallback(kind: string | null | undefined, poName?: string | null): OdooIntakeKind {

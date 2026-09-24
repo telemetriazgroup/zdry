@@ -150,6 +150,16 @@ export class OdooImportController {
     return this.svc.setWatchMode(body?.mode === "auto" ? "auto" : "manual", user, req.ip);
   }
 
+  @Get("expedientes/status")
+  expedienteStatus() {
+    return this.svc.expedienteRefreshState();
+  }
+
+  @Post("expedientes/refresh")
+  refreshExpedientes() {
+    return this.svc.startExpedienteRefresh();
+  }
+
   @Post("sync")
   sync(@CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.svc.sync(user, req.ip);

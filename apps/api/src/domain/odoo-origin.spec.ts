@@ -1,7 +1,9 @@
 import {
   assimilateCostPlan,
   classifyLotOrigin,
+  dossierKindForMove,
   isDryContainerProduct,
+  lotAvailability,
   moNameFromText,
   originBadgeLabel,
   splitOdooProductLabel,
@@ -251,6 +253,62 @@ describe("moNameFromText / splitOdooProductLabel", () => {
       code: "CDD40H0058",
       name: "CONTENEDOR DRY 40 HC NUEVO",
     });
+  });
+});
+
+describe("lotAvailability", () => {
+  const msku: LotMoveFact[] = [
+    {
+      state: "done",
+      pickingState: "done",
+      pickingCode: "incoming",
+      pickingName: "ZGROU/IN/07808",
+      srcUsage: "supplier",
+      destUsage: "internal",
+      date: "2026-09-24 11:20:57",
+    },
+    {
+      state: "done",
+      pickingState: "done",
+      pickingCode: "outgoing",
+      pickingName: "ZGROU/OUT/08515",
+      origin: "10020263940",
+      srcUsage: "internal",
+      destUsage: "customer",
+      destName: "FLOWEN S.A.C.",
+      date: "2026-09-24 11:32:49",
+    },
+    {
+      state: "done",
+      pickingState: "done",
+      pickingName: "ZGROU/RO/01560",
+      srcUsage: "internal",
+      destUsage: "internal",
+      date: "2026-09-24 16:23:13",
+    },
+  ];
+
+  it("una OUT hecha a cliente cierra la serie aunque haya una reparación posterior", () => {
+    expect(dossierKindForMove(msku[1])).toBe("picking_out");
+    expect(dossierKindForMove(msku[2])).toBe("repair");
+    expect(lotAvailability(msku)).toMatchObject({ availability: "left", pickingName: "ZGROU/OUT/08515" });
+  });
+
+  it("una OUT asignada reserva y no da por vendido", () => {
+    expect(lotAvailability(aphuMoves).availability).toBe("reserved");
+  });
+
+  it("un retorno posterior a existencias vuelve a stock", () => {
+    const back: LotMoveFact = {
+      state: "done",
+      pickingState: "done",
+      pickingCode: "incoming",
+      pickingName: "ZGROU/IN/09999",
+      srcUsage: "customer",
+      destUsage: "internal",
+      date: "2026-09-25 09:00:00",
+    };
+    expect(lotAvailability([...msku, back]).availability).toBe("stock");
   });
 });
 

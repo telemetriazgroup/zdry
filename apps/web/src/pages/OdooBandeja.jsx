@@ -61,6 +61,7 @@ export default function OdooBandeja() {
   const [logTo, setLogTo] = useState("");
   const [openLogId, setOpenLogId] = useState("");
   const [watch, setWatch] = useState({ mode: "manual", lastRunAt: null, lastMessage: "", lastNew: 0, lastAssimilated: 0 });
+  const [expediente, setExpediente] = useState({ status: "idle", current: 0, total: 0, left: 0, message: "" });
 
   async function load() {
     const list = await api("/odoo-import/candidates");
@@ -139,6 +140,34 @@ export default function OdooBandeja() {
     const t = setInterval(tick, 15000);
     return () => clearInterval(t);
   }, [watch.mode, logLevel, logTake, logFrom, logTo]);
+
+  async function refreshExpedientes() {
+    setBusy("Actualizando expedientes");
+    setError("");
+    setMsg("");
+    try {
+      const out = await api("/odoo-import/expedientes/refresh", { method: "POST" });
+      if (!out?.running) {
+        setError(out?.message || "No se inició la actualización.");
+        return;
+      }
+      for (let i = 0; i < 3600; i += 1) {
+        const p = await api("/odoo-import/expedientes/status");
+        setExpediente(p);
+        if (!p || p.status !== "running") {
+          if (p?.status === "error") setError(p.message || "No se pudieron actualizar los expedientes.");
+          else setMsg(p?.message || out.message || "Expedientes al día.");
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy("");
+    }
+  }
 
   async function setWatchMode(mode) {
     setError("");
@@ -373,6 +402,34 @@ export default function OdooBandeja() {
             : "Como ahora: el stock se recorre solo cuando pulsas Buscar en Odoo."}
           {watch.lastRunAt ? ` Última revisión: ${new Date(watch.lastRunAt).toLocaleString("es-PE")}. ${watch.lastMessage || ""}` : ""}
         </p>
+      </div>
+
+      <div className="odoo-watch">
+        <b>Expediente por serie</b>
+        <div className="action-row">
+          <button className="btn-primary" type="button" disabled={!!busy || progress?.status === "running"} onClick={refreshExpedientes}>
+            Actualizar expedientes
+          </button>
+        </div>
+        <p className="section-sub">
+          Recorre las series ya asimiladas y deja en cada expediente solo lo de esa serie: su ingreso, salida, venta, reparación y traslados.
+          No borra unidades ni las vuelve a asimilar. Si detecta una salida hecha a cliente, la unidad sale de recepción y del catálogo.
+        </p>
+        {expediente.status === "running" || expediente.message ? (
+          <div className="odoo-progress">
+            <div className="odoo-progress-msg">
+              {expediente.status === "running" ? "Actualizando expedientes" : "Expedientes"}
+              {expediente.total ? ` · ${expediente.current || 0}/${expediente.total}` : ""}
+              {expediente.left ? ` · ${expediente.left} con salida` : ""}
+            </div>
+            {expediente.total ? (
+              <div className="odoo-progress-bar" aria-valuemin={0} aria-valuemax={expediente.total} aria-valuenow={expediente.current || 0}>
+                <i style={{ width: `${Math.min(100, ((expediente.current || 0) / expediente.total) * 100)}%` }} />
+              </div>
+            ) : null}
+            <div className="section-sub">{expediente.message}</div>
+          </div>
+        ) : null}
       </div>
 
       <div className="odoo-toolbar">

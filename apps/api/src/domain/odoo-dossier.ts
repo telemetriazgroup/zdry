@@ -97,6 +97,43 @@ export function pickingDossierDraft(input: {
   };
 }
 
+export function moveDossierDraft(input: {
+  kind: "picking_in" | "picking_out" | "transfer" | "repair" | "sale";
+  odooId: number;
+  name: string;
+  origin?: string | null;
+  date?: string | null;
+  state?: string | null;
+  partner?: string | null;
+  locationSrc?: string | null;
+  locationDest?: string | null;
+  amount?: number | null;
+  iso: string;
+}): DocDraft {
+  const saleType = input.state === "draft" || input.state === "sent" ? "Cotización" : "Venta";
+  const type =
+    input.kind === "picking_out" ? "Salida" : input.kind === "repair" ? "Reparación" : input.kind === "sale" ? saleType : input.kind === "transfer" ? "Traslado" : "Entrada";
+  return {
+    kind: input.kind,
+    odooModel: input.kind === "sale" ? "sale.order" : input.kind === "repair" ? "repair.order" : "stock.picking",
+    odooId: input.odooId,
+    name: input.name,
+    summary: [input.partner, input.origin, input.state].filter(Boolean).join(" · "),
+    data: {
+      name: input.name,
+      pickingType: type,
+      origin: input.origin || null,
+      date: input.date || null,
+      state: input.state || null,
+      partner: input.partner || null,
+      locationSrc: input.locationSrc || null,
+      locationDest: input.locationDest || null,
+      amountTotal: input.amount ?? null,
+      isos: [input.iso],
+    },
+  };
+}
+
 export function moDossierDraft(input: {
   odooId: number;
   name: string;

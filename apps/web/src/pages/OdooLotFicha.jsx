@@ -84,6 +84,8 @@ const DOC_KIND = {
   bill: "Factura proveedor",
   picking_in: "Entrada (IN)",
   picking_out: "Salida (OUT)",
+  transfer: "Traslado",
+  repair: "Reparación",
   mo: "Fabricación (MO)",
   sale: "Pedido de venta",
 };

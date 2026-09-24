@@ -41,6 +41,8 @@ import { applySerialTextRefs, assignRefsBySharedMove, purchaseRefFromOrder, type
 import {
   assimilateCostPlan,
   classifyLotOrigin,
+  dossierKindForMove,
+  lotAvailability,
   isDryContainerProduct,
   splitOdooProductLabel,
   type LotMoveFact,
@@ -57,7 +59,7 @@ import {
   type AssimilateProgress,
 } from "../domain/odoo-assimilate-progress";
 import { applyZdryLineCosts, buildMoOverhead, inferMoOverheadPlan, moCostBreakdown, moLineKey, penToUsd, pickComponentUnitCost, type MoOverheadPlan } from "../domain/odoo-mo-cost";
-import { billDossierDraft, moDossierDraft, pickingDossierDraft, purchaseDossierDraft } from "../domain/odoo-dossier";
+import { billDossierDraft, moDossierDraft, moveDossierDraft, pickingDossierDraft, purchaseDossierDraft } from "../domain/odoo-dossier";
 
 const DRY_DOMAIN = [["name", "ilike", "contenedor dry"]];
 const ODOO_LOT_SELECTS_KEY = "odoo_lot_selects";
@@ -102,6 +104,20 @@ function completeSelects(row: Partial<LotSelects> | null | undefined): LotSelect
   };
 }
 
+type ExpedienteJob = {
+  status: "idle" | "running" | "done" | "error";
+  current: number;
+  total: number;
+  left: number;
+  message: string;
+};
+
+function syntheticMoveId(name: string): number {
+  let h = 0;
+  for (const ch of name) h = (Math.imul(h, 31) + ch.charCodeAt(0)) | 0;
+  return h === 0 ? -1 : -Math.abs(h);
+}
+
 @Injectable()
 export class OdooImportService {
   constructor(
@@ -117,6 +133,13 @@ export class OdooImportService {
   private readonly expediente: ExpedienteStore;
   private readonly logs: AssimilateLogStore;
   private runId: string | null = null;
+  private expedienteJob: ExpedienteJob = {
+    status: "idle",
+    current: 0,
+    total: 0,
+    left: 0,
+    message: "",
+  };
   private readonly aborted = new Set<string>();
   private abortFlag = false;
 
@@ -262,6 +285,9 @@ export class OdooImportService {
   }
 
   async sync(user: AuthUser, ip?: string) {
+    if (this.expedienteJob.status === "running") {
+      throw new BadRequestException("Se están actualizando los expedientes. Espera a que termine para buscar en Odoo.");
+    }
     const probe = await this.odoo.probe();
     if (!probe.ok) throw new BadRequestException(probe.message);
     const existing = await this.logs.currentRunning();
@@ -335,7 +361,7 @@ export class OdooImportService {
   async syncNewOnly() {
     const running = await this.logs.currentRunning();
     const live = await this.progress();
-    if (running || live.status === "running" || this.runId) {
+    if (running || live.status === "running" || this.runId || this.expedienteJob.status === "running") {
       return { ok: true, skipped: true as const, message: "Ya hay una pasada en curso." };
     }
     const actor = await this.autoActor();
@@ -939,6 +965,9 @@ export class OdooImportService {
     const cand = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
     if (!cand) throw new NotFoundException("Candidato no encontrado.");
     await this.expediente.backfillCandidate(cand);
+    if (cand.odooLotId && !this.runId && this.expedienteJob.status !== "running") {
+      await this.refreshLotCases([cand.odooLotId]).catch(() => undefined);
+    }
     if (opts.refresh || !(await this.notesAlreadyFetched(cand))) {
       await this.pullOdooNotes(cand).catch(() => undefined);
     }
@@ -2126,35 +2155,39 @@ export class OdooImportService {
       date: p.date_done ? String(p.date_done) : null,
       isos: isosByPick.get(Number(p.id)) || [],
     }));
-    const allIsos = [...new Set([...group.map((c) => c.isoNormalized), ...pickingViews.flatMap((p) => p.isos)])];
-    const qtyReceived = lines.reduce((s, l) => s + (Number(l.qty_received) || 0), 0);
+    const groupIsos = group.map((c) => c.isoNormalized);
     const unitPrice = sample.odooUnitPrice != null ? Number(sample.odooUnitPrice) : Number(lines.find((l) => Number(l.price_unit) > 0)?.price_unit) || null;
-    const purchaseDraft = purchaseDossierDraft({
-      odooId: poId,
-      name: poName,
-      partner,
-      state: order ? String(order.state || "") : null,
-      currency: order ? this.relName(order.currency_id) || "USD" : "USD",
-      amountTotal: order ? Number(order.amount_total) || null : null,
-      date: order?.date_order ? String(order.date_order) : null,
-      unitPrice,
-      qtyReceived: qtyReceived || null,
-      lines: lineViews,
-      pickings: pickingViews,
-    });
-    await this.expediente.upsertShared(allIsos, purchaseDraft, {
-      candidateId: sample.id,
-      containerIso: sample.containerIso,
-    });
+    for (const cand of group) {
+      const mine = pickingViews.filter((p) => p.isos.includes(cand.isoNormalized));
+      await this.expediente.upsertShared(
+        [cand.isoNormalized],
+        purchaseDossierDraft({
+          odooId: poId,
+          name: poName,
+          partner,
+          state: order ? String(order.state || "") : null,
+          currency: order ? this.relName(order.currency_id) || "USD" : "USD",
+          amountTotal: order ? Number(order.amount_total) || null : null,
+          date: order?.date_order ? String(order.date_order) : null,
+          unitPrice,
+          qtyReceived: mine.length ? 1 : null,
+          lines: lineViews,
+          pickings: mine,
+        }),
+        { candidateId: cand.id, containerIso: cand.containerIso },
+      );
+    }
     for (const p of pickings) {
-      await this.expediente.upsertShared(allIsos, pickingDossierDraft({
+      const isos = (isosByPick.get(Number(p.id)) || []).filter((iso) => groupIsos.includes(iso));
+      if (!isos.length) continue;
+      await this.expediente.upsertShared(isos, pickingDossierDraft({
         odooId: Number(p.id),
         name: String(p.name || ""),
         origin: poName,
         date: p.date_done ? String(p.date_done) : null,
         locationSrc: this.relName(p.location_id),
         locationDest: this.relName(p.location_dest_id),
-        isos: isosByPick.get(Number(p.id)) || [],
+        isos,
       }), { candidateId: sample.id, containerIso: sample.containerIso });
     }
     const invoiceIds = order && Array.isArray(order.invoice_ids) ? (order.invoice_ids as number[]) : [];
@@ -2163,7 +2196,7 @@ export class OdooImportService {
       billName: sample.odooBillName,
       poName,
       poId,
-      isos: allIsos,
+      isos: groupIsos,
       candidateId: sample.id,
       containerIso: sample.containerIso,
     });
@@ -2698,6 +2731,243 @@ export class OdooImportService {
     };
   }
 
+  expedienteRefreshState() {
+    return this.expedienteJob;
+  }
+
+  /** Actualiza el expediente de cada serie ya asimilada. No crea lotes ni borra unidades. */
+  async startExpedienteRefresh() {
+    if (this.expedienteJob.status === "running") {
+      return { ok: true, running: true, ...this.expedienteJob };
+    }
+    const existing = await this.logs.currentRunning();
+    const live = await this.progress();
+    if (this.runId || existing || live.status === "running") {
+      return {
+        ok: false,
+        running: false,
+        message: "Hay una asimilación en curso. No se interrumpe. Cuando termine, pulsa Actualizar expedientes.",
+      };
+    }
+    const probe = await this.odoo.probe();
+    if (!probe.ok) return { ok: false, running: false, message: probe.message || "Odoo no respondió." };
+    this.expedienteJob = { status: "running", current: 0, total: 0, left: 0, message: "Leyendo series asimiladas…" };
+    void this.runExpedienteRefresh().catch((e) => {
+      this.expedienteJob = {
+        status: "error",
+        current: this.expedienteJob.current,
+        total: this.expedienteJob.total,
+        left: this.expedienteJob.left,
+        message: (e as Error).message || "No se pudieron actualizar los expedientes.",
+      };
+    });
+    return { ok: true, running: true, message: "Actualizando el expediente de cada serie. La asimilación no se toca." };
+  }
+
+  private async runExpedienteRefresh() {
+    const cands = await this.prisma.odooLotCandidate.findMany({
+      where: { status: "assimilated", odooLotId: { gt: 0 } },
+      select: { odooLotId: true },
+    });
+    const ids = [...new Set(cands.map((c) => c.odooLotId).filter((n): n is number => !!n))];
+    this.expedienteJob = { status: "running", current: 0, total: ids.length, left: 0, message: ids.length ? "Leyendo movimientos por serie…" : "No hay series asimiladas." };
+    if (!ids.length) {
+      this.expedienteJob = { status: "done", current: 0, total: 0, left: 0, message: "No hay series asimiladas para actualizar." };
+      return;
+    }
+    const chunk = 12;
+    let left = 0;
+    for (let i = 0; i < ids.length; i += chunk) {
+      if (this.runId) {
+        this.expedienteJob = {
+          status: "done",
+          current: i,
+          total: ids.length,
+          left,
+          message: `Se detuvo en ${i} de ${ids.length} porque empezó una asimilación. Lo ya actualizado se conserva.`,
+        };
+        return;
+      }
+      const slice = ids.slice(i, i + chunk);
+      const part = await this.refreshLotCases(slice);
+      left += part.left;
+      const current = Math.min(ids.length, i + slice.length);
+      this.expedienteJob = {
+        status: "running",
+        current,
+        total: ids.length,
+        left,
+        message: `${current} de ${ids.length} series. ${left} con salida a cliente.`,
+      };
+    }
+    this.expedienteJob = {
+      status: "done",
+      current: ids.length,
+      total: ids.length,
+      left,
+      message: `Expedientes al día: ${ids.length} serie(s). ${left} con salida a cliente, fuera de recepción y del catálogo.`,
+    };
+  }
+
+  private async refreshLotCases(lotIds: number[]) {
+    const ids = [...new Set(lotIds.filter((n) => n > 0))];
+    if (!ids.length) return { checked: 0, left: 0 };
+    const facts = await this.loadMoveFacts(ids);
+    const repairs = await this.odoo
+      .searchRead("repair.order", [["lot_id", "in", ids]], ["id", "name", "state", "partner_id", "lot_id", "schedule_date"], { limit: 200 })
+      .catch(() => []);
+    const saleNames = [
+      ...new Set(
+        [...facts.values()]
+          .flat()
+          .filter((m) => dossierKindForMove(m) === "picking_out" && m.origin)
+          .map((m) => String(m.origin)),
+      ),
+    ];
+    const sales = saleNames.length
+      ? await this.odoo
+          .searchRead(
+            "sale.order",
+            [["name", "in", saleNames]],
+            ["id", "name", "partner_id", "state", "amount_total", "date_order", "client_order_ref"],
+            { limit: saleNames.length },
+          )
+          .catch(() => [])
+      : [];
+    const saleByName = new Map(sales.map((s) => [String(s.name || ""), s]));
+    const cands = await this.prisma.odooLotCandidate.findMany({ where: { odooLotId: { in: ids } } });
+    const candByLot = new Map(cands.map((c) => [c.odooLotId, c]));
+    let n = 0;
+    let left = 0;
+    for (const lotId of ids) {
+      const cand = candByLot.get(lotId);
+      const iso = cand?.isoNormalized;
+      if (!iso) continue;
+      const moves = facts.get(lotId) || [];
+      const repairByName = new Map(repairs.filter((r) => this.relId(r.lot_id) === lotId).map((r) => [String(r.name || ""), r]));
+      const seen = new Set<string>();
+      const names: string[] = [];
+      for (const m of moves) {
+        const name = String(m.pickingName || m.reference || "").trim();
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        names.push(name);
+        const kind = dossierKindForMove(m);
+        const repair = kind === "repair" ? repairByName.get(name) : undefined;
+        await this.expediente.upsertShared(
+          [iso],
+          moveDossierDraft({
+            kind,
+            odooId: repair ? Number(repair.id) || syntheticMoveId(name) : syntheticMoveId(name),
+            name,
+            origin: m.origin || m.purchaseName || null,
+            date: (repair?.schedule_date ? String(repair.schedule_date) : null) || m.date || null,
+            state: (repair?.state ? String(repair.state) : null) || m.pickingState || m.state || null,
+            partner: repair ? this.relName(repair.partner_id) || null : kind === "picking_out" ? m.destName || null : null,
+            locationSrc: m.srcName || null,
+            locationDest: m.destName || null,
+            iso,
+          }),
+          { candidateId: cand?.id, containerIso: cand?.containerIso },
+        );
+      }
+      for (const r of repairs) {
+        if (this.relId(r.lot_id) !== lotId) continue;
+        const name = String(r.name || "").trim();
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        names.push(name);
+        await this.expediente.upsertShared(
+          [iso],
+          moveDossierDraft({
+            kind: "repair",
+            odooId: Number(r.id) || syntheticMoveId(name),
+            name,
+            state: r.state ? String(r.state) : null,
+            partner: this.relName(r.partner_id) || null,
+            date: r.schedule_date ? String(r.schedule_date) : null,
+            iso,
+          }),
+          { candidateId: cand?.id, containerIso: cand?.containerIso },
+        );
+      }
+      for (const m of moves) {
+        if (dossierKindForMove(m) !== "picking_out" || !m.origin) continue;
+        const sale = saleByName.get(String(m.origin));
+        if (!sale) continue;
+        const name = String(sale.name || m.origin);
+        if (seen.has(name)) continue;
+        seen.add(name);
+        names.push(name);
+        await this.expediente.upsertShared(
+          [iso],
+          moveDossierDraft({
+            kind: "sale",
+            odooId: Number(sale.id) || syntheticMoveId(name),
+            name,
+            state: sale.state ? String(sale.state) : null,
+            partner: this.relName(sale.partner_id) || m.destName || null,
+            date: sale.date_order ? String(sale.date_order) : m.date || null,
+            origin: sale.client_order_ref ? String(sale.client_order_ref) : m.pickingName || null,
+            amount: Number(sale.amount_total) || null,
+            iso,
+          }),
+          { candidateId: cand?.id, containerIso: cand?.containerIso },
+        );
+      }
+      await this.expediente.retainDocs(iso, ["picking_in", "picking_out", "transfer", "repair", "sale"], names);
+      const avail = lotAvailability(moves);
+      if (avail.availability === "left") left += 1;
+      await this.applyLotAvailability(cand?.containerIso || iso, lotId, avail);
+      n += 1;
+    }
+    return { checked: n, left };
+  }
+
+  private async applyLotAvailability(
+    iso: string,
+    lotId: number,
+    avail: { availability: "stock" | "reserved" | "left"; pickingName: string | null; destName: string | null },
+  ) {
+    const row = await this.prisma.container.findFirst({
+      where: { OR: [{ iso }, { odooLotId: lotId }] },
+    });
+    if (!row || row.demo) return;
+    const where = { iso: row.iso };
+    if (avail.availability === "left" && row.status !== "Vendido") {
+      await this.prisma.container.update({
+        where,
+        data: {
+          status: "Vendido",
+          commercialStatus: "vendido",
+          gateOut: true,
+          mediaStatus: row.mediaStatus === "aprobado" ? "oculto" : row.mediaStatus,
+        },
+      });
+      await this.prisma.containerHistory.create({
+        data: {
+          iso: row.iso,
+          type: "Salida Odoo",
+          detail: `Salida ${avail.pickingName || "OUT"} hecha${avail.destName ? ` hacia ${avail.destName}` : ""}. Ya no se publica ni queda en recepción.`,
+        },
+      });
+      return;
+    }
+    if (avail.availability === "reserved" && row.status !== "Vendido" && row.mediaStatus === "aprobado") {
+      await this.prisma.container.update({
+        where,
+        data: { mediaStatus: "oculto", commercialStatus: "reservado" },
+      });
+      await this.prisma.containerHistory.create({
+        data: {
+          iso: row.iso,
+          type: "Reserva Odoo",
+          detail: `Salida ${avail.pickingName || "OUT"} pendiente${avail.destName ? ` hacia ${avail.destName}` : ""}. No se ofrece en el catálogo.`,
+        },
+      });
+    }
+  }
+
   private async loadMoveFacts(lotIds: number[]): Promise<Map<number, LotMoveFact[]>> {
     const out = new Map<number, LotMoveFact[]>();
     const moveLines = await this.odoo.searchRead(
@@ -2727,7 +2997,7 @@ export class OdooImportService {
       ? await this.odoo.searchRead(
           "stock.picking",
           [["id", "in", pickingIds]],
-          ["id", "name", "origin", "purchase_id", "picking_type_code", "state"],
+          ["id", "name", "origin", "purchase_id", "picking_type_code", "state", "date_done", "scheduled_date", "partner_id"],
           { limit: pickingIds.length },
         )
       : [];
@@ -2776,6 +3046,7 @@ export class OdooImportService {
         destUsage: locUsage(destId) || null,
         srcName: locName(srcId) || null,
         destName: locName(destId) || null,
+        date: pick && pick.date_done && pick.date_done !== false ? String(pick.date_done) : pick?.scheduled_date ? String(pick.scheduled_date) : null,
       };
       const list = out.get(lotId) || [];
       list.push(fact);

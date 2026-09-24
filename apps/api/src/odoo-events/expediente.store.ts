@@ -14,6 +14,22 @@ import { normalizeIncomingEvent, type IncomingOdooEvent } from "../domain/odoo-e
 import { inspectOdooIso, type OdooOwnedField } from "../domain/odoo-lot-map";
 import { presentOdooDocument } from "../domain/odoo-doc-present";
 
+const SERIAL_DOC_KINDS = new Set(["picking_in", "picking_out", "transfer", "repair", "sale"]);
+
+function scopeDocToIso(kind: string, data: Record<string, unknown>, iso: string): Record<string, unknown> | null {
+  const isos = Array.isArray(data.isos) ? data.isos.map((x) => String(x || "").trim()).filter(Boolean) : [];
+  if (SERIAL_DOC_KINDS.has(kind) && isos.length && !isos.includes(iso)) return null;
+  if (!Array.isArray(data.pickings)) return data;
+  return {
+    ...data,
+    pickings: data.pickings.filter((p) => {
+      const row = p && typeof p === "object" ? (p as Record<string, unknown>) : {};
+      const list = Array.isArray(row.isos) ? row.isos.map((x) => String(x || "").trim()).filter(Boolean) : [];
+      return !list.length || list.includes(iso);
+    }),
+  };
+}
+
 function syntheticId(name: string): number {
   let h = 0;
   for (const ch of name) h = (Math.imul(h, 31) + ch.charCodeAt(0)) | 0;
@@ -53,12 +69,14 @@ export class ExpedienteStore {
         const data = current.data && typeof current.data === "object" && !Array.isArray(current.data)
           ? (current.data as Record<string, unknown>)
           : {};
+        const scoped = scopeDocToIso(current.kind, data, iso);
+        if (!scoped) return null;
         return {
           current,
           versions,
-          view: presentOdooDocument({ kind: current.kind, name: current.name, summary: current.summary, data }),
+          view: presentOdooDocument({ kind: current.kind, name: current.name, summary: current.summary, data: scoped }),
         };
-      }),
+      }).filter((d): d is NonNullable<typeof d> => Boolean(d)),
       notes,
     };
   }
@@ -107,6 +125,17 @@ export class ExpedienteStore {
         author,
         body: text.slice(0, 4000),
         occurredAt: new Date(),
+      },
+    });
+  }
+
+  async retainDocs(isoNormalized: string, kinds: string[], names: string[]) {
+    const iso = inspectOdooIso(isoNormalized).isoNormalized || isoNormalized;
+    await this.prisma.odooDocSnapshot.deleteMany({
+      where: {
+        isoNormalized: iso,
+        kind: { in: kinds },
+        ...(names.length ? { name: { notIn: names } } : {}),
       },
     });
   }

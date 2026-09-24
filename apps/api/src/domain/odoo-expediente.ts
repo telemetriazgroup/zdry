@@ -1,7 +1,7 @@
 import { inspectOdooIso, type OdooOwnedField } from "./odoo-lot-map";
 import { mapLotPayloadToOwned, type NormalizedOdooEvent } from "./odoo-event";
 
-export const ODOO_DOC_KINDS = ["purchase", "bill", "picking_in", "picking_out", "mo", "sale"] as const;
+export const ODOO_DOC_KINDS = ["purchase", "bill", "picking_in", "picking_out", "transfer", "repair", "mo", "sale"] as const;
 export type OdooDocKind = (typeof ODOO_DOC_KINDS)[number];
 
 export type TimelineDiff = {
