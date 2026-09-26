@@ -178,7 +178,9 @@ export class CatalogMediaService {
         priceMin: offer.priceMin,
         priceSource: offer.source,
         awaitingReconcile: isPendingValuation(c),
-        canPublish: active.length >= 1 && !isPendingValuation(c),
+        leftCustomer: c.status === "Vendido" || !!c.gateOut || c.commercialStatus === "vendido",
+        publishBlock: catalogPublishBlock(c),
+        canPublish: active.length >= 1 && !catalogPublishBlock(c),
       };
     });
   }
@@ -243,6 +245,8 @@ export class CatalogMediaService {
       odooVendorName: (await this.odooLinks.viewerLocked()) ? null : c.odooVendorName,
       odooLocked: await this.odooLinks.viewerLocked(),
       awaitingReconcile: isPendingValuation(c),
+      leftCustomer: c.status === "Vendido" || !!c.gateOut || c.commercialStatus === "vendido",
+      publishBlock: catalogPublishBlock(c),
     };
   }
 

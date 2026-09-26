@@ -29,7 +29,7 @@ function matchSelectValue(raw, options) {
 }
 
 function fichaForm(d) {
-  return {
+  const form = {
     color: d.color || "",
     tareKg: d.tareKg ?? "",
     mgwKg: d.mgwKg ?? "",
@@ -43,6 +43,10 @@ function fichaForm(d) {
     zdryCat: d.zdryCat || "",
     zdryNotes: d.zdryNotes || "",
   };
+  for (const f of d.odooFields || []) {
+    if (form[f.key] == null || form[f.key] === "") form[f.key] = f.value ?? "";
+  }
+  return form;
 }
 
 function eventLabel(ev) {
@@ -486,6 +490,18 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
       </div>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
+      {row.localTouched || row.odooSyncStatus === "deferred" ? (
+        <div className="err">
+          Traba: hay cambios guardados en ZDRY que todavía no se escribieron en Odoo.
+          {row.odooSyncError ? ` ${row.odooSyncError}` : " Esos campos no se pisan al traer de Odoo. Pulsa Reintentar Odoo o corrige el dato y guarda."}
+        </div>
+      ) : null}
+      {(row.conflicts || []).length ? (
+        <div className="err">
+          Traba de campos: {(row.conflicts || []).map((c) => `${c.field} (ZDRY «${c.localValue || "—"}», Odoo «${c.odooValue || "—"}»)`).join(" · ")}.
+          Corrige el valor o pulsa Reintentar Odoo.
+        </div>
+      ) : null}
 
       <div className={`odoo-ficha-grid${tab === "expediente" ? " odoo-ficha-grid-full" : ""}`}>
         <div className="odoo-sheet">

@@ -108,7 +108,7 @@ export class WarehouseController {
   }
 
   @Get("units/:iso/expediente")
-  @Roles("coordinador")
+  @Roles("admin", "coordinador")
   dispatchExpediente(@Param("iso") iso: string) {
     return this.warehouse.dispatchExpediente(iso);
   }

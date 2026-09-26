@@ -47,12 +47,18 @@ export function pendingValuationWhere() {
 export const UNRECONCILED_PUBLISH_MESSAGE =
   "Reentrega sin conciliar: no se publica en el catálogo hasta el match con una orden de compra. Sin OC no hay precio.";
 
+export const LEFT_PUBLISH_MESSAGE =
+  "En el cliente o con salida: no se publica en el catálogo.";
+
 export function catalogPublishBlock(c: {
   odooPoId?: number | null;
   status?: string | null;
   invoicePending?: boolean | null;
   intakeType?: string | null;
+  gateOut?: boolean | null;
+  commercialStatus?: string | null;
 }): string | null {
+  if (c.status === "Vendido" || c.gateOut || c.commercialStatus === "vendido") return LEFT_PUBLISH_MESSAGE;
   return isPendingValuation(c) ? UNRECONCILED_PUBLISH_MESSAGE : null;
 }
 

@@ -63,6 +63,8 @@ describe("isPendingValuation", () => {
     expect(isPendingValuation({ odooPoId: null, invoicePending: false, intakeType: "compra" })).toBe(false);
     expect(catalogPublishBlock({ odooPoId: null, invoicePending: true, intakeType: "pendiente_factura", status: "Disponible" })).toMatch(/no se publica/);
     expect(catalogPublishBlock({ odooPoId: 12, invoicePending: true, intakeType: "compra" })).toBeNull();
+    expect(catalogPublishBlock({ status: "Vendido", odooPoId: 12, intakeType: "compra" })).toMatch(/salida/);
+    expect(catalogPublishBlock({ status: "Disponible", gateOut: true, odooPoId: 12, intakeType: "compra" })).toMatch(/salida/);
   });
 });
 

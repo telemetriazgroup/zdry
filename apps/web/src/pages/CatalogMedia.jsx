@@ -85,8 +85,17 @@ export default function CatalogMedia() {
     if (text) notify(text, "err");
   }
 
+  function publishLock(row) {
+    if (!row) return "";
+    if (row.publishBlock) return row.publishBlock;
+    if (row.leftCustomer || row.status === "Vendido") return "En el cliente o con salida: no se publica.";
+    if (row.awaitingReconcile) return "Reentrega sin conciliar: no se publica hasta el match con la OC.";
+    if (row.photoCount != null && Number(row.photoCount) < 1) return "Sin fotos: no se puede publicar.";
+    return "";
+  }
+
   function withPhotos(list) {
-    return (list || []).filter((r) => Number(r.photoCount) > 0);
+    return (list || []).filter((r) => Number(r.photoCount) > 0 && !publishLock(r));
   }
 
   function enterSelect() {
@@ -102,8 +111,9 @@ export default function CatalogMedia() {
   }
 
   function togglePick(row) {
-    if (Number(row.photoCount) < 1) {
-      setError(`${row.iso} no tiene fotos. No se puede publicar.`);
+    const lock = publishLock(row);
+    if (lock) {
+      setError(`${row.iso}: ${lock}`);
       return;
     }
     setPicked((prev) => {
@@ -263,16 +273,16 @@ export default function CatalogMedia() {
     setPublishBusy(true);
     setError("");
     try {
-      const ready = pending.filter((r) => !r.awaitingReconcile);
+      const ready = pending.filter((r) => !publishLock(r));
       const heldLocal = pending.length - ready.length;
       if (!ready.length) {
-        setError("Las seleccionadas son reentregas sin conciliar. No se publican hasta el match con una orden de compra.");
+        setError("Ninguna seleccionada se puede publicar: reentrega sin OC, o ya salió / está en el cliente.");
         return;
       }
       const out = await api("/catalog-media/publish-batch", { method: "POST", body: { isos: ready.map((r) => r.iso) } });
       const skip = out.skipped?.length ? ` ${out.skipped.length} sin foto o no encontradas.` : "";
       const held = (out.blocked?.length || 0) + heldLocal;
-      const heldMsg = held ? ` ${held} reentrega(s) sin conciliar no se publicaron.` : "";
+      const heldMsg = held ? ` ${held} no se publicaron (reentrega sin OC, o con salida).` : "";
       setMsg(`Publicadas ${out.published ?? 0} de la selección.${out.already ? ` ${out.already} ya estaban visibles.` : ""}${skip}${heldMsg}`);
       setPicked(new Set());
       loadList();
@@ -305,8 +315,9 @@ export default function CatalogMedia() {
   async function publishIso(nextIso, photoCount, fromList = false) {
     if (photoCount < 1) return;
     const row = rows.find((r) => r.iso === nextIso);
-    if (row?.awaitingReconcile || (iso === nextIso && unit?.awaitingReconcile)) {
-      setError("Reentrega sin conciliar: no se publica en el catálogo hasta el match con una orden de compra. Sin OC no hay precio.");
+    const lock = publishLock(row) || (iso === nextIso ? publishLock(unit) : "");
+    if (lock) {
+      setError(lock);
       return;
     }
     setError("");
@@ -627,16 +638,20 @@ export default function CatalogMedia() {
                   <tr
                     key={r.iso}
                     className={`expandable${iso === r.iso ? " on" : ""}${selectMode && picked.has(r.iso) ? " row-picked" : ""}`}
-                    onClick={() => (selectMode ? togglePick(r) : open(r.iso))}
+                    onClick={() => {
+                      if (!selectMode) { open(r.iso); return; }
+                      if (publishLock(r)) return;
+                      togglePick(r);
+                    }}
                   >
                     {selectMode ? (
                       <td onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           checked={picked.has(r.iso)}
-                          disabled={Number(r.photoCount) < 1}
+                          disabled={!!publishLock(r)}
                           aria-label={`Seleccionar ${r.iso}`}
-                          title={Number(r.photoCount) < 1 ? "Sin fotos: no se puede publicar" : "Incluir en la publicación"}
+                          title={publishLock(r) || "Incluir en la publicación"}
                           onChange={() => togglePick(r)}
                         />
                       </td>
@@ -696,8 +711,8 @@ export default function CatalogMedia() {
                         <button
                           className="btn-primary"
                           type="button"
-                          disabled={r.photoCount < 1 || r.awaitingReconcile || listBusy === r.iso}
-                          title={r.awaitingReconcile ? "Reentrega sin conciliar: no se publica hasta el match con la OC" : r.photoCount < 1 ? "Carga al menos una foto para publicar" : "Publicar en catálogo"}
+                          disabled={!!publishLock(r) || listBusy === r.iso}
+                          title={publishLock(r) || "Publicar en catálogo"}
                           onClick={() => publishIso(r.iso, r.photoCount, true)}
                         >
                           Publicar
@@ -899,10 +914,10 @@ export default function CatalogMedia() {
 
             {canApprove ? (
               <div className="action-row" style={{ marginTop: 16 }}>
-                {unit.awaitingReconcile ? (
-                  <p className="section-sub">Reentrega sin conciliar. No se publica hasta el match con una orden de compra: sin OC no hay precio.</p>
+                {publishLock(unit) ? (
+                  <p className="section-sub">{publishLock(unit)}</p>
                 ) : null}
-                <button className="btn-primary" type="button" onClick={publish} disabled={photoCount < 1 || unit.awaitingReconcile} title={unit.awaitingReconcile ? "Reentrega sin conciliar: no se publica hasta el match con la OC" : photoCount < 1 ? "Carga al menos una foto para publicar" : ""}>
+                <button className="btn-primary" type="button" onClick={publish} disabled={photoCount < 1 || !!publishLock(unit)} title={publishLock(unit) || (photoCount < 1 ? "Carga al menos una foto para publicar" : "")}>
                   Publicar en catálogo
                 </button>
                 <button className="btn-ghost" type="button" onClick={hide} disabled={unit.mediaStatus !== "aprobado"}>Ocultar del catálogo</button>

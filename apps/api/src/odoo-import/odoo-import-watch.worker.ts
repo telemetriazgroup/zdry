@@ -30,6 +30,12 @@ export class OdooImportWatchWorker implements OnModuleInit, OnModuleDestroy {
     this.ticking = true;
     void this.imports
       .syncNewIfAuto()
+      .then((res) => {
+        const skipped = !!res && "skipped" in res && res.skipped;
+        const running = !!res && "running" in res && res.running;
+        if (!res || skipped || !running) return this.imports.refreshExpedientesIfAuto();
+        return undefined;
+      })
       .catch((e) => this.log.warn(`búsqueda automática: ${(e as Error).message}`))
       .finally(() => {
         this.ticking = false;

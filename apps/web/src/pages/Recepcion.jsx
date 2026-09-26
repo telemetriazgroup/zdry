@@ -323,6 +323,7 @@ export default function Recepcion() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const canSeeOdoo = hasRole(user, "admin");
+  const canSeeExpediente = hasRole(user, "admin", "coordinador");
   const isCoord = user.role === "coordinador";
   const canCoord = hasRole(user, "admin", "coordinador");
   const lb = useLightbox();
@@ -1273,7 +1274,7 @@ export default function Recepcion() {
                 <span className="badge-scope" style={{ background: unit.intakeType === "compra" ? "#2f9e44" : unit.intakeType === "almacenaje_cliente" ? "#495057" : "#c9720b" }}>{unit.intakeLabel}</span>
                 <OriginBadges u={unit} />
               </span>
-              {user.role === "coordinador" ? (
+              {canSeeExpediente ? (
                 <button
                   type="button"
                   className={`recv-exp-toggle ${expOpen ? "btn-primary" : "btn-ghost"}`}
@@ -1300,7 +1301,7 @@ export default function Recepcion() {
                 </div>
               </div>
             ) : null}
-            {user.role === "coordinador" ? <DispatchExpediente iso={unit.iso} open={expOpen} /> : null}
+            {canSeeExpediente ? <DispatchExpediente iso={unit.iso} open={expOpen} /> : null}
             <p className="section-sub">
               {unit.campoEnabledAt
                 ? `En campo desde ${formatWhen(unit.campoEnabledAt)}${unit.campoEnabledByName ? ` · ${unit.campoEnabledByName}` : ""}.`

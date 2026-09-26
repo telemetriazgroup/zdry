@@ -378,6 +378,7 @@ export class OdooImportService {
     await this.writeProgress({ status: "running", step: "lotes", current: 0, total: 5, iso: "", message: "Buscando equipos nuevos en Odoo…" });
     void this.runSyncNew(run.id, actor).finally(() => {
       if (this.runId === run.id) this.runId = null;
+      void this.refreshExpedientesIfAuto();
     });
     return { ok: true, running: true, runId: run.id, message: "Buscando solo equipos nuevos." };
   }
@@ -1339,8 +1340,8 @@ export class OdooImportService {
   }
 
   async getOne(id: string, opts: { refresh?: boolean } = {}) {
+    await this.maybeFillCandidate(id, !!opts.refresh);
     if (opts.refresh) {
-      await this.refreshCandidateFromOdoo(id);
       const lot = await this.prisma.odooLotCandidate.findUnique({ where: { id }, select: { odooLotId: true } });
       if (lot) {
         await this.hydrateDossiers([lot.odooLotId]).catch(() => undefined);
@@ -2733,6 +2734,13 @@ export class OdooImportService {
     return this.expedienteJob;
   }
 
+  /** Con «Cada 5 minutos» también recorre salidas de las series ya asimiladas. */
+  async refreshExpedientesIfAuto() {
+    const state = await this.watchState();
+    if (state.mode !== "auto") return { ok: true, skipped: true as const };
+    return this.startExpedienteRefresh();
+  }
+
   /** Actualiza el expediente de cada serie ya asimilada. No crea lotes ni borra unidades. */
   async startExpedienteRefresh() {
     if (this.expedienteJob.status === "running") {
@@ -2788,6 +2796,7 @@ export class OdooImportService {
       }
       const slice = ids.slice(i, i + chunk);
       const part = await this.refreshLotCases(slice);
+      await this.fillMissingLotFields(slice).catch(() => undefined);
       left += part.left;
       const current = Math.min(ids.length, i + slice.length);
       this.expedienteJob = {
@@ -3414,50 +3423,177 @@ export class OdooImportService {
     return !!(attrs.color || attrs.tareKg || attrs.mgwKg || attrs.dua || attrs.originCountry || attrs.material);
   }
 
-  private async refreshCandidateFromOdoo(id: string) {
+  private fieldPullAt(payload: unknown) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return 0;
+    const n = Number((payload as { fieldPullAt?: unknown }).fieldPullAt);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  private candidateNeedsFieldPull(cand: { tareKg: number | null; zgroupCode: string | null; payload: unknown }) {
+    const ex = payloadExtras(cand.payload);
+    return !cand.tareKg || !cand.zgroupCode || !ex.manufactureMonth || !ex.productTitle || !ex.lotCode;
+  }
+
+  private async maybeFillCandidate(id: string, force: boolean) {
     const cand = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
-    if (!cand || cand.localTouched || cand.odooSyncStatus === "deferred") return;
-    try {
-      const meta = await this.lotMeta();
-      let lots = await this.searchLots([cand.odooLotId], meta.names);
-      let lot = lots[0];
-      let attrs = readLotAttrs(lot, meta.fields);
-      if (!this.hasOwnedValues(attrs)) {
-        const full = await this.odoo.searchRead("stock.lot", [["id", "=", cand.odooLotId]], [], { limit: 1 });
-        lot = full[0] || lot;
-        if (lot) {
-          const fromKeys = Object.keys(lot).map((name) => ({
-            name,
-            field_description: meta.fields[name]?.string || name.replace(/^x_studio_?/i, " ").replace(/_/g, " "),
-          }));
-          attrs = readLotAttrs(lot, mergeFieldCatalog(meta.fields, fromKeys));
-        }
-      }
-      if (!this.hasOwnedValues(attrs) && !attrs.tareKg && !attrs.color) return;
-      await this.prisma.odooLotCandidate.update({
-        where: { id: cand.id },
-        data: {
-          color: attrs.color ?? cand.color,
-          tareKg: attrs.tareKg ?? cand.tareKg,
-          mgwKg: attrs.mgwKg ?? cand.mgwKg,
-          year: attrs.year ?? cand.year,
-          manufacturer: attrs.manufacturer ?? cand.manufacturer,
-          dua: attrs.dua ?? cand.dua,
-          originCountry: attrs.originCountry ?? cand.originCountry,
-          material: attrs.material ?? cand.material,
-          zgroupCode: attrs.zgroupCode ?? cand.zgroupCode,
-          odooDescription: attrs.description ?? cand.odooDescription,
-          payload: {
-            ...((cand.payload && typeof cand.payload === "object" ? cand.payload : {}) as object),
-            lot,
-            attrs,
-            fieldMap: meta.map,
-          } as Prisma.InputJsonValue,
-        },
-      });
-    } catch {
-      /* ficha still opens with stored values */
+    if (!cand) return;
+    if (!force) {
+      const pulled = this.fieldPullAt(cand.payload);
+      if (pulled && Date.now() - pulled < 6 * 60 * 60 * 1000) return;
+      if (!this.candidateNeedsFieldPull(cand)) return;
     }
+    await this.pullCandidateFields(cand);
+  }
+
+  private async fillMissingLotFields(ids: number[]) {
+    if (!ids.length) return;
+    const cands = await this.prisma.odooLotCandidate.findMany({ where: { odooLotId: { in: ids } } });
+    for (const cand of cands) {
+      await this.pullCandidateFields(cand).catch(() => undefined);
+    }
+  }
+
+  private async pullCandidateFields(cand: {
+    id: string;
+    odooLotId: number;
+    localTouched: boolean;
+    odooSyncStatus: string;
+    odooSyncError: string | null;
+    containerIso: string | null;
+    payload: unknown;
+    color: string | null;
+    tareKg: number | null;
+    mgwKg: number | null;
+    year: number | null;
+    manufacturer: string | null;
+    dua: string | null;
+    originCountry: string | null;
+    material: string | null;
+    zgroupCode: string | null;
+    odooDescription: string | null;
+  }) {
+    const meta = await this.lotMeta();
+    const full = await this.odoo.searchRead("stock.lot", [["id", "=", cand.odooLotId]], [], { limit: 1 });
+    const lot = full[0];
+    if (!lot) return;
+    const fromKeys = Object.keys(lot).map((name) => ({
+      name,
+      field_description: meta.fields[name]?.string || name.replace(/^x_studio_?/i, " ").replace(/_/g, " "),
+    }));
+    const fields = mergeFieldCatalog(meta.fields, fromKeys);
+    const attrs = readLotAttrs(lot, fields);
+    const hold = !!(cand.localTouched || cand.odooSyncStatus === "deferred");
+    const blocked: string[] = [];
+    const label = (key: string) => ODOO_OWNED_LABELS[key as OdooOwnedField] || key;
+    const str = (key: string, cur: string | null, next: string | null | undefined) => {
+      const incoming = next || null;
+      if (hold && cur) {
+        if (incoming && cur !== incoming) blocked.push(label(key));
+        return cur;
+      }
+      return incoming || cur;
+    };
+    const num = (key: string, cur: number | null, next: number | null | undefined) => {
+      if (hold && cur != null) {
+        if (next != null && cur !== next) blocked.push(label(key));
+        return cur;
+      }
+      return next ?? cur;
+    };
+    const prev = payloadExtras(cand.payload);
+    const incoming = lotExtraPatch(attrs);
+    const merged: Record<string, string | null> = { ...prev };
+    for (const [key, value] of Object.entries(incoming)) {
+      if (!value) continue;
+      if (hold && merged[key] && merged[key] !== value) {
+        blocked.push(label(key));
+        continue;
+      }
+      merged[key] = value;
+    }
+    const base = cand.payload && typeof cand.payload === "object" && !Array.isArray(cand.payload) ? { ...(cand.payload as object) } : {};
+    const emptyEnabled: string[] = [];
+    for (const [field, keys] of Object.entries(meta.map || {})) {
+      const key = keys?.[0];
+      if (!key || lot[`enable_${key}`] !== true) continue;
+      const value = lot[key];
+      if (value == null || value === false || value === "") emptyEnabled.push(label(field));
+    }
+    let odooSyncError = cand.odooSyncError;
+    if (cand.odooSyncStatus === "error" && cand.odooSyncError && !cand.odooSyncError.startsWith("Traba:") && !cand.odooSyncError.startsWith("Odoo no tiene")) {
+      odooSyncError = cand.odooSyncError;
+    } else if (hold && blocked.length) {
+      odooSyncError = `Traba: no se pisaron ${[...new Set(blocked)].join(", ")} porque hay una edición local pendiente de escribir en Odoo. Pulsa Reintentar Odoo o corrige el campo.`;
+    } else if (emptyEnabled.length) {
+      odooSyncError = `Odoo no tiene valor en ${[...new Set(emptyEnabled)].join(", ")}. El campo está habilitado en el lote, pero la lectura llegó vacía. Complétalo en Odoo y pulsa Traer de Odoo.`;
+    } else if (odooSyncError?.startsWith("Traba:") || odooSyncError?.startsWith("Odoo no tiene")) {
+      odooSyncError = null;
+    }
+    await this.prisma.odooLotCandidate.update({
+      where: { id: cand.id },
+      data: {
+        color: str("color", cand.color, attrs.color),
+        tareKg: num("tareKg", cand.tareKg, attrs.tareKg),
+        mgwKg: num("mgwKg", cand.mgwKg, attrs.mgwKg),
+        year: num("year", cand.year, attrs.year),
+        manufacturer: str("manufacturer", cand.manufacturer, attrs.manufacturer),
+        dua: str("dua", cand.dua, attrs.dua),
+        originCountry: str("originCountry", cand.originCountry, attrs.originCountry),
+        material: str("material", cand.material, attrs.material),
+        zgroupCode: str("zgroupCode", cand.zgroupCode, attrs.zgroupCode),
+        odooDescription: str("description", cand.odooDescription, attrs.description) || "",
+        odooSyncError,
+        lastSyncedAt: new Date(),
+        payload: {
+          ...withPayloadExtras(base, merged),
+          lot,
+          attrs,
+          fieldMap: meta.map,
+          fieldPullAt: Date.now(),
+        } as Prisma.InputJsonValue,
+      },
+    });
+    if (cand.containerIso) await this.fillContainerAttrs(cand.containerIso, attrs, hold).catch(() => undefined);
+  }
+
+  private async fillContainerAttrs(
+    iso: string,
+    attrs: ReturnType<typeof readLotAttrs>,
+    hold: boolean,
+  ) {
+    const c = await this.prisma.container.findUnique({ where: { iso } });
+    if (!c) return;
+    const str = (cur: string | null, next: string | null | undefined) => {
+      if (hold && cur && cur !== "—") return cur;
+      return next || cur;
+    };
+    const num = (cur: number | null, next: number | null | undefined) => {
+      if (hold && cur != null) return cur;
+      return next ?? cur;
+    };
+    const src = c.odooSource && typeof c.odooSource === "object" && !Array.isArray(c.odooSource)
+      ? { ...(c.odooSource as Record<string, unknown>) }
+      : {};
+    for (const [key, value] of Object.entries(lotExtraPatch(attrs))) {
+      const cur = src[key];
+      if (hold && cur != null && cur !== "" && cur !== "—") continue;
+      if (value) src[key] = value;
+    }
+    await this.prisma.container.update({
+      where: { iso },
+      data: {
+        color: str(c.color, attrs.color) || c.color,
+        tareKg: num(c.tareKg || null, attrs.tareKg) || 0,
+        mgwKg: num(c.mgwKg || null, attrs.mgwKg) || 0,
+        year: num(c.year, attrs.year),
+        manufacturer: str(c.manufacturer, attrs.manufacturer) || c.manufacturer,
+        odooDua: str(c.odooDua, attrs.dua),
+        originCountry: str(c.originCountry, attrs.originCountry),
+        material: str(c.material, attrs.material),
+        odooDescription: hold && c.odooDescription ? c.odooDescription : attrs.description || c.odooDescription || "",
+        odooSource: src as Prisma.InputJsonValue,
+      },
+    });
   }
 
   async hydrateReceptionFicha(iso: string) {
@@ -3475,7 +3611,7 @@ export class OdooImportService {
       if (!lot) return;
       let fields = meta.fields;
       let attrs = readLotAttrs(lot, fields);
-      if (!attrs.color && !attrs.yearToken && !attrs.productTitle && !attrs.manufactureMonth) {
+      if (!attrs.tareKg || !attrs.manufactureMonth || !attrs.productTitle || !attrs.lotCode || !attrs.zgroupCode) {
         const full = await this.odoo.searchRead("stock.lot", [["id", "=", c.odooLotId]], [], { limit: 1 });
         lot = full[0] || lot;
         if (lot) {

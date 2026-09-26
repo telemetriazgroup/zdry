@@ -62,6 +62,7 @@ export default function OdooBandeja() {
   const [openLogId, setOpenLogId] = useState("");
   const [watch, setWatch] = useState({ mode: "manual", lastRunAt: null, lastMessage: "", lastNew: 0, lastAssimilated: 0 });
   const [expediente, setExpediente] = useState({ status: "idle", current: 0, total: 0, left: 0, message: "" });
+  const [departed, setDeparted] = useState([]);
 
   async function load() {
     const list = await api("/odoo-import/candidates");
@@ -85,6 +86,8 @@ export default function OdooBandeja() {
     load().catch((e) => setError(e.message));
     loadLog().catch(() => {});
     api("/odoo-import/watch").then((w) => { if (w?.mode) setWatch(w); }).catch(() => {});
+    api("/warehouse/at-customer").then((rows) => setDeparted(Array.isArray(rows) ? rows : [])).catch(() => {});
+    api("/odoo-import/expedientes/status").then((p) => { if (p?.status) setExpediente(p); }).catch(() => {});
     if (canProbe) {
       api("/odoo-import/probe").then(setProbe).catch(() => {});
     }
@@ -136,6 +139,8 @@ export default function OdooBandeja() {
       api("/odoo-import/progress").then(setProgress).catch(() => {});
       loadLog().catch(() => {});
       load().catch(() => {});
+      api("/odoo-import/expedientes/status").then((p) => { if (p?.status) setExpediente(p); }).catch(() => {});
+      api("/warehouse/at-customer").then((rows) => setDeparted(Array.isArray(rows) ? rows : [])).catch(() => {});
     };
     const t = setInterval(tick, 15000);
     return () => clearInterval(t);
@@ -157,6 +162,7 @@ export default function OdooBandeja() {
         if (!p || p.status !== "running") {
           if (p?.status === "error") setError(p.message || "No se pudieron actualizar los expedientes.");
           else setMsg(p?.message || out.message || "Expedientes al día.");
+          api("/warehouse/at-customer").then((rows) => setDeparted(Array.isArray(rows) ? rows : [])).catch(() => {});
           break;
         }
         await new Promise((r) => setTimeout(r, 1000));
@@ -175,8 +181,8 @@ export default function OdooBandeja() {
       const next = await api("/odoo-import/watch", { method: "PUT", body: { mode } });
       setWatch(next);
       setMsg(mode === "auto"
-        ? "Cada 5 minutos se buscan equipos nuevos y se asimilan. Los que ya están no se reprocesan."
-        : "Búsqueda automática apagada. Buscar en Odoo sigue siendo manual.");
+        ? "Cada 5 minutos se buscan equipos nuevos y se actualizan los expedientes. Una salida a cliente queda en Equipos con salida y en Venta / en cliente."
+        : "Búsqueda automática apagada. Buscar en Odoo y Actualizar expedientes siguen siendo manuales.");
     } catch (e) {
       setError(e.message);
     }
@@ -398,8 +404,8 @@ export default function OdooBandeja() {
         </div>
         <p className="section-sub">
           {watch.mode === "auto"
-            ? "Cada 5 minutos recorre Odoo y asimila solo los equipos que aún no están. Los ya cargados no se vuelven a procesar."
-            : "Como ahora: el stock se recorre solo cuando pulsas Buscar en Odoo."}
+            ? "Cada 5 minutos asimila equipos nuevos y, al terminar, actualiza el expediente de los ya asimilados. Si detecta una salida a cliente, el equipo pasa a Equipos con salida y a Recepción · Venta / en cliente."
+            : "Como ahora: el stock y los expedientes se recorren solo cuando pulsas Buscar en Odoo o Actualizar expedientes."}
           {watch.lastRunAt ? ` Última revisión: ${new Date(watch.lastRunAt).toLocaleString("es-PE")}. ${watch.lastMessage || ""}` : ""}
         </p>
       </div>
@@ -415,6 +421,39 @@ export default function OdooBandeja() {
           Recorre las series ya asimiladas y deja en cada expediente solo lo de esa serie: su ingreso, salida, venta, reparación y traslados.
           No borra unidades ni las vuelve a asimilar. Si detecta una salida hecha a cliente, la unidad sale de recepción y del catálogo.
         </p>
+        <div className="odoo-watch" style={{ marginTop: 12 }}>
+          <b>Equipos con salida ({departed.length})</b>
+          <p className="section-sub">
+            Series asimiladas cuyo último movimiento en Odoo es una salida a cliente. También están en Recepción, pestaña Venta / en cliente.
+          </p>
+          {departed.length ? (
+            <div className="tablewrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>ISO</th>
+                    <th>Tipo</th>
+                    <th>Depósito</th>
+                    <th>Por qué</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {departed.slice(0, 40).map((u) => (
+                    <tr key={u.iso}>
+                      <td className="card-iso">{u.iso}</td>
+                      <td>{u.typeLabel || u.type}</td>
+                      <td>{u.depotName || "—"}</td>
+                      <td>Salida a cliente. Fuera de pendientes y del catálogo.</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="section-sub">Todavía no hay equipos con salida detectada.</p>
+          )}
+          {departed.length > 40 ? <p className="section-sub">Se muestran 40 de {departed.length}. El resto está en Recepción · Venta / en cliente.</p> : null}
+        </div>
         {expediente.status === "running" || expediente.message ? (
           <div className="odoo-progress">
             <div className="odoo-progress-msg">
