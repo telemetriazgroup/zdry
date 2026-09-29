@@ -63,7 +63,6 @@ import {
   ACQUISITION_REFS_KEY,
   assertPriceFloor,
   computeListPrices,
-  DEFAULT_PRICING_RULES,
   grossOf,
   igvOf,
   normalizeAcquisitionRefs,
@@ -161,7 +160,6 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
 
   async loadPricing(): Promise<PricingRule[]> {
     const rows = await this.prisma.pricingRule.findMany();
-    if (!rows.length) return DEFAULT_PRICING_RULES;
     return rows.map((r) => ({
       id: r.id,
       scope: r.scope,

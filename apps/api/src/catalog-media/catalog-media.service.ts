@@ -22,7 +22,6 @@ import {
 } from "../domain/catalog-media";
 import {
   ACQUISITION_REFS_KEY,
-  DEFAULT_PRICING_RULES,
   computeListPrices,
   describeOffer,
   normalizeAcquisitionRefs,
@@ -837,7 +836,6 @@ export class CatalogMediaService {
 
   private async loadPricing(): Promise<PricingRule[]> {
     const rows = await this.prisma.pricingRule.findMany();
-    if (!rows.length) return DEFAULT_PRICING_RULES;
     return rows.map((r) => ({
       id: r.id,
       scope: r.scope,

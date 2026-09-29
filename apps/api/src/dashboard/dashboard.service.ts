@@ -6,7 +6,7 @@ import { addCostBucket, countByDay, limaLastDays, rankCostBuckets } from "../dom
 import { inspectOdooIso } from "../domain/odoo-lot-map";
 import { labelOdooEvent } from "../domain/odoo-event";
 import { pendingValuationWhere } from "../domain/odoo-reconcile";
-import { computeListPrices, DEFAULT_PRICING_RULES, normalizeAcquisitionRefs, ACQUISITION_REFS_KEY } from "../domain/pricing";
+import { computeListPrices, normalizeAcquisitionRefs, ACQUISITION_REFS_KEY } from "../domain/pricing";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { loadOverlayConcepts, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 const STOCK_STATUS = ["Disponible", "Reservado"];
@@ -113,15 +113,13 @@ export class DashboardService {
           loadOverlayConcepts(this.prisma),
         ])
       : [[], null, null, []];
-    const pricing = pricingRows.length
-      ? pricingRows.map((r) => ({
-          id: r.id,
-          scope: r.scope,
-          target: r.target,
-          marginPct: Number(r.marginPct),
-          maxDiscountPct: Number(r.maxDiscountPct),
-        }))
-      : DEFAULT_PRICING_RULES;
+    const pricing = pricingRows.map((r) => ({
+      id: r.id,
+      scope: r.scope,
+      target: r.target,
+      marginPct: Number(r.marginPct),
+      maxDiscountPct: Number(r.maxDiscountPct),
+    }));
     const refs = normalizeAcquisitionRefs(refsRow?.value);
 
     const byType = new Map();

@@ -15,6 +15,8 @@ export default function Masters() {
   const [editingType, setEditingType] = useState(null);
   const [catForm, setCatForm] = useState({ code: "", label: "", color: "#1971c2" });
   const [editingCat, setEditingCat] = useState(null);
+  const [mergeKeep, setMergeKeep] = useState("");
+  const [mergeAbsorb, setMergeAbsorb] = useState("");
 
   const q = showArchived ? "?includeArchived=1" : "";
 
@@ -89,6 +91,31 @@ export default function Masters() {
       setCatForm({ code: "", label: "", color: "#1971c2" });
       setEditingCat(null);
       await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : err.message);
+    }
+  }
+
+  async function mergeTypes(e) {
+    e.preventDefault();
+    setError("");
+    const keep = types.find((t) => t.code === mergeKeep);
+    const drop = types.find((t) => t.code === mergeAbsorb);
+    if (!keep || !drop || keep.code === drop.code) {
+      setError("Elige el tipo que queda y otro distinto para archivar.");
+      return;
+    }
+    const ok = window.confirm(
+      `¿Fusionar ${drop.code} dentro de ${keep.code}? ${drop.unitCount || 0} equipos pasan a ${keep.code} (${keep.label}). ${drop.code} se archiva y queda en cero. Las listas que no son oferta a mano se recalculan. Las cotizaciones ya emitidas y el producto en Odoo no cambian.`,
+    );
+    if (!ok) return;
+    try {
+      const out = await api("/masters/types/merge", { method: "POST", body: { keep: keep.code, absorb: drop.code } });
+      const n = Number(out.movedUnits) || 0;
+      flash(`${out.archived.join(", ")} archivado. ${n} ${n === 1 ? "equipo quedó" : "equipos quedaron"} en ${out.keep}. En el tipo archivado quedan ${out.leftOnArchived}.`);
+      setMergeAbsorb("");
+      if (showArchived) await load();
+      else setShowArchived(true);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : err.message);
     }
@@ -196,13 +223,35 @@ export default function Masters() {
               <button className="btn-ghost" type="button" onClick={() => { setEditingType(null); setTypeForm({ code: "", label: "", dims: "", color: "#1971c2" }); }}>Cancelar</button>
             ) : null}
           </form>
+          <form className="form-grid" onSubmit={mergeTypes}>
+            <div>
+              <label>El que queda</label>
+              <select value={mergeKeep} onChange={(e) => setMergeKeep(e.target.value)} required>
+                <option value="">Elegir</option>
+                {types.filter((t) => !t.archivedAt).map((t) => (
+                  <option key={t.code} value={t.code}>{t.code} · {t.label} · {t.unitCount || 0}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label>Se archiva</label>
+              <select value={mergeAbsorb} onChange={(e) => setMergeAbsorb(e.target.value)} required>
+                <option value="">Elegir</option>
+                {types.filter((t) => !t.archivedAt && t.code !== mergeKeep).map((t) => (
+                  <option key={t.code} value={t.code}>{t.code} · {t.label} · {t.unitCount || 0}</option>
+                ))}
+              </select>
+            </div>
+            <button className="btn-primary" type="submit">Fusionar</button>
+          </form>
+          <p className="section-sub">Los equipos del tipo archivado pasan al que queda y ese código queda en cero. Puedes verlo con «Ver archivados».</p>
           <div className="tablewrap">
           <table className="data">
-            <thead><tr><th>Código</th><th>Etiqueta</th><th>Medidas</th><th>Estado</th><th></th></tr></thead>
+            <thead><tr><th>Código</th><th>Etiqueta</th><th>Medidas</th><th>Equipos</th><th>Estado</th><th></th></tr></thead>
             <tbody>
               {types.map((t) => (
                 <tr key={t.code} style={t.archivedAt ? { opacity: 0.55 } : undefined}>
-                  <td>{t.code}</td><td>{t.label}</td><td>{t.dims}</td>
+                  <td>{t.code}</td><td>{t.label}</td><td>{t.dims}</td><td>{t.unitCount || 0}</td>
                   <td>{t.archivedAt ? "archivado" : (t.protected ? "activo · seed" : "activo")}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button type="button" className="btn-ghost" onClick={() => editType(t)}>Editar</button>

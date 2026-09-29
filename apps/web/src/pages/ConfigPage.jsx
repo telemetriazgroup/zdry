@@ -717,7 +717,9 @@ export default function ConfigPage() {
     try {
       const out = await api("/config/pricing", { method: "PUT", body: { rules: pricing } });
       setPricing(out);
-      setSaved("✓ Reglas de precio actualizadas. Las unidades nuevas las usan al cotizar.");
+      setSaved(out.length
+        ? "✓ Reglas de precio guardadas. Las listas que no son oferta a mano se recalcularon con estas reglas."
+        : "✓ No quedó ninguna regla. Hasta que agregues una y guardes, el cálculo usa margen 22% y descuento máximo 10%.");
     } catch (e) {
       setError(e.message);
     }
@@ -1112,7 +1114,10 @@ export default function ConfigPage() {
       {tab === "precios" ? (
       <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Reglas de precio (margen / descuento máximo)</h3>
-        <p className="section-sub">Se aplica sobre el costo base, que ya incluye el margen de seguridad. El margen define el precio objetivo. El descuento máximo es lo que el comercial puede bajar sin intervención de gerencia. Ámbito más específico gana (unidad → fabricante → tipo/condición → global).</p>
+        <p className="section-sub">Se aplica sobre el costo base, que ya incluye el margen de seguridad. El margen define el precio objetivo. El descuento máximo es lo que el comercial puede bajar sin intervención de gerencia. Ámbito más específico gana (unidad → fabricante → tipo/condición → global). Quitar una fila solo la saca de esta pantalla: pulsa Guardar precios para dejar el conjunto nuevo.</p>
+        {pricing.length ? null : (
+          <p className="section-sub">No hay reglas en esta pantalla. Añade las que quieras y pulsa Guardar precios.</p>
+        )}
         {pricing.map((r, i) => (
           <div className="form-grid" key={r.id || i}>
             <div>
@@ -1149,10 +1154,25 @@ export default function ConfigPage() {
               <label>Dto. máx %</label>
               <input type="number" value={r.maxDiscountPct} onChange={(e) => setPricing(pricing.map((x, j) => j === i ? { ...x, maxDiscountPct: Number(e.target.value) } : x))} />
             </div>
+            <div>
+              <label>&nbsp;</label>
+              <button className="btn-ghost" type="button" onClick={() => setPricing(pricing.filter((_, j) => j !== i))}>Quitar</button>
+            </div>
           </div>
         ))}
         <div className="action-row">
-          <button className="btn-ghost" type="button" onClick={() => setPricing([...pricing, { scope: "category", target: "1TRIP", marginPct: 14, maxDiscountPct: 5 }])}>Añadir regla</button>
+          <button className="btn-ghost" type="button" onClick={() => setPricing([...pricing, { scope: "global", target: null, marginPct: 12, maxDiscountPct: 10 }])}>Añadir regla</button>
+          <button
+            className="btn-ghost"
+            type="button"
+            disabled={!pricing.length}
+            onClick={() => {
+              if (!window.confirm("¿Quitar todas las reglas de esta pantalla? Después pulsa Guardar precios para dejarlas en cero, o Añadir regla para armar el conjunto nuevo antes de guardar.")) return;
+              setPricing([]);
+            }}
+          >
+            Quitar todas
+          </button>
           <button className="btn-primary" type="button" onClick={savePricing}>Guardar precios</button>
           <button className="btn-ghost" type="button" onClick={recalculateAll}>Recalcular todas las listas</button>
         </div>

@@ -33,7 +33,7 @@ import { StorageService } from "../storage/storage.service";
 import { randomUUID } from "crypto";
 import { inspectOdooIso } from "../domain/odoo-lot-map";
 import { assertConfirmMatch, pendingValuationWhere, proposeMatch, reconcileContainerPatch } from "../domain/odoo-reconcile";
-import { ACQUISITION_REFS_KEY, computeListPrices, DEFAULT_PRICING_RULES, normalizeAcquisitionRefs } from "../domain/pricing";
+import { ACQUISITION_REFS_KEY, computeListPrices, normalizeAcquisitionRefs } from "../domain/pricing";
 import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 
@@ -526,15 +526,13 @@ export class PurchasesService {
       loadOverlayConcepts(this.prisma),
       loadSafetyMarginRules(this.prisma),
     ]);
-    const pricing = rules.length
-      ? rules.map((r) => ({
-          id: r.id,
-          scope: r.scope,
-          target: r.target,
-          marginPct: Number(r.marginPct),
-          maxDiscountPct: Number(r.maxDiscountPct),
-        }))
-      : DEFAULT_PRICING_RULES;
+    const pricing = rules.map((r) => ({
+      id: r.id,
+      scope: r.scope,
+      target: r.target,
+      marginPct: Number(r.marginPct),
+      maxDiscountPct: Number(r.maxDiscountPct),
+    }));
     const computed = computeListPrices(
       overlayUnitFrom(c, dry),
       pricing,

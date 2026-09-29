@@ -10,6 +10,7 @@ import {
   Query,
   Req,
 } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { Request } from "express";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
@@ -17,6 +18,9 @@ import { Roles } from "../auth/roles.decorator";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
 import { masterListWhere } from "../domain/masters";
+import { ACQUISITION_REFS_KEY, normalizeAcquisitionRefs, normalizeSafetyMarginRules, SAFETY_MARGIN_KEY } from "../domain/pricing";
+import { parseTypeMerge, retargetTypeRows } from "../domain/type-merge";
+import { refreshRulePrices } from "../odoo-import/acquisition-overlay.store";
 
 @Controller("masters")
 export class MastersController {
@@ -26,11 +30,16 @@ export class MastersController {
   ) {}
 
   @Get("types")
-  types(@Query("includeArchived") includeArchived?: string) {
-    return this.prisma.containerType.findMany({
-      where: masterListWhere(includeArchived),
-      orderBy: { code: "asc" },
-    });
+  async types(@Query("includeArchived") includeArchived?: string) {
+    const [rows, grouped] = await Promise.all([
+      this.prisma.containerType.findMany({
+        where: masterListWhere(includeArchived),
+        orderBy: { code: "asc" },
+      }),
+      this.prisma.container.groupBy({ by: ["type"], _count: { _all: true } }),
+    ]);
+    const counts = new Map(grouped.map((row) => [row.type, row._count._all]));
+    return rows.map((row) => ({ ...row, unitCount: counts.get(row.code) || 0 }));
   }
 
   @Post("types")
@@ -81,6 +90,92 @@ export class MastersController {
   @Roles("admin")
   async restoreType(@Param("code") code: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.restore("containerType", code, user, req);
+  }
+
+  @Post("types/merge")
+  @Roles("admin")
+  async mergeTypes(
+    @Body() body: { keep?: string; absorb?: string | string[] },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const { keep, absorb } = parseTypeMerge(body);
+    if (!keep || !absorb.length) throw new BadRequestException("Elige el tipo que queda y al menos otro para archivar.");
+    const codes = [keep, ...absorb];
+    const rows = await this.prisma.containerType.findMany({ where: { code: { in: codes } } });
+    const byCode = new Map(rows.map((row) => [row.code, row]));
+    if (!byCode.has(keep)) throw new BadRequestException("El tipo que queda no existe.");
+    const missing = absorb.filter((code) => !byCode.has(code));
+    if (missing.length) throw new BadRequestException(`No existe el tipo ${missing.join(", ")}.`);
+
+    const units = await this.prisma.container.findMany({
+      where: { type: { in: absorb } },
+      select: { iso: true, type: true },
+    });
+    await this.prisma.container.updateMany({ where: { type: { in: absorb } }, data: { type: keep } });
+    for (let i = 0; i < units.length; i += 400) {
+      const chunk = units.slice(i, i + 400);
+      await this.prisma.containerHistory.createMany({
+        data: chunk.map((unit) => ({
+          iso: unit.iso,
+          type: "Tipo",
+          detail: `Tipo fusionado de ${unit.type} a ${keep} por ${user.name}. ${unit.type} quedó archivado. No cambia el producto en Odoo.`,
+        })),
+      });
+    }
+    const candidates = await this.prisma.odooLotCandidate.updateMany({
+      where: { zdryType: { in: absorb } },
+      data: { zdryType: keep },
+    });
+    await this.retargetScopeRules(this.prisma.pricingRule, absorb, keep);
+    await this.retargetScopeRules(this.prisma.visibilityRule, absorb, keep);
+    await this.retargetSetting(
+      ACQUISITION_REFS_KEY,
+      (value) => retargetTypeRows(
+        normalizeAcquisitionRefs(value),
+        "type",
+        absorb,
+        keep,
+        (row) => `${row.type}|${row.cat || ""}`,
+      ),
+    );
+    await this.retargetSetting(
+      SAFETY_MARGIN_KEY,
+      (value) => retargetTypeRows(
+        normalizeSafetyMarginRules(value),
+        "type",
+        absorb,
+        keep,
+        (row) => `${row.type || ""}|${row.cat || ""}|${row.supplier || ""}|${row.origin || ""}|${row.warehouse || ""}`,
+      ),
+    );
+    const archivedAt = new Date();
+    await this.prisma.containerType.updateMany({
+      where: { code: { in: absorb }, archivedAt: null },
+      data: { archivedAt },
+    });
+    if (byCode.get(keep)?.archivedAt) {
+      await this.prisma.containerType.update({ where: { code: keep }, data: { archivedAt: null } });
+    }
+    const prices = await refreshRulePrices(this.prisma);
+    const left = await this.prisma.container.count({ where: { type: { in: absorb } } });
+    await this.audit.log({
+      user,
+      action: "merge",
+      entity: "ContainerType",
+      entityId: keep,
+      before: { absorb },
+      after: { keep, movedUnits: units.length, movedCandidates: candidates.count, leftOnArchived: left },
+      ip: req.ip,
+    });
+    return {
+      keep,
+      archived: absorb,
+      movedUnits: units.length,
+      movedCandidates: candidates.count,
+      leftOnArchived: left,
+      pricesRecalculated: prices.updated,
+    };
   }
 
   @Get("categories")
@@ -205,6 +300,37 @@ export class MastersController {
   @Roles("admin")
   async restoreDepot(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.restore("depot", id, user, req);
+  }
+
+  private async retargetScopeRules(
+    model: {
+      findMany(args: { where: { scope: string; target: { in: string[] } } }): Promise<Array<{ id: string; target: string | null }>>;
+      update(args: { where: { id: string }; data: { target: string } }): Promise<unknown>;
+      deleteMany(args: { where: { id: { in: string[] } } }): Promise<unknown>;
+    },
+    absorb: string[],
+    keep: string,
+  ) {
+    const rows = await model.findMany({ where: { scope: "type", target: { in: [keep, ...absorb] } } });
+    const absorbed = rows.filter((row) => row.target && absorb.includes(row.target));
+    if (!absorbed.length) return;
+    if (rows.some((row) => row.target === keep)) {
+      await model.deleteMany({ where: { id: { in: absorbed.map((row) => row.id) } } });
+      return;
+    }
+    await model.update({ where: { id: absorbed[0].id }, data: { target: keep } });
+    if (absorbed.length > 1) {
+      await model.deleteMany({ where: { id: { in: absorbed.slice(1).map((row) => row.id) } } });
+    }
+  }
+
+  private async retargetSetting(key: string, map: (value: unknown) => unknown) {
+    const row = await this.prisma.appSetting.findUnique({ where: { key } });
+    if (!row) return;
+    await this.prisma.appSetting.update({
+      where: { key },
+      data: { value: map(row.value) as Prisma.InputJsonValue },
+    });
   }
 
   private async archive(kind: "depot" | "containerType" | "category", id: string, user: AuthUser, req: Request) {

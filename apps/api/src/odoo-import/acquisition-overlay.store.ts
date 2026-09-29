@@ -9,7 +9,6 @@ import {
 import {
   ACQUISITION_REFS_KEY,
   computeListPrices,
-  DEFAULT_PRICING_RULES,
   normalizeAcquisitionRefs,
   normalizeSafetyMarginRules,
   SAFETY_MARGIN_KEY,
@@ -89,15 +88,13 @@ export async function refreshRulePrices(prisma: PrismaService, filter: { warehou
     loadOverlayConcepts(prisma),
     loadSafetyMarginRules(prisma),
   ]);
-  const pricing = rules.length
-    ? rules.map((r) => ({
-        id: r.id,
-        scope: r.scope,
-        target: r.target,
-        marginPct: Number(r.marginPct),
-        maxDiscountPct: Number(r.maxDiscountPct),
-      }))
-    : DEFAULT_PRICING_RULES;
+  const pricing = rules.map((r) => ({
+    id: r.id,
+    scope: r.scope,
+    target: r.target,
+    marginPct: Number(r.marginPct),
+    maxDiscountPct: Number(r.maxDiscountPct),
+  }));
   const refs = normalizeAcquisitionRefs(refsRow?.value);
   const where: Prisma.ContainerWhereInput = {
     archivedAt: null,
