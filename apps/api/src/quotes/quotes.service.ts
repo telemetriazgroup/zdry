@@ -128,6 +128,15 @@ function n(v: Prisma.Decimal | number | null | undefined): number {
   return v == null ? 0 : Number(v);
 }
 
+/** El nombre de producto de Odoo es interno. No sale en la ficha pública. */
+function publicCatalogNotes(notes: string | null | undefined): string {
+  return String(notes || "")
+    .split(/\s*(?:\.\s+|\n+)/)
+    .map((part) => part.replace(/\.$/, "").trim())
+    .filter((part) => part && !/^producto odoo\s*:/i.test(part))
+    .join(". ");
+}
+
 @Injectable()
 export class QuotesService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(QuotesService.name);
@@ -416,7 +425,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       igv: showPrice ? igvOf(prices.priceList) : null,
       gross: showPrice ? grossOf(prices.priceList) : null,
       ...publicMediaFields(c),
-      inspectionNotes: published ? c.inspectionNotes : "",
+      inspectionNotes: published ? publicCatalogNotes(c.inspectionNotes) : "",
     };
   }
 
@@ -649,6 +658,9 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       if (!c.physicallyReceived) throw new BadRequestException(`${iso} aún no está en patio.`);
       if (c.status !== "Disponible" && c.status !== "Reservado") {
         throw new ConflictException(`${iso} no está disponible.`);
+      }
+      if (user?.role === "vendedor" && !isMediaApproved(c.mediaStatus)) {
+        throw new BadRequestException(`${iso} no está publicado. Solo lo publicado está disponible para la venta.`);
       }
       const prices = await this.ensureUnitPrices(iso, pricing, acquisition);
       lines.push({

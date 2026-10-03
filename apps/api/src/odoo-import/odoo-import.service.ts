@@ -3768,7 +3768,6 @@ export class OdooImportService {
     const notes = [
       cand.originCountry ? `Procedencia Odoo: ${cand.originCountry}` : "",
       material ? `Material Odoo: ${material}` : "",
-      cand.productName ? `Producto Odoo: ${cand.productName}` : "",
     ]
       .filter(Boolean)
       .join(". ");

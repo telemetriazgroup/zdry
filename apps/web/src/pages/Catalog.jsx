@@ -16,6 +16,27 @@ import VideoMarks, { videoSilenceProps } from "../video-marks.jsx";
 
 const CART_KEY = "zdry_cart";
 const money = (n) => (n == null ? null : "$" + Math.round(Number(n)).toLocaleString("en-US"));
+
+function kgOrDash(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return null;
+  return v.toLocaleString("en-US");
+}
+
+function tareMgwLabel(tare, mgw) {
+  const left = kgOrDash(tare);
+  const right = kgOrDash(mgw);
+  if (!left && !right) return "—";
+  return `${left || "—"} / ${right || "—"} kg`;
+}
+
+function publicNotes(notes) {
+  return String(notes || "")
+    .split(/\s*(?:\.\s+|\n+)/)
+    .map((part) => part.replace(/\.$/, "").trim())
+    .filter((part) => part && !/^producto odoo\s*:/i.test(part))
+    .join(". ");
+}
 const GALLERY_MS = 3500;
 const LEAD_MS = 5000;
 const LIST_SPLASH_MSGS = [
@@ -827,11 +848,11 @@ export default function Catalog() {
                   <tbody>
                     <tr><td>Fabricante</td><td>{pdp.manufacturer}</td></tr>
                     <tr><td>Año</td><td>{pdp.year || "—"}</td></tr>
-                    <tr><td>Tara / MGW</td><td>{pdp.tareKg} / {pdp.mgwKg} kg</td></tr>
+                    <tr><td>Tara / MGW</td><td>{tareMgwLabel(pdp.tareKg, pdp.mgwKg)}</td></tr>
                     <tr><td>Color</td><td>{pdp.color}</td></tr>
                   </tbody>
                 </table>
-                {pdp.inspectionNotes ? <p className="section-sub" style={{ marginTop: 10 }}>{pdp.inspectionNotes}</p> : null}
+                {publicNotes(pdp.inspectionNotes) ? <p className="section-sub" style={{ marginTop: 10 }}>{publicNotes(pdp.inspectionNotes)}</p> : null}
                 <div className="price-box">
                   {pdp.showPrice ? (
                     <>

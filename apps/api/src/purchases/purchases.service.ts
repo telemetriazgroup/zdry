@@ -719,10 +719,14 @@ export class PurchasesService {
     return this.presentContainerDam(updated);
   }
 
-  async listContainersForRole(role: AuthUser["role"]) {
+  async listContainersForRole(role: AuthUser["role"], view?: string) {
+    const preview = view === "comercial" && (role === "superadmin" || role === "admin" || role === "gerente");
+    const commercial = role === "vendedor" || preview;
+    const where: Prisma.ContainerWhereInput = { ...(await this.prisma.liveContainers()) };
+    if (commercial) where.mediaStatus = "aprobado";
     const [rows, visRows] = await Promise.all([
       this.prisma.container.findMany({
-        where: await this.prisma.liveContainers(),
+        where,
         include: { depot: { select: { name: true } } },
         orderBy: { createdAt: "desc" },
       }),
@@ -731,7 +735,8 @@ export class PurchasesService {
     const vis = visRows.length
       ? visRows.map((r) => ({ scope: r.scope, target: r.target, show: r.show }))
       : DEFAULT_VISIBILITY_RULES;
-    return rows.map((c) => this.presentInventory(c, role, vis));
+    const presentAs = commercial ? "vendedor" : role;
+    return rows.map((c) => this.presentInventory(c, presentAs, vis));
   }
 
   async attachDocuments(

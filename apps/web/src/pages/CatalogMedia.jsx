@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, apiUpload, ApiError, apiUrl, formatWhen } from "../api.js";
+import { api, apiUpload, ApiError, apiUrl, APP_ROOT, formatWhen } from "../api.js";
 import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 import VideoMarks, { videoSilenceProps } from "../video-marks.jsx";
@@ -8,10 +8,19 @@ import { EvalGrid } from "../eval-ratings.jsx";
 import OdooLotFicha, { ExpedientePanel } from "./OdooLotFicha.jsx";
 import { downloadCatalogStockExcel } from "../catalog-export.js";
 import { useNotice } from "../notice.jsx";
+import CommercialStock from "./CommercialStock.jsx";
 
 function usd(n) {
   if (n == null || n === "" || !Number.isFinite(Number(n))) return "—";
   return "$" + Math.round(Number(n)).toLocaleString("en-US");
+}
+
+function saleFloor(list, maxDiscountPct) {
+  const net = Number(list);
+  const disc = Number(maxDiscountPct);
+  const pct = Number.isFinite(disc) && disc > 0 ? disc : 10;
+  if (!Number.isFinite(net) || net <= 0) return null;
+  return Math.round(net * (1 - pct / 100));
 }
 
 const PAGE_SIZE = 10;
@@ -29,6 +38,37 @@ const STATUS = {
   oculto: { label: "Oculta del catálogo", color: "#5c6370" },
   rechazado: { label: "Oculta del catálogo", color: "#5c6370" },
 };
+
+const GROUPS = [
+  { id: "por publicar", label: "Por publicar" },
+  { id: "publicadas", label: "Publicadas" },
+  { id: "sin fotos", label: "Sin fotos" },
+  { id: "bloqueadas", label: "No se pueden publicar" },
+];
+
+function hardBlock(row) {
+  if (!row) return "";
+  if (row.publishBlock) return row.publishBlock;
+  if (row.leftCustomer || row.status === "Vendido") return "En el cliente o con salida: no se publica.";
+  if (row.awaitingReconcile) return "Reentrega sin conciliar: no se publica hasta el match con la OC.";
+  return "";
+}
+
+function catalogGroup(row) {
+  if (hardBlock(row)) return "bloqueadas";
+  if (row.mediaStatus === "aprobado") return "publicadas";
+  if (Number(row.photoCount) > 0) return "por publicar";
+  return "sin fotos";
+}
+
+function photoState(row) {
+  const n = Number(row?.photoCount) || 0;
+  const block = hardBlock(row);
+  if (block) return { text: `${n} · no se publica`, color: "#5c6370", title: block };
+  if (row?.mediaStatus === "aprobado") return { text: `${n} · publicada`, color: "#2f9e44", title: "Visible en catálogo" };
+  if (n > 0) return { text: `${n} · por publicar`, color: "#c9720b", title: "Pendiente de publicación" };
+  return { text: "0 · sin fotos", color: "#5c6370", title: "Sin fotos: no se puede publicar." };
+}
 
 function firstPreview(unit) {
   const first = (unit.photoSlots || []).findIndex(Boolean);
@@ -67,6 +107,7 @@ export default function CatalogMedia() {
   const [priceBusy, setPriceBusy] = useState(false);
   const [q, setQ] = useState("");
   const [onlyPhotos, setOnlyPhotos] = useState(false);
+  const [group, setGroup] = useState("por publicar");
   const [page, setPage] = useState(1);
   const [publishBusy, setPublishBusy] = useState(false);
   const [draftPrice, setDraftPrice] = useState({});
@@ -75,6 +116,8 @@ export default function CatalogMedia() {
   const [odooPhotos, setOdooPhotos] = useState([]);
   const [pickedAtt, setPickedAtt] = useState(null);
   const [assigning, setAssigning] = useState(false);
+  const [commercialView, setCommercialView] = useState(false);
+  const [commercialRows, setCommercialRows] = useState([]);
 
   function setMsg(text) {
     setMsgState(text || "");
@@ -87,21 +130,44 @@ export default function CatalogMedia() {
 
   function publishLock(row) {
     if (!row) return "";
-    if (row.publishBlock) return row.publishBlock;
-    if (row.leftCustomer || row.status === "Vendido") return "En el cliente o con salida: no se publica.";
-    if (row.awaitingReconcile) return "Reentrega sin conciliar: no se publica hasta el match con la OC.";
-    if (row.photoCount != null && Number(row.photoCount) < 1) return "Sin fotos: no se puede publicar.";
-    return "";
+    return hardBlock(row) || (Number(row.photoCount) < 1 ? "Sin fotos: no se puede publicar." : "");
   }
 
-  function withPhotos(list) {
-    return (list || []).filter((r) => Number(r.photoCount) > 0 && !publishLock(r));
+  function pickLock(row) {
+    if (!row) return "No se puede seleccionar.";
+    if (group === "publicadas") {
+      if (hardBlock(row)) return hardBlock(row);
+      if (row.mediaStatus !== "aprobado") return "No está publicada.";
+      return "";
+    }
+    if (row.mediaStatus === "aprobado" && !hardBlock(row)) return "Ya está publicada.";
+    return publishLock(row);
   }
 
   function enterSelect() {
     setSelectMode(true);
     setPicked(new Set());
-    setMsg("Modo selección. Marca las unidades con fotos, o usa «Seleccionar con fotos». Salir vuelve a revisar una por una.");
+    setMsg(group === "publicadas"
+      ? "Modo selección. Marca las publicadas que quieres ocultar."
+      : "Modo selección. Marca las que faltan por publicar, o usa «Seleccionar con fotos».");
+  }
+
+  async function openCommercial() {
+    setError("");
+    try {
+      const list = await api("/inventory?view=comercial");
+      setCommercialRows(Array.isArray(list) ? list : []);
+      setCommercialView(true);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    }
+  }
+
+  function chooseGroup(id) {
+    setGroup(id);
+    setSelectMode(false);
+    setPicked(new Set());
+    setPage(1);
   }
 
   function leaveSelect() {
@@ -111,7 +177,7 @@ export default function CatalogMedia() {
   }
 
   function togglePick(row) {
-    const lock = publishLock(row);
+    const lock = pickLock(row);
     if (lock) {
       setError(`${row.iso}: ${lock}`);
       return;
@@ -124,11 +190,16 @@ export default function CatalogMedia() {
     });
   }
 
-  function selectAllWithPhotos() {
-    const ids = withPhotos(filteredRows).map((r) => r.iso);
+  function selectReady() {
+    const ids = filteredRows.filter((r) => !pickLock(r)).map((r) => r.iso);
     setPicked(new Set(ids));
-    if (ids.length) setMsg(`${ids.length} unidades con fotos seleccionadas. Publica la selección o quita las que no van.`);
-    else setError("Ninguna unidad de este filtro tiene fotos.");
+    if (!ids.length) {
+      setError(group === "publicadas" ? "No hay publicadas en este filtro." : "Ninguna unidad de este filtro está por publicar.");
+      return;
+    }
+    setMsg(group === "publicadas"
+      ? `${ids.length} publicadas seleccionadas. Puedes ocultar la selección.`
+      : `${ids.length} unidades por publicar seleccionadas. Publica la selección o quita las que no van.`);
   }
 
   async function loadOffer(nextIso) {
@@ -157,7 +228,7 @@ export default function CatalogMedia() {
 
   useEffect(() => {
     setPage(1);
-  }, [q, onlyPhotos]);
+  }, [q, onlyPhotos, group]);
 
   async function open(nextIso) {
     setError("");
@@ -315,6 +386,10 @@ export default function CatalogMedia() {
   async function publishIso(nextIso, photoCount, fromList = false) {
     if (photoCount < 1) return;
     const row = rows.find((r) => r.iso === nextIso);
+    if (row?.mediaStatus === "aprobado" && !hardBlock(row)) {
+      setMsg(`${nextIso} ya está publicada.`);
+      return;
+    }
     const lock = publishLock(row) || (iso === nextIso ? publishLock(unit) : "");
     if (lock) {
       setError(lock);
@@ -444,11 +519,63 @@ export default function CatalogMedia() {
   }
 
   async function hide() {
+    if (!iso) return;
+    if (!window.confirm(`¿Ocultar ${iso} del catálogo? Las fotos se conservan.`)) return;
     try {
       const u = await api(`/catalog-media/${iso}/hide`, { method: "POST", body: {} });
       await applyUnit(u, "Oculta del catálogo. Las fotos se conservan.");
     } catch (e) {
       setError(e instanceof ApiError ? e.message : e.message);
+    }
+  }
+
+  async function hideIso(nextIso) {
+    if (!window.confirm(`¿Ocultar ${nextIso} del catálogo? Las fotos se conservan.`)) return;
+    setListBusy(nextIso);
+    setError("");
+    try {
+      await api(`/catalog-media/${nextIso}/hide`, { method: "POST", body: {} });
+      setMsg(`${nextIso} oculta del catálogo. Las fotos se conservan.`);
+      loadList();
+      if (iso === nextIso) {
+        const u = await api(`/catalog-media/${nextIso}`);
+        setUnit(u);
+      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    } finally {
+      setListBusy("");
+    }
+  }
+
+  async function hidePicked() {
+    const chosen = rows.filter((r) => picked.has(r.iso) && r.mediaStatus === "aprobado" && !hardBlock(r));
+    if (!chosen.length) {
+      setError("Selecciona al menos una unidad publicada.");
+      return;
+    }
+    const n = chosen.length;
+    if (!window.confirm(`¿Ocultar ${n} unidad${n === 1 ? "" : "es"} del catálogo? Las fotos se conservan.`)) return;
+    setPublishBusy(true);
+    setError("");
+    let ok = 0;
+    try {
+      for (const r of chosen) {
+        await api(`/catalog-media/${r.iso}/hide`, { method: "POST", body: {} });
+        ok += 1;
+      }
+      setMsg(`Ocultas ${ok} del catálogo. Las fotos se conservan.`);
+      setPicked(new Set());
+      loadList();
+      if (iso && chosen.some((r) => r.iso === iso)) {
+        const u = await api(`/catalog-media/${iso}`);
+        setUnit(u);
+      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+      loadList();
+    } finally {
+      setPublishBusy(false);
     }
   }
 
@@ -487,21 +614,30 @@ export default function CatalogMedia() {
       .filter(Boolean)
     : [];
   const markSrc = apiUrl("/catalog-media/watermark");
-  const filteredRows = useMemo(() => {
+  const searchedRows = useMemo(() => {
     const raw = q.trim().toUpperCase();
     const compact = raw.replace(/[\s-]/g, "");
     return rows.filter((r) => {
-      if (onlyPhotos && !(Number(r.photoCount) > 0)) return false;
       if (!raw) return true;
-      const hay = [r.iso, r.type, r.cat, r.depotName, r.manufacturer, r.registeredByName, STATUS[r.mediaStatus]?.label]
+      const hay = [r.iso, r.type, r.cat, r.depotName, r.manufacturer, r.registeredByName, STATUS[r.mediaStatus]?.label, photoState(r).text]
         .filter(Boolean)
         .join(" ")
         .toUpperCase();
       return hay.includes(raw) || hay.replace(/[\s-]/g, "").includes(compact);
     });
-  }, [rows, q, onlyPhotos]);
-  const photoRows = withPhotos(filteredRows);
-  const allPhotoPicked = photoRows.length > 0 && photoRows.every((r) => picked.has(r.iso));
+  }, [rows, q]);
+  const groupCounts = useMemo(() => {
+    const counts = { "por publicar": 0, publicadas: 0, "sin fotos": 0, bloqueadas: 0 };
+    for (const r of searchedRows) counts[catalogGroup(r)] += 1;
+    return counts;
+  }, [searchedRows]);
+  const filteredRows = useMemo(() => {
+    const list = searchedRows.filter((r) => catalogGroup(r) === group);
+    if (!onlyPhotos) return list;
+    return list.filter((r) => Number(r.photoCount) > 0);
+  }, [searchedRows, group, onlyPhotos]);
+  const readyRows = filteredRows.filter((r) => !pickLock(r));
+  const allReadyPicked = readyRows.length > 0 && readyRows.every((r) => picked.has(r.iso));
   const pages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const safePage = Math.min(page, pages);
   const pageRows = filteredRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
@@ -533,8 +669,7 @@ export default function CatalogMedia() {
     <div className="catalog-media-page">
       <h2 className="section-title">Ficha multimedia del catálogo</h2>
       <p className="section-sub">
-        El costo de la lista ya incluye el margen de seguridad. El rango sale de la regla de precio sobre ese costo base.
-        Filtra o entra en «Seleccionar para publicar»: marcas las que tienen fotos, publicas esa selección y sales para revisar una por una.
+        Por publicar son las que tienen fotos y aún no se ven. Publicadas ya están en el catálogo: el botón verde las oculta.
       </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
@@ -542,16 +677,33 @@ export default function CatalogMedia() {
 
       <div className="dash-grid catalog-media-grid">
         <div className="catalog-list-col">
-        <div className="panel catalog-stock-panel">
+        {commercialView ? (
+          <CommercialStock rows={commercialRows} preview onExit={() => setCommercialView(false)} />
+        ) : null}
+        {!commercialView ? <div className="panel catalog-stock-panel">
           <h3>Unidades en stock</h3>
-          {canApprove ? (
-            <p className="section-sub">
-              Edita el precio a vender en la lista para fijarlo sin abrir la unidad. Publicar queda listo si ya hay fotos.
-              La marca de agua se configura en{" "}
-              <Link to="/app/configuracion">Configuración</Link>
-              {meta.watermarkName ? ` (ahora: ${meta.watermarkName}).` : "."}
-            </p>
-          ) : null}
+            {canApprove ? (
+              <p className="section-sub">
+                Edita el precio a vender en la lista para fijarlo sin abrir la unidad. Publicar queda listo si ya hay fotos y aún no está en el catálogo.
+                La marca de agua se configura en{" "}
+                <Link to="/app/configuracion">Configuración</Link>
+                {meta.watermarkName ? ` (ahora: ${meta.watermarkName}).` : "."}
+              </p>
+            ) : null}
+            <div className="catalog-groups" role="tablist" aria-label="Estado de publicación">
+              {GROUPS.map((g) => (
+                <button
+                  key={g.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={group === g.id}
+                  className={group === g.id ? (g.id === "publicadas" ? "on on-green" : "on") : ""}
+                  onClick={() => chooseGroup(g.id)}
+                >
+                  {g.label} <span>{groupCounts[g.id] || 0}</span>
+                </button>
+              ))}
+            </div>
           <div className="odoo-toolbar">
             <input
               className="odoo-search"
@@ -585,20 +737,38 @@ export default function CatalogMedia() {
                 Recalcular listas
               </button>
             ) : null}
-            {canApprove && !selectMode ? (
-              <button className="btn-primary" type="button" disabled={publishBusy} onClick={enterSelect}>
-                Seleccionar para publicar
+            {canApprove ? (
+              <button className="btn-ghost" type="button" onClick={() => window.open(APP_ROOT, "_blank", "noopener")}>
+                Ver catálogo
+              </button>
+            ) : null}
+            {canApprove ? (
+              <button className="btn-published" type="button" onClick={openCommercial}>
+                Ver como comercial
+              </button>
+            ) : null}
+            {canApprove && !selectMode && (group === "por publicar" || group === "publicadas") ? (
+              <button className={group === "publicadas" ? "btn-published" : "btn-primary"} type="button" disabled={publishBusy} onClick={enterSelect}>
+                {group === "publicadas" ? "Seleccionar para ocultar" : "Seleccionar para publicar"}
               </button>
             ) : null}
           </div>
           {canApprove && selectMode ? (
-            <div className="catalog-select-bar">
+            <div className={`catalog-select-bar${group === "publicadas" ? " is-published" : ""}`}>
               <b>{picked.size} seleccionada{picked.size === 1 ? "" : "s"}</b>
-              <button className="btn-ghost" type="button" onClick={selectAllWithPhotos}>Seleccionar con fotos</button>
-              <button className="btn-ghost" type="button" onClick={() => setPicked(new Set())}>Quitar selección</button>
-              <button className="btn-primary" type="button" disabled={publishBusy || picked.size < 1} onClick={publishPicked}>
-                {publishBusy ? "Publicando…" : "Publicar selección"}
+              <button className="btn-ghost" type="button" onClick={selectReady}>
+                {group === "publicadas" ? "Seleccionar publicadas" : "Seleccionar con fotos"}
               </button>
+              <button className="btn-ghost" type="button" onClick={() => setPicked(new Set())}>Quitar selección</button>
+              {group === "publicadas" ? (
+                <button className="btn-published" type="button" disabled={publishBusy || picked.size < 1} onClick={hidePicked}>
+                  {publishBusy ? "Ocultando…" : "Ocultar selección"}
+                </button>
+              ) : (
+                <button className="btn-primary" type="button" disabled={publishBusy || picked.size < 1} onClick={publishPicked}>
+                  {publishBusy ? "Publicando…" : "Publicar selección"}
+                </button>
+              )}
               <button className="btn-ghost" type="button" onClick={leaveSelect}>Salir</button>
             </div>
           ) : null}
@@ -614,10 +784,10 @@ export default function CatalogMedia() {
                     <th>
                       <input
                         type="checkbox"
-                        checked={allPhotoPicked}
-                        disabled={!photoRows.length}
-                        aria-label="Seleccionar unidades con fotos"
-                        onChange={() => (allPhotoPicked ? setPicked(new Set()) : selectAllWithPhotos())}
+                        checked={allReadyPicked}
+                        disabled={!readyRows.length}
+                        aria-label={group === "publicadas" ? "Seleccionar publicadas" : "Seleccionar unidades por publicar"}
+                        onChange={() => (allReadyPicked ? setPicked(new Set()) : selectReady())}
                       />
                     </th>
                   ) : null}
@@ -626,7 +796,7 @@ export default function CatalogMedia() {
                   <th>Costo base</th>
                   <th>Extras</th>
                   <th>Venta sug.</th>
-                  <th>Rango</th>
+                  <th>Rango venta</th>
                   <th>Precio</th>
                   <th>Precio público</th>
                   <th>Fotos</th>
@@ -640,7 +810,7 @@ export default function CatalogMedia() {
                     className={`expandable${iso === r.iso ? " on" : ""}${selectMode && picked.has(r.iso) ? " row-picked" : ""}`}
                     onClick={() => {
                       if (!selectMode) { open(r.iso); return; }
-                      if (publishLock(r)) return;
+                      if (pickLock(r)) return;
                       togglePick(r);
                     }}
                   >
@@ -649,9 +819,9 @@ export default function CatalogMedia() {
                         <input
                           type="checkbox"
                           checked={picked.has(r.iso)}
-                          disabled={!!publishLock(r)}
+                          disabled={!!pickLock(r)}
                           aria-label={`Seleccionar ${r.iso}`}
-                          title={publishLock(r) || "Incluir en la publicación"}
+                          title={pickLock(r) || (group === "publicadas" ? "Incluir para ocultar" : "Incluir en la publicación")}
                           onChange={() => togglePick(r)}
                         />
                       </td>
@@ -664,8 +834,10 @@ export default function CatalogMedia() {
                     <td title={(r.overlayLines || []).map((l) => `${l.label} ${usd(l.amount)}`).join(" · ") || "Sin extras"}>
                       {r.overlayTotal ? usd(r.overlayTotal) : "—"}
                     </td>
-                    <td>{usd(r.suggestedList)}</td>
-                    <td>{usd(r.suggestedMin)}–{usd(r.suggestedList)}</td>
+                    <td title={`Cálculo de la regla: ${usd(r.suggestedMin)}–${usd(r.suggestedList)}`}>{usd(r.suggestedList)}</td>
+                    <td title={`Regla ${usd(r.suggestedMin)}–${usd(r.suggestedList)}. El mínimo aplica el descuento máximo sobre el precio a publicar.`}>
+                      {usd(r.priceMin)}–{usd(r.priceList)}
+                    </td>
                     <td onClick={(e) => e.stopPropagation()}>
                       {canPrice ? (
                         <input
@@ -703,20 +875,36 @@ export default function CatalogMedia() {
                         r.showPrice ? "Sí" : "No"
                       )}
                     </td>
-                    <td style={{ color: (STATUS[r.mediaStatus] || STATUS.pendiente).color }} title={(STATUS[r.mediaStatus] || STATUS.pendiente).label}>
-                      {r.photoCount}
+                    <td style={{ color: photoState(r).color }} title={photoState(r).title}>
+                      {photoState(r).text}
                     </td>
                     {canApprove ? (
                       <td onClick={(e) => e.stopPropagation()}>
-                        <button
-                          className="btn-primary"
-                          type="button"
-                          disabled={!!publishLock(r) || listBusy === r.iso}
-                          title={publishLock(r) || "Publicar en catálogo"}
-                          onClick={() => publishIso(r.iso, r.photoCount, true)}
-                        >
-                          Publicar
-                        </button>
+                        {catalogGroup(r) === "publicadas" ? (
+                          <button
+                            className="btn-published"
+                            type="button"
+                            disabled={listBusy === r.iso}
+                            title="Está publicada. Pulsa para ocultarla del catálogo."
+                            onClick={() => hideIso(r.iso)}
+                          >
+                            Ocultar de publicación
+                          </button>
+                        ) : catalogGroup(r) === "por publicar" ? (
+                          <button
+                            className="btn-primary"
+                            type="button"
+                            disabled={listBusy === r.iso}
+                            title="Publicar en catálogo"
+                            onClick={() => publishIso(r.iso, r.photoCount, true)}
+                          >
+                            Publicar
+                          </button>
+                        ) : (
+                          <span className="catalog-state-note" title={photoState(r).title}>
+                            {catalogGroup(r) === "sin fotos" ? "Sin fotos" : hardBlock(r)}
+                          </span>
+                        )}
                       </td>
                     ) : null}
                   </tr>
@@ -732,16 +920,16 @@ export default function CatalogMedia() {
               <button className="btn-ghost" type="button" disabled={safePage >= pages} onClick={() => setPage(safePage + 1)}>Siguiente</button>
             </div>
           ) : null}
-        </div>
+        </div> : null}
 
-        {unit && sheet === "expediente" && unit.candidateId ? (
+        {unit && !commercialView && sheet === "expediente" && unit.candidateId ? (
           <div className="panel catalog-internal-sheet">
             <p className="section-sub">Expediente interno. No se publica a clientes: OC, MO, facturas, notas y evolución de campos.</p>
             <ExpedientePanel id={unit.candidateId} />
           </div>
         ) : null}
 
-        {unit && sheet === "extras" ? (
+        {unit && !commercialView && sheet === "extras" ? (
           <div className="panel catalog-internal-sheet">
             <h3>Control previo a la publicación</h3>
             <p className="section-sub">
@@ -825,7 +1013,7 @@ export default function CatalogMedia() {
         ) : null}
         </div>
 
-        {unit ? (
+        {unit && !commercialView ? (
           <div className="panel catalog-detail-panel">
             <h3>{unit.iso}</h3>
             <p className="section-sub">{unit.type} · {unit.cat} · {unit.depotName} · {unit.manufacturer} {unit.year || ""}</p>
@@ -848,8 +1036,8 @@ export default function CatalogMedia() {
                     {offer.safetyLines?.[0]?.label ? ` (${offer.safetyLines[0].label})` : offer.safetyLines?.length ? ` (${offer.safetyLines.map((l) => l.label || [l.type, l.cat, l.supplier, l.origin, l.warehouse].filter(Boolean).join(" · ") || "global").join(", ")})` : ""}
                     {" "}+{usd(offer.safetyAdd || 0)} → costo base {usd(offer.securedBase ?? offer.base)}
                   </li>
-                  <li>Regla de precio {offer.marginPct}% sobre el costo base → venta {usd(offer.suggestedList)}</li>
-                  <li>Descuento máximo {offer.maxDiscountPct}% → piso {usd(offer.suggestedMin)} (sin gerencia)</li>
+                  <li>Regla de precio {offer.marginPct}% sobre el costo base → venta sugerida {usd(offer.suggestedList)}</li>
+                  <li>Descuento máximo {offer.maxDiscountPct}% sobre la venta sugerida → piso de la regla {usd(offer.suggestedMin)}</li>
                 </ul>
                 <p className="section-sub">{offer.visibilityLabel}</p>
                 {offer.outdated ? (
@@ -862,7 +1050,7 @@ export default function CatalogMedia() {
                   <div className="offer-kpi"><span>Margen seg.</span><b>{offer.safetyPct ? `${offer.safetyPct}%` : "—"}</b></div>
                   <div className="offer-kpi"><span>Costo base</span><b>{usd(offer.securedBase ?? offer.base)}</b></div>
                   <div className="offer-kpi"><span>Venta sugerida</span><b>{usd(offer.suggestedList)}</b></div>
-                  <div className="offer-kpi"><span>Rango</span><b>{usd(offer.suggestedMin)}–{usd(offer.suggestedList)}</b></div>
+                  <div className="offer-kpi"><span>Rango de la regla</span><b>{usd(offer.suggestedMin)}–{usd(offer.suggestedList)}</b></div>
                 </div>
                 <div className="form-grid">
                   <div>
@@ -886,6 +1074,22 @@ export default function CatalogMedia() {
                     </select>
                   </div>
                 </div>
+                {(() => {
+                  const list = Number(priceNet);
+                  const floor = saleFloor(list, offer.maxDiscountPct);
+                  const ruleList = Math.round(Number(offer.suggestedList) || 0);
+                  const changed = Number.isFinite(list) && Math.round(list) !== ruleList;
+                  return (
+                    <div className="commercial-range">
+                      <b>Así lo verá el comercial</b>
+                      <p>
+                        Precio de lista {usd(list)}. Con el descuento máximo {offer.maxDiscountPct}% puede bajar hasta {usd(floor)}.
+                        Rango de venta {usd(floor)}–{usd(list)}.
+                        {changed ? ` La regla sigue en ${usd(offer.suggestedMin)}–${usd(offer.suggestedList)}.` : " Coincide con el cálculo de la regla."}
+                      </p>
+                    </div>
+                  );
+                })()}
                 <label>Nota del cambio (opcional)</label>
                 <input value={priceNote} onChange={(e) => setPriceNote(e.target.value)} placeholder="Ej. ajuste por 1-trip 2025" maxLength={240} />
                 <div className="action-row" style={{ marginTop: 8 }}>
@@ -914,13 +1118,19 @@ export default function CatalogMedia() {
 
             {canApprove ? (
               <div className="action-row" style={{ marginTop: 16 }}>
-                {publishLock(unit) ? (
-                  <p className="section-sub">{publishLock(unit)}</p>
-                ) : null}
-                <button className="btn-primary" type="button" onClick={publish} disabled={photoCount < 1 || !!publishLock(unit)} title={publishLock(unit) || (photoCount < 1 ? "Carga al menos una foto para publicar" : "")}>
-                  Publicar en catálogo
-                </button>
-                <button className="btn-ghost" type="button" onClick={hide} disabled={unit.mediaStatus !== "aprobado"}>Ocultar del catálogo</button>
+                {hardBlock(unit) ? (
+                  <p className="section-sub">{hardBlock(unit)}</p>
+                ) : unit.mediaStatus === "aprobado" ? (
+                  <button className="btn-published" type="button" onClick={hide} title="Está publicada. Pulsa para ocultarla del catálogo.">
+                    Ocultar de publicación
+                  </button>
+                ) : photoCount > 0 ? (
+                  <button className="btn-primary" type="button" onClick={publish} title="Publicar en catálogo">
+                    Publicar
+                  </button>
+                ) : (
+                  <span className="catalog-state-note">Sin fotos</span>
+                )}
                 {canSeeExpediente && unit.candidateId ? (
                   <button
                     className={sheet === "expediente" ? "btn-primary" : "btn-ghost"}
