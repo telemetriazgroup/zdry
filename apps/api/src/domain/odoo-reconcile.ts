@@ -95,6 +95,38 @@ export function assertConfirmMatch(input: { alreadyPoId?: number | null; picking
   return { ok: true };
 }
 
+export type ReconcileLotRef = {
+  id: string;
+  odooLotId: number;
+  isoNormalized?: string | null;
+  serialRaw?: string | null;
+  odooPickingName?: string | null;
+  odooPoId?: number | null;
+};
+
+/**
+ * Un IN puede traer varias series. El lote que se liga es el de esta serie,
+ * no el primero del picking. Si el IN no trae esa serie, no hay candidato.
+ */
+export function pickReconcileCandidate<T extends ReconcileLotRef>(
+  iso: string,
+  lots: T[],
+  chosen?: { candidateId?: string | null; rightId?: string | null },
+): T | null {
+  const want = inspectOdooIso(iso).isoNormalized;
+  if (!want) return null;
+  const sameSerial = (lot: T) => inspectOdooIso(lot.isoNormalized || lot.serialRaw || "").isoNormalized === want;
+  const rightId = String(chosen?.rightId || "").trim();
+  const onChosenIn = (lot: T) => {
+    if (!rightId) return true;
+    return lot.id === rightId || lot.odooPickingName === rightId || (lot.odooPoId != null && `po:${lot.odooPoId}` === rightId);
+  };
+  const scoped = lots.filter((lot) => sameSerial(lot) && onChosenIn(lot));
+  if (!scoped.length) return null;
+  const hinted = chosen?.candidateId ? scoped.find((lot) => lot.id === chosen.candidateId) : null;
+  return hinted || scoped[0];
+}
+
 export function reconcileContainerPatch(odoo: {
   odooPoId: number | null;
   odooPoName?: string | null;

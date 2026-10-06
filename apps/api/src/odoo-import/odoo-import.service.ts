@@ -1690,9 +1690,10 @@ export class OdooImportService {
     event = "recepcion_save",
   ) {
     const c = await this.prisma.container.findUnique({ where: { iso } });
-    if (!c?.odooLotId) return { ok: true, flushed: 0, skipped: true as const };
-    const cand = await this.prisma.odooLotCandidate.findUnique({ where: { odooLotId: c.odooLotId } });
-    if (!cand) return { ok: false, flushed: 0, message: "Esta unidad no tiene ficha Odoo asimilada." };
+    if (!c) return { ok: false, flushed: 0, message: "Unidad no encontrada." };
+    const resolved = await this.candidateForUnitWrite(c.iso, c.odooLotId);
+    if (!resolved.ok) return { ok: false, flushed: 0, message: resolved.message };
+    const cand = resolved.row;
 
     const data: Prisma.OdooLotCandidateUpdateInput = {};
     const extraPatch: Record<string, string | null> = {};
@@ -1756,6 +1757,46 @@ export class OdooImportService {
       });
     }
     return this.flushWritebacks(cand.id);
+  }
+
+  /**
+   * El guardado escribe solo en el lote de esta serie. Si la conciliación
+   * dejó el id de otro equipo del mismo IN, se redirige al lote propio.
+   */
+  private async candidateForUnitWrite(iso: string, odooLotId: number | null) {
+    const want = inspectOdooIso(iso).isoNormalized;
+    const serialOf = (row: { isoNormalized?: string | null; serialRaw?: string | null }) =>
+      inspectOdooIso(row.isoNormalized || row.serialRaw || "").isoNormalized;
+    let linked = odooLotId ? await this.prisma.odooLotCandidate.findUnique({ where: { odooLotId } }) : null;
+    if (linked && serialOf(linked) !== want) linked = null;
+    if (!linked) {
+      const rows = await this.prisma.odooLotCandidate.findMany({
+        where: { status: { not: "ignored" }, OR: [{ isoNormalized: want }, { containerIso: iso }] },
+      });
+      linked = rows.find((row) => serialOf(row) === want) || null;
+    }
+    if (!linked) {
+      return {
+        ok: false as const,
+        message: odooLotId
+          ? "El lote Odoo ligado es de otra serie. No se escribió encima."
+          : "Esta unidad no tiene ficha Odoo asimilada.",
+      };
+    }
+    await this.prisma.container.updateMany({
+      where: { odooLotId: linked.odooLotId, NOT: { iso } },
+      data: { odooLotId: null },
+    });
+    if (odooLotId !== linked.odooLotId) {
+      await this.prisma.container.update({ where: { iso }, data: { odooLotId: linked.odooLotId } });
+    }
+    if (linked.containerIso !== iso) {
+      linked = await this.prisma.odooLotCandidate.update({
+        where: { id: linked.id },
+        data: { containerIso: iso, status: linked.status === "pending" ? "assimilated" : linked.status },
+      });
+    }
+    return { ok: true as const, row: linked };
   }
 
   async listPhotos(id: string) {
@@ -3823,10 +3864,31 @@ export class OdooImportService {
     const source = this.sourceFromCandidate(cand);
     const awaitingReconcile = !c.odooPoId && (c.invoicePending || c.intakeType === "pendiente_factura");
     const data: Prisma.ContainerUpdateInput = {
-      odooSource: source as Prisma.InputJsonValue,
-      odooLotId: c.odooLotId || cand.odooLotId || undefined,
       intakeOrigin: awaitingReconcile ? c.intakeOrigin : c.intakeOrigin === "manual" ? "odoo" : c.intakeOrigin,
     };
+    if (awaitingReconcile) {
+      const candIso = inspectOdooIso(cand.serialRaw || "").isoNormalized;
+      if (cand.odooLotId && candIso === iso) {
+        const linked = c.odooLotId
+          ? await this.prisma.odooLotCandidate.findUnique({
+              where: { odooLotId: c.odooLotId },
+              select: { isoNormalized: true, serialRaw: true },
+            })
+          : null;
+        const linkedIso = linked ? inspectOdooIso(linked.isoNormalized || linked.serialRaw).isoNormalized : "";
+        const lotMismatch = !c.odooLotId || linkedIso !== iso;
+        if (lotMismatch && c.odooLotId !== cand.odooLotId) {
+          const taken = await this.prisma.container.findFirst({
+            where: { odooLotId: cand.odooLotId, NOT: { iso } },
+            select: { iso: true },
+          });
+          if (!taken) data.odooLotId = cand.odooLotId;
+        }
+      }
+    } else {
+      data.odooSource = source as Prisma.InputJsonValue;
+      data.odooLotId = c.odooLotId || cand.odooLotId || undefined;
+    }
     if (!awaitingReconcile && !c.odooIntakeKind && cand.odooIntakeKind) data.odooIntakeKind = cand.odooIntakeKind;
     if (!awaitingReconcile && !c.odooPickingName && cand.odooPickingName) data.odooPickingName = cand.odooPickingName;
     if (!awaitingReconcile && !c.costSource && cand.costSource) data.costSource = cand.costSource;

@@ -10,6 +10,7 @@ import {
   ownedFieldKeys,
   pickFieldByLabel,
   readLotAttrs,
+  ownedSnapshotFromUnit,
   receptionOwnedPatch,
   titleFromLocation,
 } from "./odoo-lot-map";
@@ -174,6 +175,36 @@ describe("odoo-lot-map", () => {
     expect(matchOdooSelect(2021, [["2021", "2021"], ["NO DEFINE", "NO DEFINE"]])).toBe("2021");
     expect(matchOdooSelect("CREMA", ODOO_LOT_SELECT_FALLBACK.color)).toBe("CREMA");
     expect(matchOdooSelect(2021, ODOO_LOT_SELECT_FALLBACK.year)).toBe("2021");
+  });
+
+  it("la ficha ZDRY de una reentrega se copia sin ceros ni el lote vecino", () => {
+    expect(
+      ownedSnapshotFromUnit({
+        color: "ROJO",
+        tareKg: 3940,
+        mgwKg: 0,
+        year: 1999,
+        manufacturer: "EVERGREEN HEAVY IND CORP BERHAD",
+        odooDua: null,
+        originCountry: "CHINA",
+        material: "ACERO",
+        odooSource: {
+          lotCode: "FSCU6139800-0",
+          zgroupCode: "FSCU6139800-0",
+          productTitle: "CONTENEDOR DRY 40 HC SEGUNDO USO",
+        },
+      }),
+    ).toEqual({
+      color: "ROJO",
+      tareKg: 3940,
+      year: 1999,
+      manufacturer: "EVERGREEN HEAVY IND CORP BERHAD",
+      originCountry: "CHINA",
+      material: "ACERO",
+      lotCode: "FSCU6139800-0",
+      zgroupCode: "FSCU6139800-0",
+      productTitle: "CONTENEDOR DRY 40 HC SEGUNDO USO",
+    });
   });
 
   it("Recepción mapea tara/peso/descripción a campos Odoo owned", () => {

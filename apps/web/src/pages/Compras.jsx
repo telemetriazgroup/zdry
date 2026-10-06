@@ -113,9 +113,19 @@ export default function Compras() {
   );
 }
 
+function matchesQuery(parts, query) {
+  const raw = String(query || "").trim().toUpperCase();
+  if (!raw) return true;
+  const compact = raw.replace(/[\s-]/g, "");
+  const text = parts.filter(Boolean).join(" ").toUpperCase();
+  return text.includes(raw) || text.replace(/[\s-]/g, "").includes(compact);
+}
+
 function ReconcileTab({ onChanged }) {
   const [data, setData] = useState({ left: [], right: [], proposals: [] });
   const [picked, setPicked] = useState({ iso: "", rightId: "" });
+  const [qLeft, setQLeft] = useState("");
+  const [qRight, setQRight] = useState("");
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
   const [busy, setBusy] = useState(false);
@@ -132,6 +142,17 @@ function ReconcileTab({ onChanged }) {
   const selected = (data.proposals || []).find(
     (p) => p.iso === picked.iso && p.rightId === picked.rightId,
   ) || forLeft.find((p) => p.mode === "auto") || forLeft[0];
+  const leftRows = useMemo(
+    () => (data.left || []).filter((r) => matchesQuery([r.iso, r.type, r.cat, r.depotName], qLeft)),
+    [data.left, qLeft],
+  );
+  const rightRows = useMemo(
+    () => (data.right || []).filter((r) => matchesQuery([
+      r.pickingName, r.odooPoName, r.odooVendorName, r.odooBillName, r.serialRaw, r.productName,
+      ...(r.lotIsos || []),
+    ], qRight)),
+    [data.right, qRight],
+  );
 
   async function confirm() {
     if (!picked.iso || !selected) {
@@ -167,11 +188,37 @@ function ReconcileTab({ onChanged }) {
       </p>
       {error ? <div className="err">{error}</div> : null}
       {ok ? <div className="ok-msg">{ok}</div> : null}
+      <div className="action-row reconcile-actions">
+        <button className="btn-primary" type="button" disabled={busy || !selected} onClick={confirm}>
+          Confirmar match
+        </button>
+        {selected ? (
+          <span className="section-sub">
+            {selected.iso} ↔ {selected.pickingName || selected.odooPoName} ({selected.mode === "auto" ? "ISO" : "propuesta por texto"})
+            {selected.odooUnitPrice ? ` · marketplace usará USD ${selected.odooUnitPrice}` : ""}
+          </span>
+        ) : (
+          <span className="section-sub">Elige una reentrega y su IN. Cada lista muestra 8 y sigue con scroll.</span>
+        )}
+      </div>
       <div className="reconcile-grid">
         <div>
           <h4>Reentregas sin OC</h4>
+          <input
+            className="odoo-search reconcile-search"
+            type="search"
+            value={qLeft}
+            onChange={(e) => setQLeft(e.target.value)}
+            placeholder="Buscar ISO, tipo, depósito…"
+            aria-label="Buscar reentrega"
+          />
+          <p className="section-sub reconcile-count">
+            {qLeft.trim() ? `${leftRows.length} de ${(data.left || []).length}` : `${(data.left || []).length}`} reentrega{(data.left || []).length === 1 ? "" : "s"}
+          </p>
           {!(data.left || []).length ? <p className="section-sub">No hay reentregas pendientes de conciliar.</p> : null}
-          {(data.left || []).map((r) => {
+          {(data.left || []).length > 0 && !leftRows.length ? <p className="section-sub">Ninguna reentrega coincide con la búsqueda.</p> : null}
+          <div className="reconcile-scroll">
+          {leftRows.map((r) => {
             const hits = (data.proposals || []).filter((p) => p.iso === r.iso);
             return (
               <button
@@ -189,11 +236,25 @@ function ReconcileTab({ onChanged }) {
               </button>
             );
           })}
+          </div>
         </div>
         <div>
           <h4>IN / OC Odoo</h4>
+          <input
+            className="odoo-search reconcile-search"
+            type="search"
+            value={qRight}
+            onChange={(e) => setQRight(e.target.value)}
+            placeholder="Buscar IN, OC, proveedor o serie…"
+            aria-label="Buscar IN u OC"
+          />
+          <p className="section-sub reconcile-count">
+            {qRight.trim() ? `${rightRows.length} de ${(data.right || []).length}` : `${(data.right || []).length}`} IN
+          </p>
           {!(data.right || []).length ? <p className="section-sub">No hay IN de compra en la bandeja Odoo. Pulsa Buscar en Odoo o espera el evento J2.</p> : null}
-          {(data.right || []).map((r) => {
+          {(data.right || []).length > 0 && !rightRows.length ? <p className="section-sub">Ningún IN coincide con la búsqueda.</p> : null}
+          <div className="reconcile-scroll">
+          {rightRows.map((r) => {
             const hit = (data.proposals || []).find((p) => p.iso === picked.iso && p.rightId === r.id);
             const dim = picked.iso && !hit;
             return (
@@ -215,18 +276,8 @@ function ReconcileTab({ onChanged }) {
               </button>
             );
           })}
+          </div>
         </div>
-      </div>
-      <div className="action-row" style={{ marginTop: 14 }}>
-        <button className="btn-primary" type="button" disabled={busy || !selected} onClick={confirm}>
-          Confirmar match
-        </button>
-        {selected ? (
-          <span className="section-sub">
-            {selected.iso} ↔ {selected.pickingName || selected.odooPoName} ({selected.mode === "auto" ? "ISO" : "propuesta por texto"})
-            {selected.odooUnitPrice ? ` · marketplace usará USD ${selected.odooUnitPrice}` : ""}
-          </span>
-        ) : null}
       </div>
     </div>
   );

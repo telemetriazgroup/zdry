@@ -31,8 +31,9 @@ import {
 } from "../domain/purchase-docs";
 import { StorageService } from "../storage/storage.service";
 import { randomUUID } from "crypto";
-import { inspectOdooIso } from "../domain/odoo-lot-map";
-import { assertConfirmMatch, pendingValuationWhere, proposeMatch, reconcileContainerPatch } from "../domain/odoo-reconcile";
+import { inspectOdooIso, ownedSnapshotFromUnit } from "../domain/odoo-lot-map";
+import { assertConfirmMatch, pendingValuationWhere, pickReconcileCandidate, proposeMatch, reconcileContainerPatch } from "../domain/odoo-reconcile";
+import { OdooImportService } from "../odoo-import/odoo-import.service";
 import { ACQUISITION_REFS_KEY, computeListPrices, normalizeAcquisitionRefs } from "../domain/pricing";
 import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
@@ -56,6 +57,7 @@ export class PurchasesService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly storage: StorageService,
+    private readonly odooImport: OdooImportService,
   ) {}
 
   async meta() {
@@ -443,13 +445,17 @@ export class PurchasesService {
     const cands = await this.prisma.odooLotCandidate.findMany({
       where: { odooIntakeKind: "purchase", status: { not: "ignored" } },
     });
-    const cand =
-      (input.candidateId ? cands.find((c) => c.id === input.candidateId) : null) ||
-      (input.rightId
-        ? cands.find((c) => c.id === input.rightId || c.odooPickingName === input.rightId || `po:${c.odooPoId}` === input.rightId)
-        : null) ||
-      cands.find((c) => inspectOdooIso(c.isoNormalized || c.serialRaw).isoNormalized === iso);
-    if (!cand) throw new NotFoundException("No hay un IN/OC de Odoo para esa serie.");
+    const cand = pickReconcileCandidate(iso, cands, { candidateId: input.candidateId, rightId: input.rightId });
+    if (!cand) {
+      throw new NotFoundException("Ese IN no tiene un lote con esta serie. No se liga el lote de otro equipo.");
+    }
+    const lotOwner = await this.prisma.container.findFirst({
+      where: { odooLotId: cand.odooLotId, NOT: { iso } },
+      select: { iso: true },
+    });
+    if (lotOwner) {
+      throw new ConflictException(`El lote Odoo de ${iso} ya está ligado a ${lotOwner.iso}. No se concilió encima.`);
+    }
 
     const pickingState = cand.odooPickingName ? "done" : "draft";
     const proposed = proposeMatch(
@@ -505,15 +511,20 @@ export class PurchasesService {
       });
     });
     await this.refreshAcquisitionPrices(iso);
+    const fresh = await this.prisma.container.findUnique({ where: { iso } });
+    const snapshot = fresh ? ownedSnapshotFromUnit(fresh) : {};
+    const writeback = Object.keys(snapshot).length
+      ? await this.odooImport.writebackFromUnit(iso, snapshot, "reconcile_push")
+      : null;
     await this.audit.log({
       user,
       action: "odoo_reconcile",
       entity: "Container",
       entityId: iso,
-      after: { odooPoId: patch.odooPoId, odooPickingName: patch.odooPickingName, fobCif: patch.fobCif, costSource: "oc" },
+      after: { odooPoId: patch.odooPoId, odooPickingName: patch.odooPickingName, fobCif: patch.fobCif, costSource: "oc", odooLotId: cand.odooLotId },
       ip,
     });
-    return { ok: true, iso, ...patch };
+    return { ok: true, iso, ...patch, odooLotId: cand.odooLotId, writeback };
   }
 
   private async refreshAcquisitionPrices(iso: string) {

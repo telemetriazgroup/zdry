@@ -1,4 +1,4 @@
-import { assertConfirmMatch, catalogPublishBlock, isPendingValuation, proposeMatch, reconcileContainerPatch } from "./odoo-reconcile";
+import { assertConfirmMatch, catalogPublishBlock, isPendingValuation, pickReconcileCandidate, proposeMatch, reconcileContainerPatch } from "./odoo-reconcile";
 
 const BMOU = { iso: "BMOU433548-9" };
 const IN_06302 = {
@@ -65,6 +65,50 @@ describe("isPendingValuation", () => {
     expect(catalogPublishBlock({ odooPoId: 12, invoicePending: true, intakeType: "compra" })).toBeNull();
     expect(catalogPublishBlock({ status: "Vendido", odooPoId: 12, intakeType: "compra" })).toMatch(/salida/);
     expect(catalogPublishBlock({ status: "Disponible", gateOut: true, odooPoId: 12, intakeType: "compra" })).toMatch(/salida/);
+  });
+});
+
+describe("pickReconcileCandidate", () => {
+  const sameIn = [
+    {
+      id: "dryu",
+      odooLotId: 2608,
+      isoNormalized: "DRYU9437735",
+      serialRaw: "DRYU9437735-5",
+      odooPickingName: "ZGROU/IN/07700",
+      odooPoId: 100,
+    },
+    {
+      id: "fscu",
+      odooLotId: 2610,
+      isoNormalized: "FSCU6139800",
+      serialRaw: "FSCU6139800-0",
+      odooPickingName: "ZGROU/IN/07700",
+      odooPoId: 100,
+    },
+  ];
+
+  it("el mismo IN no liga la segunda serie al lote de la primera", () => {
+    const picked = pickReconcileCandidate("FSCU6139800", sameIn, {
+      candidateId: "dryu",
+      rightId: "ZGROU/IN/07700",
+    });
+    expect(picked?.odooLotId).toBe(2610);
+    expect(picked?.id).toBe("fscu");
+  });
+
+  it("la primera serie del IN conserva su propio lote", () => {
+    const picked = pickReconcileCandidate("DRYU9437735", sameIn, {
+      candidateId: "dryu",
+      rightId: "ZGROU/IN/07700",
+    });
+    expect(picked?.odooLotId).toBe(2608);
+  });
+
+  it("un IN que no trae la serie no devuelve el lote de otro equipo", () => {
+    expect(
+      pickReconcileCandidate("FSCU6139800", sameIn, { rightId: "ZGROU/IN/09999" }),
+    ).toBeNull();
   });
 });
 

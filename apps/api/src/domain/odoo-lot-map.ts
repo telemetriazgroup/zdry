@@ -431,6 +431,53 @@ export function receptionOwnedPatch(body: {
   return out;
 }
 
+/** Ficha que ya está en ZDRY y debe copiarse al lote Odoo de esa misma serie. */
+export function ownedSnapshotFromUnit(unit: {
+  color?: string | null;
+  tareKg?: number | null;
+  mgwKg?: number | null;
+  year?: number | null;
+  manufacturer?: string | null;
+  odooDua?: string | null;
+  originCountry?: string | null;
+  material?: string | null;
+  odooDescription?: string | null;
+  odooSource?: unknown;
+}): Partial<Record<OdooOwnedField, string | number | null>> {
+  const src = unit.odooSource && typeof unit.odooSource === "object" && !Array.isArray(unit.odooSource)
+    ? (unit.odooSource as Record<string, unknown>)
+    : {};
+  const text = (value: unknown) => {
+    const raw = value == null ? "" : String(value).trim();
+    return raw && raw !== "—" ? raw : null;
+  };
+  const out: Partial<Record<OdooOwnedField, string | number | null>> = {};
+  const color = text(unit.color);
+  if (color) out.color = color;
+  if (unit.tareKg) out.tareKg = unit.tareKg;
+  if (unit.mgwKg) out.mgwKg = unit.mgwKg;
+  if (unit.year) out.year = unit.year;
+  else {
+    const token = text(src.yearToken);
+    if (token) out.year = token;
+  }
+  const manufacturer = text(unit.manufacturer);
+  if (manufacturer) out.manufacturer = manufacturer;
+  const dua = text(unit.odooDua);
+  if (dua) out.dua = dua;
+  const origin = text(unit.originCountry);
+  if (origin) out.originCountry = origin;
+  const material = text(unit.material);
+  if (material) out.material = material;
+  const description = text(unit.odooDescription);
+  if (description) out.description = description;
+  for (const key of ["zgroupCode", "internalRef", "lotCategory", "classification", "lotCode", "numberingDate", "manufactureMonth", "productTitle"] as const) {
+    const value = text(src[key]);
+    if (value) out[key] = value;
+  }
+  return out;
+}
+
 const ODOO_MONTHS = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 
 export const ODOO_LOT_SELECT_FALLBACK: {
