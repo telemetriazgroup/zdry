@@ -661,6 +661,35 @@ export class WarehouseService {
     };
   }
 
+  async relinkOdooReference(iso: string, user: AuthUser, ip?: string) {
+    const result = await this.odooImport.relinkUnitReference(iso);
+    const moved = result.previousLotId && result.previousLotId !== result.odooLotId;
+    await this.prisma.containerHistory.create({
+      data: {
+        iso: result.iso,
+        type: "Referencia Odoo",
+        detail: `${user.name} reinició la referencia. Lote Odoo ${result.odooLotId}${moved ? ` (antes ${result.previousLotId})` : ""}. ${result.notes} nota(s) de ese lote. La ficha de esta serie se copió a su lote.`,
+      },
+    });
+    await this.audit.log({
+      user,
+      action: "odoo_relink",
+      entity: "Container",
+      entityId: result.iso,
+      after: { odooLotId: result.odooLotId, previousLotId: result.previousLotId, notes: result.notes },
+      ip,
+    });
+    const unit = await this.presentFor(result.iso, user);
+    const writeback = result.writeback;
+    return {
+      ...unit,
+      relink: result,
+      saveMessage: writeback && writeback.ok === false
+        ? `Referencia enlazada al lote ${result.odooLotId}. Odoo no aceptó la ficha: ${writeback.message || "error"}`
+        : `Referencia reiniciada. La ficha quedó en el lote ${result.odooLotId} y las notas son solo de esa serie.`,
+    };
+  }
+
   async acceptIsoReview(iso: string, note: string, user: AuthUser, ip?: string) {
     const c = await this.loadUnit(iso);
     if (!c.isoException) return this.presentFor(iso, user);

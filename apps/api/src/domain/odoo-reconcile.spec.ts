@@ -1,4 +1,4 @@
-import { assertConfirmMatch, catalogPublishBlock, isPendingValuation, pickReconcileCandidate, proposeMatch, reconcileContainerPatch } from "./odoo-reconcile";
+import { assertConfirmMatch, catalogPublishBlock, isPendingValuation, pickReconcileCandidate, planOdooRelink, proposeMatch, reconcileContainerPatch } from "./odoo-reconcile";
 
 const BMOU = { iso: "BMOU433548-9" };
 const IN_06302 = {
@@ -109,6 +109,30 @@ describe("pickReconcileCandidate", () => {
     expect(
       pickReconcileCandidate("FSCU6139800", sameIn, { rightId: "ZGROU/IN/09999" }),
     ).toBeNull();
+  });
+});
+
+describe("planOdooRelink", () => {
+  const candidates = [
+    { id: "dryu", odooLotId: 2608, isoNormalized: "DRYU9437735", serialRaw: "DRYU9437735-5", containerIso: "FSCU6139800" },
+    { id: "fscu", odooLotId: 2610, isoNormalized: "FSCU6139800", serialRaw: "FSCU6139800-0", containerIso: null },
+  ];
+  const containers = [
+    { iso: "FSCU6139800", odooLotId: 2608 },
+    { iso: "DRYU9437735", odooLotId: 2608 },
+  ];
+
+  it("enlaza la serie a su lote y devuelve el otro candidato sin mover su equipo", () => {
+    expect(planOdooRelink({ iso: "FSCU6139800", candidates, containers })).toEqual({
+      ok: true,
+      candidateId: "fscu",
+      odooLotId: 2610,
+      restore: [{ candidateId: "dryu", containerIso: "DRYU9437735" }],
+    });
+  });
+
+  it("sin lote de esa serie no crea uno ni propone otro equipo", () => {
+    expect(planOdooRelink({ iso: "MSKU0225553", candidates, containers })).toMatchObject({ ok: false });
   });
 });
 

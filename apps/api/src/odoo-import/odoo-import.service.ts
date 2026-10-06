@@ -32,7 +32,9 @@ import {
   payloadExtras,
   withPayloadExtras,
   lotExtraPatch,
+  ownedSnapshotFromUnit,
 } from "../domain/odoo-lot-map";
+import { planOdooRelink } from "../domain/odoo-reconcile";
 import { freshOdooLotIds, normalizeOdooWatch, ODOO_WATCH_KEY, type OdooWatchMode } from "../domain/odoo-import-watch";
 import { warehouseFromLocation } from "../domain/odoo-warehouse";
 import { listOdooLotNotes } from "../odoo/odoo-lot-photos";
@@ -1371,9 +1373,9 @@ export class OdooImportService {
     const moUnitCost = await this.expediente.latestMoUnitCost(row.isoNormalized);
     let odooNotes: Array<{ id: number | string; body: string; author: string | null; date: string | null }> = [];
     if (!opts.refresh && (await this.notesAlreadyFetched(row))) {
-      odooNotes = await this.localOdooNotes(row.isoNormalized);
+      odooNotes = await this.localOdooNotes(row.isoNormalized, row.id);
     } else {
-      odooNotes = await this.pullOdooNotes(row).catch(() => this.localOdooNotes(row.isoNormalized));
+      odooNotes = await this.pullOdooNotes(row).catch(() => this.localOdooNotes(row.isoNormalized, row.id));
     }
     return {
       ...row,
@@ -1799,6 +1801,59 @@ export class OdooImportService {
     return { ok: true as const, row: linked };
   }
 
+  /** Suelta el lote ajeno, enlaza el de esta serie y vuelve a leer solo sus notas. */
+  async relinkUnitReference(iso: string) {
+    const want = inspectOdooIso(iso).isoNormalized;
+    const container = await this.prisma.container.findUnique({ where: { iso: want || iso } });
+    if (!container) throw new NotFoundException("Unidad no encontrada.");
+    const candidates = await this.prisma.odooLotCandidate.findMany({
+      where: {
+        status: { not: "ignored" },
+        OR: [
+          { isoNormalized: want },
+          { containerIso: container.iso },
+          ...(container.odooLotId ? [{ odooLotId: container.odooLotId }] : []),
+        ],
+      },
+    });
+    const serials = [...new Set(candidates.map((row) => inspectOdooIso(row.isoNormalized || row.serialRaw).isoNormalized).filter(Boolean))];
+    const containers = await this.prisma.container.findMany({
+      where: { iso: { in: serials.length ? serials : [container.iso] } },
+      select: { iso: true, odooLotId: true },
+    });
+    const plan = planOdooRelink({ iso: container.iso, candidates, containers });
+    if (!plan.ok) throw new NotFoundException(plan.message);
+    const own = candidates.find((row) => row.id === plan.candidateId);
+    if (!own) throw new NotFoundException("No hay un lote Odoo con esta serie.");
+
+    await this.prisma.container.update({ where: { iso: container.iso }, data: { odooLotId: plan.odooLotId } });
+    const linked = await this.prisma.odooLotCandidate.update({
+      where: { id: own.id },
+      data: { containerIso: container.iso, status: own.status === "pending" ? "assimilated" : own.status },
+    });
+    for (const row of plan.restore) {
+      await this.prisma.odooLotCandidate.update({
+        where: { id: row.candidateId },
+        data: { containerIso: row.containerIso },
+      });
+    }
+    await this.prisma.unitNote.deleteMany({ where: { isoNormalized: want, source: "odoo" } });
+    const notes = await this.pullOdooNotes(linked).catch(() => []);
+    const fresh = await this.prisma.container.findUnique({ where: { iso: container.iso } });
+    const snapshot = fresh ? ownedSnapshotFromUnit(fresh) : {};
+    const writeback = Object.keys(snapshot).length
+      ? await this.writebackFromUnit(container.iso, snapshot, "relink_push")
+      : null;
+    return {
+      ok: true as const,
+      iso: container.iso,
+      odooLotId: plan.odooLotId,
+      previousLotId: container.odooLotId,
+      notes: notes.length,
+      writeback,
+    };
+  }
+
   async listPhotos(id: string) {
     const row = await this.prisma.odooLotCandidate.findUnique({ where: { id } });
     if (!row) throw new NotFoundException("Candidato no encontrado.");
@@ -1819,13 +1874,23 @@ export class OdooImportService {
     return Boolean(this.notesFetchedAt(cand.payload));
   }
 
-  private async localOdooNotes(isoNormalized: string) {
+  private async localOdooNotes(isoNormalized: string, candidateId?: string) {
     const iso = inspectOdooIso(isoNormalized).isoNormalized || isoNormalized;
-    const rows = await this.prisma.unitNote.findMany({
-      where: { isoNormalized: iso, source: "odoo" },
-      orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }],
-      take: 200,
-    });
+    const orderBy = [{ occurredAt: "desc" as const }, { createdAt: "desc" as const }];
+    const scoped = candidateId
+      ? await this.prisma.unitNote.findMany({
+          where: { isoNormalized: iso, source: "odoo", candidateId },
+          orderBy,
+          take: 200,
+        })
+      : [];
+    const rows = scoped.length
+      ? scoped
+      : await this.prisma.unitNote.findMany({
+          where: { isoNormalized: iso, source: "odoo", candidateId: null },
+          orderBy,
+          take: 200,
+        });
     return rows.map((n) => ({
       id: n.odooMessageId || n.id,
       body: n.body,

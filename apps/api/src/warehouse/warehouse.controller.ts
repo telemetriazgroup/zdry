@@ -160,6 +160,16 @@ export class WarehouseController {
     return this.warehouse.patchUnit(iso, body, user, req.ip);
   }
 
+  @Post("units/:iso/odoo-relink")
+  @Roles("admin", "coordinador")
+  relinkOdoo(
+    @Param("iso") iso: string,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.relinkOdooReference(iso, user, req.ip);
+  }
+
   @Post("units/:iso/ratings")
   setRating(
     @Param("iso") iso: string,

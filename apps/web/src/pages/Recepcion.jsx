@@ -962,6 +962,23 @@ export default function Recepcion() {
     }
   }
 
+  async function relinkOdoo() {
+    if (!inspectIso) return;
+    if (!window.confirm(`¿Reiniciar la referencia Odoo de ${inspectIso}?\n\nSe suelta el lote que no es de esta serie y se enlaza el lote con el mismo código. La ficha de esta reentrega se copia a ese lote y las notas se vuelven a leer solo de ahí. El otro equipo no se modifica.`)) return;
+    setSavingFicha(true);
+    setError("");
+    try {
+      const next = await api(`/warehouse/units/${inspectIso}/odoo-relink`, { method: "POST" });
+      setUnit(next);
+      setFicha(fichaFrom(next));
+      setMsg(next.saveMessage || "Referencia reiniciada.");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSavingFicha(false);
+    }
+  }
+
   async function reviewVisitPhoto(approve) {
     const id = unit?.visit?.id;
     if (!id) return;
@@ -1854,6 +1871,11 @@ export default function Recepcion() {
               <button className="btn-primary" type="button" disabled={savingFicha} onClick={saveFicha}>
                 {savingFicha ? "Guardando…" : "Guardar ficha"}
               </button>
+              {canSeeOdoo ? (
+                <button className="btn-ghost" type="button" disabled={savingFicha} onClick={relinkOdoo}>
+                  Reiniciar referencia Odoo
+                </button>
+              ) : null}
             </div>
             <div style={{ marginTop: 14 }}>
               <b>Documentos de la unidad</b>

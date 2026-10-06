@@ -127,6 +127,52 @@ export function pickReconcileCandidate<T extends ReconcileLotRef>(
   return hinted || scoped[0];
 }
 
+export type RelinkCandidate = {
+  id: string;
+  odooLotId: number;
+  isoNormalized?: string | null;
+  serialRaw?: string | null;
+  containerIso?: string | null;
+};
+
+export type RelinkContainer = {
+  iso: string;
+  odooLotId?: number | null;
+};
+
+/**
+ * La serie queda ligada a su lote. Si otro candidato tenía esta serie como
+ * containerIso, se le devuelve la suya. No se cambia el lote ni la ficha del otro equipo.
+ */
+export function planOdooRelink(input: {
+  iso: string;
+  candidates: RelinkCandidate[];
+  containers: RelinkContainer[];
+}):
+  | { ok: false; message: string }
+  | {
+      ok: true;
+      candidateId: string;
+      odooLotId: number;
+      restore: Array<{ candidateId: string; containerIso: string | null }>;
+    } {
+  const want = inspectOdooIso(input.iso).isoNormalized;
+  if (!want) return { ok: false, message: "La serie no es válida." };
+  const serialOf = (row: { isoNormalized?: string | null; serialRaw?: string | null }) =>
+    inspectOdooIso(row.isoNormalized || row.serialRaw || "").isoNormalized;
+  const own = input.candidates.find((row) => serialOf(row) === want);
+  if (!own) {
+    return { ok: false, message: "No hay un lote Odoo con esta serie. No se creó un duplicado ni se tocó el otro equipo." };
+  }
+  const restore: Array<{ candidateId: string; containerIso: string | null }> = [];
+  for (const row of input.candidates) {
+    if (row.id === own.id || row.containerIso !== input.iso) continue;
+    const back = input.containers.find((unit) => unit.iso !== input.iso && serialOf({ isoNormalized: unit.iso }) === serialOf(row));
+    restore.push({ candidateId: row.id, containerIso: back?.iso || null });
+  }
+  return { ok: true, candidateId: own.id, odooLotId: own.odooLotId, restore };
+}
+
 export function reconcileContainerPatch(odoo: {
   odooPoId: number | null;
   odooPoName?: string | null;

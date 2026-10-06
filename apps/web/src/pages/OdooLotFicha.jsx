@@ -487,6 +487,26 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
         <button className="btn-ghost" type="button" disabled={saving || !!busy} onClick={() => api(`/odoo-import/candidates/${id}/flush`, { method: "POST" }).then(() => load()).catch((e) => setError(e.message))}>
           Reintentar Odoo
         </button>
+        {row.containerIso ? (
+          <button
+            className="btn-ghost"
+            type="button"
+            disabled={saving || !!busy}
+            onClick={() => {
+              if (!window.confirm(`¿Reiniciar la referencia de ${row.containerIso}? Se enlaza el lote de esa serie, se copian los datos de la reentrega y se vuelven a leer solo sus notas. El otro equipo no se modifica.`)) return;
+              setSaving(true);
+              api(`/warehouse/units/${row.containerIso}/odoo-relink`, { method: "POST" })
+                .then(async (res) => {
+                  setMsg(res.saveMessage || "Referencia reiniciada.");
+                  await load();
+                })
+                .catch((e) => setError(e.message))
+                .finally(() => setSaving(false));
+            }}
+          >
+            Reiniciar referencia
+          </button>
+        ) : null}
       </div>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
