@@ -23,6 +23,8 @@ export const DEFAULT_CATALOG_COPY = {
   sortIso: "ISO",
   sortPrice: "Precio",
   sortYear: "Año",
+  gallerySeconds: 40,
+  pageSize: 32,
   stepsTitle: "Adquiere tu dry en 3 pasos",
   steps: [
     { title: "Elige", body: "Selecciona el contenedor dry que mejor te conviene: medida, condición y fotos reales de patio." },
@@ -66,6 +68,12 @@ export const DEFAULT_CATALOG_COPY = {
   legalDataBody: "El responsable del tratamiento es ZGROUP S.A.C., con domicilio en MZ.D LTE 14 PROGRAMA DE VIVIENDA ACUARIO. Callao, Perú.\n\nPara ejercer tus derechos previstos en la Ley 29733, escribe a ventas@zgroup.com.pe indicando «Oficial de Datos Personales» o llama al +51 (1) 651-1974.",
 };
 
+function asInt(v, fallback, min, max) {
+  const n = parseInt(String(v ?? ""), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
 function text(v, fallback) {
   const t = typeof v === "string" ? v.trim() : "";
   return t || fallback;
@@ -83,7 +91,9 @@ export function mergeCatalogCopy(raw) {
   const rawSteps = Array.isArray(src.steps) ? src.steps : [];
   return {
     ...d,
-    ...Object.fromEntries(Object.keys(d).filter((k) => k !== "steps" && k !== "heroLeads" && k !== "heroPills").map((k) => [k, text(src[k], d[k])])),
+    ...Object.fromEntries(Object.keys(d).filter((k) => !["steps", "heroLeads", "heroPills", "gallerySeconds", "pageSize"].includes(k)).map((k) => [k, text(src[k], d[k])])),
+    gallerySeconds: asInt(src.gallerySeconds, d.gallerySeconds, 5, 180),
+    pageSize: asInt(src.pageSize, d.pageSize, 8, 96),
     heroLeads: lines(src.heroLeads, d.heroLeads),
     heroPills: lines(src.heroPills, d.heroPills),
     steps: d.steps.map((def, i) => ({

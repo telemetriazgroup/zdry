@@ -1016,7 +1016,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 }
 .btn-whatsapp:hover { background: #166c3a; color: #fff; text-decoration: none; }
   .pdp-cta-inline .link-btn { display: inline-flex; margin-top: 8px; }
-.pager { display: flex; gap: 6px; justify-content: center; align-items: center; margin-top: 22px; flex-wrap: wrap; }
+.pager { display: flex; gap: 6px; justify-content: center; align-items: center; margin: 18px 0; flex-wrap: wrap; }
+.stock-bar { scroll-margin-top: 16px; }
 .pager-status { margin-right: 8px; font-size: 13px; font-weight: 800; color: var(--navy); }
 .pager .btn-ghost.active {
   background: var(--orange);

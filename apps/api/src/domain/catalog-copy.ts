@@ -22,6 +22,8 @@ export type CatalogCopy = {
   sortIso: string;
   sortPrice: string;
   sortYear: string;
+  gallerySeconds: number;
+  pageSize: number;
   stepsTitle: string;
   steps: CatalogStep[];
   requestPrice: string;
@@ -82,6 +84,8 @@ export const DEFAULT_CATALOG_COPY: CatalogCopy = {
   sortIso: "ISO",
   sortPrice: "Precio",
   sortYear: "Año",
+  gallerySeconds: 40,
+  pageSize: 32,
   stepsTitle: "Adquiere tu dry en 3 pasos",
   steps: [
     { title: "Elige", body: "Selecciona el contenedor dry que mejor te conviene: medida, condición y fotos reales de patio." },
@@ -130,6 +134,12 @@ function asText(v: unknown, fallback: string) {
   return t || fallback;
 }
 
+function asInt(v: unknown, fallback: number, min: number, max: number) {
+  const n = typeof v === "number" ? v : parseInt(String(v ?? ""), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
 function asLines(v: unknown, fallback: string[]) {
   const arr = Array.isArray(v) ? v : typeof v === "string" ? v.split("\n") : [];
   const out = arr.map((x) => String(x ?? "").trim()).filter(Boolean);
@@ -164,6 +174,8 @@ export function normalizeCatalogCopy(raw: unknown): CatalogCopy {
     sortIso: asText(src.sortIso, d.sortIso),
     sortPrice: asText(src.sortPrice, d.sortPrice),
     sortYear: asText(src.sortYear, d.sortYear),
+    gallerySeconds: asInt(src.gallerySeconds, d.gallerySeconds, 5, 180),
+    pageSize: asInt(src.pageSize, d.pageSize, 8, 96),
     stepsTitle: asText(src.stepsTitle, d.stepsTitle),
     steps,
     requestPrice: asText(src.requestPrice, d.requestPrice),

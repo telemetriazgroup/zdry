@@ -37,21 +37,6 @@ function publicNotes(notes) {
     .filter((part) => part && !/^producto odoo\s*:/i.test(part))
     .join(". ");
 }
-const DEFAULT_GALLERY_SEC = 40;
-const DEFAULT_PAGE_SIZE = 32;
-const GALLERY_KEY = "zdry_catalog_gallery_sec";
-const PAGE_KEY = "zdry_catalog_page_size";
-
-function readStoredInt(key, fallback, min, max) {
-  try {
-    const n = parseInt(localStorage.getItem(key) || "", 10);
-    if (!Number.isFinite(n)) return fallback;
-    return Math.min(max, Math.max(min, n));
-  } catch {
-    return fallback;
-  }
-}
-
 function clampInt(raw, fallback, min, max) {
   const n = parseInt(String(raw), 10);
   if (!Number.isFinite(n)) return fallback;
@@ -263,6 +248,31 @@ function ShareLock({ share, error, onUnlock }) {
   );
 }
 
+function CatalogPager({ page, pages, onPage, label }) {
+  const total = Math.max(1, pages || 1);
+  const current = Math.min(page, total);
+  return (
+    <div className="pager" role="navigation" aria-label={label}>
+      <span className="pager-status">Página {current} de {total}</span>
+      {Array.from({ length: total }, (_, i) => {
+        const n = i + 1;
+        const on = page === n;
+        return (
+          <button
+            key={n}
+            className={`btn-ghost ${on ? "active" : ""}`}
+            type="button"
+            aria-current={on ? "page" : undefined}
+            onClick={() => onPage(n)}
+          >
+            {n}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function loadCart() {
   try {
     const raw = JSON.parse(localStorage.getItem(CART_KEY) || "[]");
@@ -280,10 +290,7 @@ export default function Catalog() {
   const [data, setData] = useState({ items: [], total: 0, page: 1, pages: 1 });
   const [filters, setFilters] = useState({ q: "", type: "", cat: "", depot: "", manufacturer: "", sort: "" });
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(() => readStoredInt(PAGE_KEY, DEFAULT_PAGE_SIZE, 8, 96));
-  const [gallerySec, setGallerySec] = useState(() => readStoredInt(GALLERY_KEY, DEFAULT_GALLERY_SEC, 5, 180));
-  const [pageSizeInput, setPageSizeInput] = useState(() => String(readStoredInt(PAGE_KEY, DEFAULT_PAGE_SIZE, 8, 96)));
-  const [galleryInput, setGalleryInput] = useState(() => String(readStoredInt(GALLERY_KEY, DEFAULT_GALLERY_SEC, 5, 180)));
+  const listTop = useRef(null);
   const [cart, setCart] = useState(loadCart);
   const [pdp, setPdp] = useState(null);
   const [thumb, setThumb] = useState(0);
@@ -306,6 +313,9 @@ export default function Catalog() {
   const [splash, setSplash] = useState(null);
   const listSplashDone = useRef(false);
   const lb = useLightbox();
+
+  const gallerySec = clampInt(copy.gallerySeconds, 40, 5, 180);
+  const pageSize = clampInt(copy.pageSize, 32, 8, 96);
 
   const query = useMemo(() => {
     const p = new URLSearchParams();
@@ -488,6 +498,11 @@ export default function Catalog() {
     }, gallerySec * 1000);
     return () => clearInterval(id);
   }, [pdp, galleryPaused, pdpSlotKey, gallerySec]);
+
+  function goPage(n) {
+    setPage(n);
+    listTop.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   function catalogHome() {
     return shareToken ? `/c/${shareToken}` : "/";
@@ -735,7 +750,7 @@ export default function Catalog() {
         ) : null}
         {error ? <div className="err">{error}</div> : null}
         {msg ? <div className="ok-msg">{msg}</div> : null}
-        <div className="stock-bar">
+        <div className="stock-bar" ref={listTop}>
           <div className="stock-count">
             <span className="stock-n">{data.total}</span>
             <span className="stock-copy">
@@ -743,73 +758,16 @@ export default function Catalog() {
               <small>{copy.stockHint}</small>
             </span>
           </div>
-          <div className="stock-tools">
-            <label className="stock-sort">
-              Fotos cada
-              <input
-                type="number"
-                min={5}
-                max={180}
-                inputMode="numeric"
-                aria-label="Segundos entre fotos"
-                value={galleryInput}
-                onChange={(e) => {
-                  const raw = e.target.value;
-                  setGalleryInput(raw);
-                  const n = parseInt(raw, 10);
-                  if (!Number.isFinite(n) || n < 5 || n > 180) return;
-                  setGallerySec(n);
-                  try { localStorage.setItem(GALLERY_KEY, String(n)); } catch { /* ignore */ }
-                }}
-                onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-                onBlur={(e) => {
-                  const sec = clampInt(e.target.value, DEFAULT_GALLERY_SEC, 5, 180);
-                  setGallerySec(sec);
-                  setGalleryInput(String(sec));
-                  try { localStorage.setItem(GALLERY_KEY, String(sec)); } catch { /* ignore */ }
-                }}
-              />
-            </label>
-            <label className="stock-sort">
-              Por página
-              <input
-                type="number"
-                min={8}
-                max={96}
-                inputMode="numeric"
-                aria-label="Unidades por página"
-                value={pageSizeInput}
-                onChange={(e) => {
-                  const raw = e.target.value;
-                  setPageSizeInput(raw);
-                  const n = parseInt(raw, 10);
-                  if (!Number.isFinite(n) || n < 8 || n > 96) return;
-                  try { localStorage.setItem(PAGE_KEY, String(n)); } catch { /* ignore */ }
-                  if (n === pageSize) return;
-                  setPage(1);
-                  setPageSize(n);
-                }}
-                onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-                onBlur={(e) => {
-                  const n = clampInt(e.target.value, DEFAULT_PAGE_SIZE, 8, 96);
-                  setPageSizeInput(String(n));
-                  try { localStorage.setItem(PAGE_KEY, String(n)); } catch { /* ignore */ }
-                  if (n === pageSize) return;
-                  setPage(1);
-                  setPageSize(n);
-                }}
-              />
-            </label>
-            <label className="stock-sort">
-              {copy.sortLabel}
-              <select value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}>
-                <option value="">{copy.sortIso}</option>
-                <option value="price">{copy.sortPrice}</option>
-                <option value="year">{copy.sortYear}</option>
-              </select>
-            </label>
-          </div>
+          <label className="stock-sort">
+            {copy.sortLabel}
+            <select value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}>
+              <option value="">{copy.sortIso}</option>
+              <option value="price">{copy.sortPrice}</option>
+              <option value="year">{copy.sortYear}</option>
+            </select>
+          </label>
         </div>
+        <CatalogPager page={page} pages={data.pages} onPage={goPage} label="Páginas del catálogo, arriba" />
         <div className="steps-block">
           <h3 className="steps-title">{copy.stepsTitle}</h3>
           <div className="value-row">
@@ -865,24 +823,7 @@ export default function Catalog() {
         {data.total === 0 ? (
           <p className="empty-stock">{copy.emptyStock}</p>
         ) : null}
-        <div className="pager" role="navigation" aria-label="Páginas del catálogo">
-          <span className="pager-status">Página {Math.min(page, data.pages || 1)} de {data.pages || 1}</span>
-          {Array.from({ length: data.pages }, (_, i) => {
-            const n = i + 1;
-            const current = page === n;
-            return (
-              <button
-                key={n}
-                className={`btn-ghost ${current ? "active" : ""}`}
-                type="button"
-                aria-current={current ? "page" : undefined}
-                onClick={() => setPage(n)}
-              >
-                {n}
-              </button>
-            );
-          })}
-        </div>
+        <CatalogPager page={page} pages={data.pages} onPage={goPage} label="Páginas del catálogo, abajo" />
       </div>
 
       <SiteFooter copy={copy} />

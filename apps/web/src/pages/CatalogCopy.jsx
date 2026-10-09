@@ -156,6 +156,7 @@ export default function CatalogCopy() {
       <h2 className="section-title">Textos del catálogo</h2>
       <p className="section-sub">
         Todo lo que lee el cliente en la portada: titular, carrusel, filtros, pasos, botones y pie.
+        También el tiempo entre fotos y cuántas unidades entran en cada página.
         A la derecha ves la misma página, actualizada al escribir.
       </p>
       {error ? <div className="err">{error}</div> : null}
@@ -189,6 +190,12 @@ export default function CatalogCopy() {
               <Field label="Stock (varios)"><input value={copy.stockPlural} onChange={(e) => set("stockPlural", e.target.value)} /></Field>
               <Field label="Ayuda bajo el número"><input value={copy.stockHint} onChange={(e) => set("stockHint", e.target.value)} /></Field>
               <Field label="Ordenar"><input value={copy.sortLabel} onChange={(e) => set("sortLabel", e.target.value)} /></Field>
+              <Field label="Segundos entre fotos" hint="Cada cuánto cambian las fotos de cada unidad. Por defecto 40.">
+                <input type="number" min={5} max={180} value={copy.gallerySeconds} onChange={(e) => set("gallerySeconds", e.target.value)} />
+              </Field>
+              <Field label="Unidades por página" hint="Cuántas fichas se listan a la vez. Por defecto 32.">
+                <input type="number" min={8} max={96} value={copy.pageSize} onChange={(e) => set("pageSize", e.target.value)} />
+              </Field>
             </div>
           </div>
 
