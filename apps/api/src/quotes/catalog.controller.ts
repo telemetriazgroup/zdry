@@ -67,6 +67,7 @@ export class CatalogController {
     return this.shares.recordEvent(token, body, {
       ip: forwarded || req.ip || "",
       userAgent: String(req.headers["user-agent"] || ""),
+      cookie: req.cookies?.zdry_catalog,
     });
   }
 

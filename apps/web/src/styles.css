@@ -4,6 +4,40 @@
 .share-metrics b { display: block; font-size: 12px; margin-bottom: 4px; }
 .share-metrics ul { margin: 0; padding-left: 16px; font-size: 12px; }
 .share-metrics .muted { font-size: 12px; }
+.share-board {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.share-board .panel { min-width: 0; }
+.share-scroll { max-height: calc(100vh - 280px); overflow: auto; }
+.share-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.share-icon {
+  width: 32px; height: 32px; padding: 0;
+  border: 1px solid var(--line); border-radius: 8px; background: #fff; color: #1b2b4b;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.share-icon svg { width: 16px; height: 16px; }
+.share-icon:hover { border-color: #fc6f18; color: #fc6f18; }
+.share-icon.danger:hover { border-color: #c92a2a; color: #c92a2a; }
+.share-icon.on { background: #fff4ec; border-color: #fc6f18; color: #fc6f18; }
+.share-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 8px 0 12px; }
+.share-kpis div { background: #f7f8fa; border-radius: 8px; padding: 8px; }
+.share-kpis span { display: block; font-size: 11px; color: #667085; }
+.share-kpis b { font-size: 18px; color: #1b2b4b; }
+.share-bars { display: flex; flex-direction: column; gap: 7px; margin: 6px 0 12px; }
+.share-bar-row { display: grid; grid-template-columns: minmax(88px, 120px) 1fr auto; gap: 8px; align-items: center; font-size: 12px; }
+.share-bar { height: 8px; background: #eef1f4; border-radius: 99px; overflow: hidden; }
+.share-bar > span { display: block; height: 100%; background: #fc6f18; border-radius: 99px; }
+.share-bar.price > span { background: #1b2b4b; }
+.share-unit { border-top: 1px solid var(--line); padding: 8px 0; font-size: 12px; }
+.share-unit p { margin: 2px 0; color: #667085; }
+@media (max-width: 900px) {
+  .share-board { grid-template-columns: 1fr; }
+  .share-kpis { grid-template-columns: 1fr 1fr; }
+  .share-scroll { max-height: none; }
+}
 .catalog-splash {
   position: fixed; inset: 0; z-index: 200;
   display: flex; align-items: center; justify-content: center;

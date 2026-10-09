@@ -34,22 +34,32 @@ function shareGrantSecret(): string {
   return process.env.JWT_SECRET || "cambiar-en-produccion";
 }
 
-export function signShareGrant(token: string): string {
-  const mac = createHmac("sha256", shareGrantSecret()).update(token).digest("base64url");
-  return `${token}.${mac}`;
+export function newShareSession(): string {
+  return randomBytes(9).toString("hex");
 }
 
-export function readShareGrant(raw: unknown): string | null {
-  const value = String(raw || "");
-  const i = value.lastIndexOf(".");
-  if (i <= 0) return null;
-  const token = value.slice(0, i);
-  const mac = value.slice(i + 1);
-  const expected = createHmac("sha256", shareGrantSecret()).update(token).digest("base64url");
+export function signShareGrant(token: string, sessionId: string): string {
+  const payload = `${token}.${sessionId}`;
+  const mac = createHmac("sha256", shareGrantSecret()).update(payload).digest("base64url");
+  return `${payload}.${mac}`;
+}
+
+export function readShareGrant(raw: unknown): { token: string; sessionId: string } | null {
+  const parts = String(raw || "").split(".");
+  if (parts.length !== 3) return null;
+  const [token, sessionId, mac] = parts;
+  if (!token || !sessionId || !mac) return null;
+  const expected = createHmac("sha256", shareGrantSecret()).update(`${token}.${sessionId}`).digest("base64url");
   const a = Buffer.from(mac);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
-  return token;
+  return { token, sessionId };
+}
+
+export function grantMatchesSession(raw: unknown, activeSession: string): "ok" | "moved" | "deny" {
+  const grant = readShareGrant(raw);
+  if (!grant || !activeSession) return "deny";
+  return grant.sessionId === activeSession ? "ok" : "moved";
 }
 
 export function normalizeShareDraft(raw: unknown): {
@@ -112,26 +122,55 @@ export function deviceFromAgent(userAgent: string): string {
   return "escritorio";
 }
 
+export function clientFromAgent(userAgent: string): string {
+  const ua = String(userAgent || "");
+  if (!ua) return "";
+  let browser = "Navegador";
+  if (/edg\//i.test(ua)) browser = "Edge";
+  else if (/chrome|crios/i.test(ua)) browser = "Chrome";
+  else if (/firefox|fxios/i.test(ua)) browser = "Firefox";
+  else if (/safari/i.test(ua)) browser = "Safari";
+  let os = "";
+  if (/android/i.test(ua)) os = "Android";
+  else if (/iphone|ipad/i.test(ua)) os = "iOS";
+  else if (/mac os/i.test(ua)) os = "Mac";
+  else if (/windows/i.test(ua)) os = "Windows";
+  else if (/linux/i.test(ua)) os = "Linux";
+  return [browser, os].filter(Boolean).join(" · ");
+}
+
 export function shareStatus(row: { suspendedAt?: Date | string | null; expiresAt: Date | string }, now = new Date()) {
   if (row.suspendedAt) return "suspendido" as const;
   if (!shareIsLive(row.expiresAt, now)) return "vencido" as const;
   return "activo" as const;
 }
 
-export function summarizeShareEvents(events: Array<{ kind: string; iso?: string | null; detail?: unknown; createdAt: Date | string; ip?: string; device?: string }>) {
-  const opens: Array<{ at: string; ip: string; device: string }> = [];
+const FILTER_LABEL: Record<string, string> = {
+  type: "tipo",
+  cat: "condición",
+  depot: "depósito",
+  manufacturer: "fabricante",
+  sort: "orden",
+};
+
+export function summarizeShareEvents(events: Array<{ kind: string; iso?: string | null; detail?: unknown; createdAt: Date | string; ip?: string; device?: string; userAgent?: string }>) {
+  const opens: Array<{ at: string; ip: string; device: string; client: string }> = [];
   const filters = new Map<string, number>();
   const searches = new Map<string, number>();
   const units = new Map<string, number>();
+  const imageCount = new Map<string, number>();
+  const imageSlots = new Map<string, Set<string>>();
   const images = new Map<string, { iso: string; slot: string; count: number }>();
+  const places = new Map<string, Array<{ ip: string; device: string; client: string }>>();
   for (const ev of events) {
     const detail = ev.detail && typeof ev.detail === "object" && !Array.isArray(ev.detail) ? (ev.detail as Record<string, unknown>) : {};
+    const client = clientFromAgent(ev.userAgent || "");
     if (ev.kind === "open") {
-      opens.push({ at: new Date(ev.createdAt).toISOString(), ip: ev.ip || "", device: ev.device || "" });
+      opens.push({ at: new Date(ev.createdAt).toISOString(), ip: ev.ip || "", device: ev.device || "", client });
     }
     if (ev.kind === "filter") {
-      const label = ["type", "cat", "depot", "manufacturer", "sort"]
-        .map((key) => (detail[key] ? `${key}: ${detail[key]}` : ""))
+      const label = Object.entries(FILTER_LABEL)
+        .map(([key, name]) => (detail[key] ? `${name}: ${detail[key]}` : ""))
         .filter(Boolean)
         .join(" · ") || "filtro";
       filters.set(label, (filters.get(label) || 0) + 1);
@@ -140,20 +179,43 @@ export function summarizeShareEvents(events: Array<{ kind: string; iso?: string 
       const q = String(detail.q || "").trim().slice(0, 80);
       if (q) searches.set(q, (searches.get(q) || 0) + 1);
     }
+    if (ev.iso && (ev.kind === "view_unit" || ev.kind === "view_image")) {
+      const spot = { ip: ev.ip || "", device: ev.device || "", client };
+      const prev = places.get(ev.iso) || [];
+      const key = `${spot.ip}|${spot.device}|${spot.client}`;
+      if (!prev.some((item) => `${item.ip}|${item.device}|${item.client}` === key)) prev.push(spot);
+      places.set(ev.iso, prev.slice(0, 6));
+    }
     if (ev.kind === "view_unit" && ev.iso) units.set(ev.iso, (units.get(ev.iso) || 0) + 1);
     if (ev.kind === "view_image" && ev.iso) {
       const slot = String(detail.slot ?? "");
       const key = `${ev.iso}:${slot}`;
       const prev = images.get(key);
       images.set(key, { iso: ev.iso, slot, count: (prev?.count || 0) + 1 });
+      imageCount.set(ev.iso, (imageCount.get(ev.iso) || 0) + 1);
+      const slots = imageSlots.get(ev.iso) || new Set<string>();
+      slots.add(slot);
+      imageSlots.set(ev.iso, slots);
     }
   }
   const byCount = (entries: Array<[string, number]>) => entries.sort((a, b) => b[1] - a[1]).map(([label, count]) => ({ label, count }));
+  const seen = new Set<string>([...units.keys(), ...imageCount.keys()]);
   return {
     opens,
     filters: byCount([...filters.entries()]),
     searches: [...searches.entries()].sort((a, b) => b[1] - a[1]).map(([q, count]) => ({ q, count })),
-    units: [...units.entries()].sort((a, b) => b[1] - a[1]).map(([iso, count]) => ({ iso, count })),
+    units: [...seen].map((iso) => {
+      const views = units.get(iso) || 0;
+      return {
+        iso,
+        count: views,
+        views,
+        images: imageCount.get(iso) || 0,
+        distinctImages: imageSlots.get(iso)?.size || 0,
+        returns: Math.max(0, views - 1),
+        places: places.get(iso) || [],
+      };
+    }).sort((a, b) => b.views - a.views || b.images - a.images),
     images: [...images.values()].sort((a, b) => b.count - a.count),
   };
 }

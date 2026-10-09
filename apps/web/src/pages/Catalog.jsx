@@ -309,6 +309,7 @@ export default function Catalog() {
         if (shareToken && e.status === 401) {
           window.sessionStorage.removeItem(`zdry-share-ok:${shareToken}`);
           setShareUnlocked(false);
+          setShareErr(e.message);
         }
         setError(e.message);
         if (showList) {
@@ -468,10 +469,33 @@ export default function Catalog() {
     return shareToken ? `/c/${shareToken}` : "/";
   }
 
+  function dropShare(message) {
+    if (!shareToken) return;
+    window.sessionStorage.removeItem(`zdry-share-ok:${shareToken}`);
+    setShareUnlocked(false);
+    setShareErr(message || "Este enlace se abrió en otro lugar. Esta sesión se cerró.");
+  }
+
   function trackShare(kind, iso, detail) {
     if (!shareToken) return;
-    api(`/catalog/share/${shareToken}/events`, { method: "POST", body: { kind, iso, detail } }).catch(() => {});
+    api(`/catalog/share/${shareToken}/events`, { method: "POST", body: { kind, iso, detail } })
+      .then((res) => {
+        if (res?.displaced) dropShare(res.message);
+      })
+      .catch((e) => {
+        if (e?.status === 401) dropShare(e.message);
+      });
   }
+
+  useEffect(() => {
+    if (!shareToken || !shareUnlocked) return undefined;
+    const timer = window.setInterval(() => {
+      api("/catalog/meta").catch((e) => {
+        if (e?.status === 401) dropShare(e.message);
+      });
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [shareToken, shareUnlocked]);
 
   useEffect(() => {
     if (!shareToken) return undefined;

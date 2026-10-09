@@ -1238,6 +1238,7 @@ model CatalogShare {
   customerId     String?
   clientNote     String              @default("")
   accessCode     String              @default("")
+  activeSession  String              @default("")
   hours          Int
   expiresAt      DateTime
   suspendedAt    DateTime?

@@ -15,24 +15,92 @@ const KIND = {
 };
 const STATUS = { activo: "Activo", suspendido: "Suspendido", vencido: "Vencido" };
 
-function ShareMetrics({ metrics }) {
-  if (!metrics) return null;
-  const blocks = [
-    ["Conexiones", (metrics.opens || []).map((o) => `${o.device || "dispositivo"} · ${o.ip || "sin IP"}`)],
-    ["Filtros", (metrics.filters || []).map((f) => `${f.label} · ${f.count}`)],
-    ["Búsquedas", (metrics.searches || []).map((s) => `${s.q} · ${s.count} ${s.count === 1 ? "vez" : "veces"}`)],
-    ["Equipos vistos", (metrics.units || []).map((u) => `${u.iso} · ${u.count}`)],
-    ["Imágenes", (metrics.images || []).map((img) => `${img.iso} foto ${Number(img.slot) + 1 || img.slot} · ${img.count}`)],
-  ];
+function Icon({ children }) {
   return (
-    <div className="share-metrics">
-      {blocks.map(([title, lines]) => (
-        <div key={title}>
-          <b>{title}</b>
-          {lines.length ? <ul>{lines.map((line, i) => <li key={`${title}-${i}`}>{line}</li>)}</ul> : <p className="muted">Sin datos</p>}
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      {children}
+    </svg>
+  );
+}
+
+function usd(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return "Sin precio";
+  return `USD ${Math.round(n).toLocaleString("en-US")}`;
+}
+
+function ShareActivity({ detail }) {
+  const metrics = detail?.metrics;
+  if (!detail || !metrics) return <p className="section-sub">Elige un enlace para ver qué revisa el cliente.</p>;
+  const units = metrics.units || [];
+  const viewsMax = Math.max(1, ...units.map((u) => u.views || u.count || 0));
+  const priceMax = Math.max(1, ...units.map((u) => Number(u.priceList) || 0));
+  const imageTotal = units.reduce((sum, u) => sum + (u.images || 0), 0);
+  const returnTotal = units.reduce((sum, u) => sum + (u.returns || 0), 0);
+  return (
+    <>
+      <p className="section-sub">
+        {detail.clientCompany} · {detail.contactName} · {detail.clientEmail}
+        <br />
+        {shareUrl(detail.token)} · clave {detail.accessCode || "—"} · {STATUS[detail.status] || ""} · vence {formatWhen(detail.expiresAt)}
+      </p>
+      <div className="share-kpis">
+        <div><span>Aperturas</span><b>{(metrics.opens || []).length}</b></div>
+        <div><span>Equipos</span><b>{units.length}</b></div>
+        <div><span>Fotos</span><b>{imageTotal}</b></div>
+        <div><span>Regresos</span><b>{returnTotal}</b></div>
+      </div>
+      <b>Veces que abrió cada equipo</b>
+      {units.length ? (
+        <div className="share-bars">
+          {units.map((u) => (
+            <div className="share-bar-row" key={`v-${u.iso}`}>
+              <b>{u.iso}</b>
+              <div className="share-bar"><span style={{ width: `${Math.max(8, ((u.views || u.count || 0) / viewsMax) * 100)}%` }} /></div>
+              <span>{u.views || u.count || 0}</span>
+            </div>
+          ))}
+        </div>
+      ) : <p className="muted">Todavía no abre fichas.</p>}
+      <b>Precio de lista de lo que revisa</b>
+      {units.length ? (
+        <div className="share-bars">
+          {units.map((u) => (
+            <div className="share-bar-row" key={`p-${u.iso}`}>
+              <b>{u.iso}</b>
+              <div className="share-bar price"><span style={{ width: `${u.priceList ? Math.max(8, (Number(u.priceList) / priceMax) * 100) : 0}%` }} /></div>
+              <span>{usd(u.priceList)}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div className="share-metrics">
+        <div>
+          <b>Filtros</b>
+          {(metrics.filters || []).length ? <ul>{metrics.filters.map((f) => <li key={f.label}>{f.label} · {f.count}</li>)}</ul> : <p className="muted">Sin filtros</p>}
+        </div>
+        <div>
+          <b>Búsquedas</b>
+          {(metrics.searches || []).length ? <ul>{metrics.searches.map((s) => <li key={s.q}>{s.q} · {s.count}</li>)}</ul> : <p className="muted">Sin búsquedas</p>}
+        </div>
+      </div>
+      {units.map((u) => (
+        <div className="share-unit" key={`m-${u.iso}`}>
+          <b>{u.iso}</b> {u.type ? `· ${u.type}` : ""} {u.cat ? `· ${u.cat}` : ""} · {usd(u.priceList)}
+          <p>{u.views || 0} aperturas · vuelve {u.returns || 0} · {u.images || 0} fotos ({u.distinctImages || 0} distintas)</p>
+          {(u.places || []).map((place, i) => (
+            <p key={`${u.iso}-${i}`}>{place.ip || "sin IP"} · {place.device || "dispositivo"}{place.client ? ` · ${place.client}` : ""}</p>
+          ))}
         </div>
       ))}
-    </div>
+      <b>Desde dónde entró</b>
+      <ul className="dash-list">
+        {(metrics.opens || []).map((o, i) => (
+          <li key={`open-${i}`}>{formatWhen(o.at)} · {o.ip || "sin IP"} · {o.device || "dispositivo"}{o.client ? ` · ${o.client}` : ""}</li>
+        ))}
+        {!(metrics.opens || []).length ? <li className="muted">Aún no abre el enlace.</li> : null}
+      </ul>
+    </>
   );
 }
 
@@ -190,7 +258,7 @@ export default function CatalogShares() {
     <>
       <h2 className="section-title">Enlaces de catálogo</h2>
       <p className="section-sub">
-        Validas el RUC en SUNAT, indicas a la persona que verá el catálogo y el WhatsApp del comercial. La vigencia va de 24 a 240 horas. Cada cliente tiene un solo enlace activo.
+        Validas el RUC en SUNAT, indicas a la persona que verá el catálogo y el WhatsApp del comercial. La vigencia va de 24 a 240 horas. Cada cliente tiene un solo enlace activo, y ese enlace solo permanece abierto en un lugar: si entra en otro, la sesión anterior se cierra.
       </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
@@ -235,10 +303,10 @@ export default function CatalogShares() {
         </form>
       </div>
 
-      <div className="dash-grid home-dash-grid">
+      <div className="share-board">
         <div className="panel">
           <h3>Enlaces</h3>
-          <div className="tablewrap">
+          <div className="tablewrap share-scroll">
             <table className="data">
               <thead><tr><th>Cliente</th><th>Vence</th><th>Estado</th><th></th></tr></thead>
               <tbody>
@@ -248,13 +316,26 @@ export default function CatalogShares() {
                     <td>{formatWhen(r.expiresAt)}</td>
                     <td>{STATUS[r.status] || (r.live ? "Activo" : "Vencido")}</td>
                     <td>
-                      <button className="link-btn" type="button" onClick={() => open(r.id)}>Ver actividad</button>
-                      {" "}
-                      {r.status === "activo" ? <button className="link-btn" type="button" onClick={() => navigator.clipboard?.writeText(shareInvite(r))}>Copiar</button> : null}
-                      {" "}
-                      {r.status === "activo" && r.clientPhone ? <a className="link-btn" href={shareWhatsApp(r)} target="_blank" rel="noreferrer">Enviar clave</a> : null}
-                      {" "}
-                      {r.status === "activo" ? <button className="link-btn" type="button" onClick={() => suspend(r.id)}>Suspender</button> : null}
+                      <div className="share-actions">
+                        <button className={`share-icon ${openId === r.id ? "on" : ""}`} type="button" title="Ver actividad" aria-label="Ver actividad" onClick={() => open(r.id)}>
+                          <Icon><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" fill="none" stroke="currentColor" strokeWidth="1.8" /><circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" strokeWidth="1.8" /></Icon>
+                        </button>
+                        {r.status === "activo" ? (
+                          <button className="share-icon" type="button" title="Copiar" aria-label="Copiar enlace y clave" onClick={() => navigator.clipboard?.writeText(shareInvite(r)).then(() => setMsg("Mensaje copiado.")).catch(() => setError("No se pudo copiar."))}>
+                            <Icon><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="M4 16V6a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" strokeWidth="1.8" /></Icon>
+                          </button>
+                        ) : null}
+                        {r.status === "activo" && r.clientPhone ? (
+                          <a className="share-icon" href={shareWhatsApp(r)} target="_blank" rel="noreferrer" title="Enviar clave" aria-label="Enviar clave por WhatsApp">
+                            <Icon><path d="M5 19l1.2-3.4A8 8 0 1 1 8.4 18L5 19z" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="M9 10c.2 2 1.6 3.4 3.6 3.6" fill="none" stroke="currentColor" strokeWidth="1.8" /></Icon>
+                          </a>
+                        ) : null}
+                        {r.status === "activo" ? (
+                          <button className="share-icon danger" type="button" title="Suspender" aria-label="Suspender enlace" onClick={() => suspend(r.id)}>
+                            <Icon><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="M8 12h8" stroke="currentColor" strokeWidth="1.8" /></Icon>
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -265,32 +346,19 @@ export default function CatalogShares() {
         </div>
         <div className="panel">
           <h3>{detail ? `Actividad · ${detail.clientName}` : "Actividad del cliente"}</h3>
-          {!detail ? <p className="section-sub">Elige un enlace para ver cuándo entró, desde qué IP y qué miró.</p> : (
-            <>
-              <p className="section-sub">
-                {detail.clientCompany} · {detail.contactName} · {detail.clientEmail}
-                <br />
-                {shareUrl(detail.token)} · clave {detail.accessCode || "—"} · {STATUS[detail.status] || ""} · vence {formatWhen(detail.expiresAt)}
-                <br />
-                WhatsApp comercial {detail.vendorWhatsapp}
-              </p>
-              <ShareMetrics metrics={detail.metrics} />
+          <div className="share-scroll">
+            <ShareActivity detail={detail} />
+            {detail?.events?.length ? (
               <ul className="dash-list">
-                {(detail.events || []).map((e) => (
+                {detail.events.slice(0, 40).map((e) => (
                   <li key={e.id}>
                     <b>{KIND[e.kind] || e.kind}{e.iso ? ` · ${e.iso}` : ""}{e.detail?.q ? ` · ${e.detail.q}` : ""}{e.detail?.slot != null && e.kind === "view_image" ? ` · foto ${Number(e.detail.slot) + 1}` : ""}</b>
-                    <span>{formatWhen(e.at)}{e.device ? ` · ${e.device}` : ""}{e.ip ? ` · ${e.ip}` : ""}</span>
+                    <span>{formatWhen(e.at)}{e.device ? ` · ${e.device}` : ""}{e.client ? ` · ${e.client}` : ""}{e.ip ? ` · ${e.ip}` : ""}</span>
                   </li>
                 ))}
-                {!detail.events?.length ? <li className="muted">El cliente aún no abrió el enlace.</li> : null}
               </ul>
-            </>
-          )}
-          {openId && detail ? (
-            <p className="section-sub" style={{ marginTop: 10 }}>
-              <button className="btn-ghost" type="button" onClick={() => { setOpenId(""); setDetail(null); }}>Cerrar</button>
-            </p>
-          ) : null}
+            ) : null}
+          </div>
         </div>
       </div>
     </>

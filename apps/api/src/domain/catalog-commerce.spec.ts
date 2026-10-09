@@ -1,5 +1,5 @@
 import { normalizeCatalogCommerce } from "./catalog-commerce";
-import { clampShareHours, deviceFromAgent, newShareAccessCode, normalizeShareDraft, readShareGrant, shareCodeMatches, shareExpiresAt, shareIsLive, signShareGrant, summarizeShareEvents } from "./catalog-share";
+import { clampShareHours, deviceFromAgent, grantMatchesSession, newShareAccessCode, normalizeShareDraft, readShareGrant, shareCodeMatches, shareExpiresAt, shareIsLive, signShareGrant, summarizeShareEvents } from "./catalog-share";
 
 describe("catalog commerce mode", () => {
   it("por defecto es modo WhatsApp: sin cotización ni altas públicas", () => {
@@ -61,10 +61,14 @@ describe("catalog share", () => {
     expect(shareCodeMatches("048215", "048215")).toBe(true);
     expect(shareCodeMatches("048215", "048216")).toBe(false);
     expect(shareCodeMatches("048215", "48215")).toBe(false);
-    const grant = signShareGrant("abc123");
+    const grant = signShareGrant("abc123", "sess1");
     expect(grant.includes("048215")).toBe(false);
-    expect(readShareGrant(grant)).toBe("abc123");
+    expect(readShareGrant(grant)).toEqual({ token: "abc123", sessionId: "sess1" });
     expect(readShareGrant("abc123.no")).toBeNull();
+    const other = signShareGrant("abc123", "sess2");
+    expect(grantMatchesSession(grant, "sess1")).toBe("ok");
+    expect(grantMatchesSession(other, "sess1")).toBe("moved");
+    expect(grantMatchesSession(grant, "")).toBe("deny");
   });
 
   it("resume visitas, filtros, búsquedas e imágenes repetidas", () => {
@@ -79,6 +83,7 @@ describe("catalog share", () => {
     expect(summary.opens).toHaveLength(1);
     expect(summary.searches).toEqual([{ q: "40HC", count: 2 }]);
     expect(summary.images).toEqual([{ iso: "ZCSU1", slot: "0", count: 2 }]);
+    expect(summary.units[0]).toMatchObject({ iso: "ZCSU1", views: 0, images: 2, returns: 0 });
   });
 
   it("vence al cumplir las horas", () => {

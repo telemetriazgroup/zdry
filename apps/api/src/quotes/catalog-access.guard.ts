@@ -8,7 +8,11 @@ export class CatalogAccessGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<{ user?: unknown; cookies?: { zdry_catalog?: string } }>();
     if (req.user) return true;
-    if (await this.shares.cookieAllows(req.cookies?.zdry_catalog)) return true;
+    const gate = await this.shares.catalogGate(req.cookies?.zdry_catalog);
+    if (gate === "ok") return true;
+    if (gate === "moved") {
+      throw new UnauthorizedException("Este enlace se abrió en otro lugar. Esta sesión se cerró.");
+    }
     throw new UnauthorizedException("Para ver el catálogo entra con tu cuenta o con la clave del enlace.");
   }
 }

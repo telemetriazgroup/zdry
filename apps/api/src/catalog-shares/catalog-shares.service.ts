@@ -7,8 +7,11 @@ import { AuthUser, COMMERCIAL_ROLES } from "../auth/auth.types";
 import { OdooClient } from "../odoo/odoo.client";
 import { CATALOG_COMMERCE_KEY, normalizeCatalogCommerce, whatsappDigits } from "../domain/catalog-commerce";
 import {
+  clientFromAgent,
   deviceFromAgent,
+  grantMatchesSession,
   newShareAccessCode,
+  newShareSession,
   newShareToken,
   normalizeShareDraft,
   normalizeShareEvent,
@@ -83,7 +86,7 @@ export class CatalogSharesService {
     expiresAt: Date;
     suspendedAt: Date | null;
     createdAt: Date;
-    events?: Array<{ id: string; kind: string; iso: string | null; createdAt: Date; detail: Prisma.JsonValue | null; ip: string; device: string }>;
+    events?: Array<{ id: string; kind: string; iso: string | null; createdAt: Date; detail: Prisma.JsonValue | null; ip: string; device: string; userAgent?: string }>;
   }) {
     const status = shareStatus(row);
     const events = row.events || [];
@@ -123,7 +126,33 @@ export class CatalogSharesService {
         detail: e.detail,
         ip: e.ip,
         device: e.device,
+        client: clientFromAgent(e.userAgent || ""),
       })),
+    };
+  }
+
+  private async withPrices<T extends { metrics: { units: Array<{ iso: string }> } }>(presented: T) {
+    const isos = presented.metrics.units.map((unit) => unit.iso).filter(Boolean);
+    if (!isos.length) return presented;
+    const priced = await this.prisma.container.findMany({
+      where: { iso: { in: isos } },
+      select: { iso: true, type: true, cat: true, priceList: true },
+    });
+    const byIso = new Map(priced.map((row) => [row.iso, row]));
+    return {
+      ...presented,
+      metrics: {
+        ...presented.metrics,
+        units: presented.metrics.units.map((unit) => {
+          const row = byIso.get(unit.iso);
+          return {
+            ...unit,
+            type: row?.type || "",
+            cat: row?.cat || "",
+            priceList: row?.priceList == null ? null : Number(row.priceList),
+          };
+        }),
+      },
     };
   }
 
@@ -145,7 +174,7 @@ export class CatalogSharesService {
     });
     if (!row) throw new NotFoundException("Enlace no encontrado.");
     if (!this.canSeeAll(user) && row.vendorId !== user.id) throw new ForbiddenException("Ese enlace no es tuyo.");
-    return this.present(row);
+    return this.withPrices(this.present(row));
   }
 
   async create(body: Record<string, unknown>, user: AuthUser, ip?: string) {
@@ -242,8 +271,10 @@ export class CatalogSharesService {
       throw new BadRequestException("Clave incorrecta.");
     }
     this.pinFails.delete(row.token);
+    const sessionId = newShareSession();
+    await this.prisma.catalogShare.update({ where: { id: row.id }, data: { activeSession: sessionId } });
     const left = new Date(row.expiresAt).getTime() - Date.now();
-    res.cookie("zdry_catalog", signShareGrant(row.token), {
+    res.cookie("zdry_catalog", signShareGrant(row.token, sessionId), {
       httpOnly: true,
       sameSite: "lax",
       secure: process.env.COOKIE_SECURE === "true",
@@ -253,17 +284,25 @@ export class CatalogSharesService {
     return { ok: true, expiresAt: row.expiresAt };
   }
 
-  async cookieAllows(raw: unknown): Promise<boolean> {
-    const token = readShareGrant(raw);
-    if (!token) return false;
-    const row = await this.prisma.catalogShare.findUnique({ where: { token } });
-    return Boolean(row && !row.suspendedAt && shareIsLive(row.expiresAt));
+  async catalogGate(raw: unknown): Promise<"ok" | "moved" | "deny"> {
+    const grant = readShareGrant(raw);
+    if (!grant) return "deny";
+    const row = await this.prisma.catalogShare.findUnique({ where: { token: grant.token } });
+    if (!row || row.suspendedAt || !shareIsLive(row.expiresAt)) return "deny";
+    return grantMatchesSession(raw, row.activeSession);
   }
 
-  async recordEvent(token: string, body: Record<string, unknown>, meta?: { ip?: string; userAgent?: string }) {
+  async cookieAllows(raw: unknown): Promise<boolean> {
+    return (await this.catalogGate(raw)) === "ok";
+  }
+
+  async recordEvent(token: string, body: Record<string, unknown>, meta?: { ip?: string; userAgent?: string; cookie?: string }) {
     const row = await this.prisma.catalogShare.findUnique({ where: { token: String(token || "").trim() } });
     if (!row || row.suspendedAt || !shareIsLive(row.expiresAt)) return { ok: false };
+    const gate = grantMatchesSession(meta?.cookie, row.activeSession);
     const ev = normalizeShareEvent(body);
+    if (gate === "moved") return { ok: false, displaced: true };
+    if (gate !== "ok" && ev.kind !== "open") return { ok: false };
     const userAgent = String(meta?.userAgent || "").slice(0, 400);
     await this.prisma.catalogShareEvent.create({
       data: {

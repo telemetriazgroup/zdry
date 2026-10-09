@@ -60,6 +60,7 @@ export const ROLE_NAV = {
     { to: "/app/almacen/campo", label: "Patio — campo" },
     { to: "/app/almacen/patio", label: "Patio" },
     { to: "/app/catalogo-media", label: "Ficha catálogo" },
+    { to: "/app/enlaces-catalogo", label: "Enlaces catálogo" },
   ],
   gerente: [
     { to: "/app", label: "Inicio", end: true },
