@@ -1,4 +1,4 @@
-import { assertConfirmMatch, catalogPublishBlock, isPendingValuation, pickReconcileCandidate, planOdooRelink, proposeMatch, reconcileContainerPatch } from "./odoo-reconcile";
+import { assertConfirmMatch, catalogPublishBlock, isPendingValuation, pendingValuationWhere, pickReconcileCandidate, planOdooRelink, proposeMatch, publishedStockWhere, reconcileContainerPatch } from "./odoo-reconcile";
 
 const BMOU = { iso: "BMOU433548-9" };
 const IN_06302 = {
@@ -62,6 +62,8 @@ describe("isPendingValuation", () => {
     expect(isPendingValuation({ odooPoId: null, invoicePending: true, intakeType: "ajuste_odoo" })).toBe(false);
     expect(isPendingValuation({ odooPoId: null, invoicePending: false, intakeType: "compra" })).toBe(false);
     expect(catalogPublishBlock({ odooPoId: null, invoicePending: true, intakeType: "pendiente_factura", status: "Disponible" })).toMatch(/no se publica/);
+    expect(publishedStockWhere().NOT).toEqual(pendingValuationWhere());
+    expect(publishedStockWhere().mediaStatus).toBe("aprobado");
     expect(catalogPublishBlock({ odooPoId: 12, invoicePending: true, intakeType: "compra" })).toBeNull();
     expect(catalogPublishBlock({ status: "Vendido", odooPoId: 12, intakeType: "compra" })).toMatch(/salida/);
     expect(catalogPublishBlock({ status: "Disponible", gateOut: true, odooPoId: 12, intakeType: "compra" })).toMatch(/salida/);

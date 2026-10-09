@@ -32,7 +32,7 @@ import {
 import { StorageService } from "../storage/storage.service";
 import { randomUUID } from "crypto";
 import { inspectOdooIso, ownedSnapshotFromUnit } from "../domain/odoo-lot-map";
-import { assertConfirmMatch, pendingValuationWhere, pickReconcileCandidate, proposeMatch, reconcileContainerPatch } from "../domain/odoo-reconcile";
+import { assertConfirmMatch, pendingValuationWhere, pickReconcileCandidate, proposeMatch, publishedStockWhere, reconcileContainerPatch } from "../domain/odoo-reconcile";
 import { OdooImportService } from "../odoo-import/odoo-import.service";
 import { ACQUISITION_REFS_KEY, computeListPrices, normalizeAcquisitionRefs } from "../domain/pricing";
 import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
@@ -734,7 +734,7 @@ export class PurchasesService {
     const preview = view === "comercial" && (role === "superadmin" || role === "admin" || role === "gerente");
     const commercial = role === "vendedor" || preview;
     const where: Prisma.ContainerWhereInput = { ...(await this.prisma.liveContainers()) };
-    if (commercial) where.mediaStatus = "aprobado";
+    if (commercial) Object.assign(where, publishedStockWhere());
     const [rows, visRows] = await Promise.all([
       this.prisma.container.findMany({
         where,

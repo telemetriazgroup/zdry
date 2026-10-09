@@ -44,6 +44,17 @@ export function pendingValuationWhere() {
   };
 }
 
+/** Lo que el comercial puede vender: lo mismo que el catálogo público. */
+export function publishedStockWhere() {
+  return {
+    intakeType: { in: ["compra", "pendiente_factura", "ajuste_odoo", "fabricacion_odoo"] },
+    physicallyReceived: true,
+    status: { in: ["Disponible", "Reservado"] },
+    mediaStatus: "aprobado",
+    NOT: pendingValuationWhere(),
+  };
+}
+
 export const UNRECONCILED_PUBLISH_MESSAGE =
   "Reentrega sin conciliar: no se publica en el catálogo hasta el match con una orden de compra. Sin OC no hay precio.";
 

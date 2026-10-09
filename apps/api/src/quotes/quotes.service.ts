@@ -56,7 +56,7 @@ import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
 import { CATALOG_COMMERCE_KEY, normalizeCatalogCommerce, publicQuotesBlockedMessage } from "../domain/catalog-commerce";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { isOwnSaleStock } from "../domain/iso6346";
-import { isPendingValuation, pendingValuationWhere } from "../domain/odoo-reconcile";
+import { isPendingValuation, publishedStockWhere } from "../domain/odoo-reconcile";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import {
@@ -219,11 +219,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   private async catalogWhere(): Promise<Prisma.ContainerWhereInput> {
     return {
       ...(await this.prisma.liveContainers()),
-      intakeType: { in: ["compra", "pendiente_factura", "ajuste_odoo", "fabricacion_odoo"] },
-      physicallyReceived: true,
-      status: { in: ["Disponible", "Reservado"] },
-      mediaStatus: "aprobado",
-      NOT: pendingValuationWhere(),
+      ...publishedStockWhere(),
     };
   }
 
@@ -659,7 +655,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       if (c.status !== "Disponible" && c.status !== "Reservado") {
         throw new ConflictException(`${iso} no está disponible.`);
       }
-      if (user?.role === "vendedor" && !isMediaApproved(c.mediaStatus)) {
+      if (user?.role === "vendedor" && (!isMediaApproved(c.mediaStatus) || isPendingValuation(c))) {
         throw new BadRequestException(`${iso} no está publicado. Solo lo publicado está disponible para la venta.`);
       }
       const prices = await this.ensureUnitPrices(iso, pricing, acquisition);
