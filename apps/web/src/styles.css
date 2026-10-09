@@ -414,6 +414,7 @@ table.data td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-s
 }
 .safety-rule .form-grid { margin-bottom: 8px; }
 .form-grid label { font-size: 11px; font-weight: 700; color: var(--text-2); text-transform: uppercase; display: block; margin-bottom: 4px; }
+.field-hint { margin: 6px 0 0; font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: none; letter-spacing: 0; }
 .form-grid input, .form-grid select {
   width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 13px;
 }
@@ -863,8 +864,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .stock-copy { display: flex; flex-direction: column; gap: 2px; }
 .stock-copy b { font-size: 16px; color: var(--navy); }
 .stock-copy small { color: var(--text-2); font-size: 12px; font-weight: 600; }
+.stock-tools { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
 .stock-sort { display: flex; flex-direction: column; gap: 6px; font-size: 11px; font-weight: 800; color: var(--text-2); text-transform: uppercase; letter-spacing: .03em; }
-.stock-sort select { min-width: 160px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 14px; background: #fff; color: var(--text); font-weight: 600; }
+.stock-sort select, .stock-sort input { min-width: 120px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 14px; background: #fff; color: var(--text); font-weight: 600; }
+.stock-sort select { min-width: 160px; }
 .value-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 18px; }
 .value-card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow); }
 .value-card b { display: block; color: var(--navy); font-size: 14px; margin-bottom: 4px; }
@@ -1013,7 +1016,15 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 }
 .btn-whatsapp:hover { background: #166c3a; color: #fff; text-decoration: none; }
   .pdp-cta-inline .link-btn { display: inline-flex; margin-top: 8px; }
-.pager { display: flex; gap: 6px; justify-content: center; margin-top: 22px; flex-wrap: wrap; }
+.pager { display: flex; gap: 6px; justify-content: center; align-items: center; margin-top: 22px; flex-wrap: wrap; }
+.pager-status { margin-right: 8px; font-size: 13px; font-weight: 800; color: var(--navy); }
+.pager .btn-ghost.active {
+  background: var(--orange);
+  border-color: var(--orange);
+  color: #fff;
+  font-weight: 800;
+  box-shadow: 0 0 0 3px rgba(217, 98, 47, .28);
+}
 .overlay { position: fixed; inset: 0; background: rgba(12,18,32,.55); display: none; align-items: flex-start; justify-content: center; z-index: 60; padding: 32px 16px; overflow: auto; }
 .overlay.open { display: flex; }
 .modal { background: #fff; border-radius: 14px; max-width: 980px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,.35); overflow: hidden; }
@@ -1425,7 +1436,8 @@ tr.archived-row td, tr.archived-row b, .recv-card.archived-row, .recv-card.archi
   .catalog-toolbar { flex-direction: column; align-items: stretch; }
   .catalog-toolbar select { width: 100%; padding: 10px; }
   .stock-bar { padding: 12px 14px; }
-  .stock-sort, .stock-sort select { width: 100%; }
+  .stock-tools { width: 100%; }
+  .stock-sort, .stock-sort select, .stock-sort input { width: 100%; }
   .value-row { grid-template-columns: 1fr; }
   .steps-title { text-align: center; font-size: 17px; }
   .step-card { padding: 20px 16px 16px; }

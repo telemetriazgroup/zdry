@@ -71,7 +71,7 @@ export default function Profile() {
   return (
     <>
       <h2 className="section-title">Mi perfil</h2>
-      <p className="section-sub">Nombre, correo, clave y foto (opcional).</p>
+      <p className="section-sub">Nombre, correo, clave y foto. El WhatsApp se completa en Enlaces de catálogo; ahí puedes cambiarlo para un enlace puntual.</p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
 

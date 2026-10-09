@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, formatWhen, APP_ROOT } from "../api.js";
 import { whatsappDigits } from "../catalog-copy.js";
 import { useAuth } from "../auth.jsx";
@@ -128,6 +128,7 @@ export default function CatalogShares() {
   const [msg, setMsg] = useState("");
   const [looking, setLooking] = useState(false);
   const [sunat, setSunat] = useState(null);
+  const waEdited = useRef(false);
   const [form, setForm] = useState({
     ruc: "",
     clientCompany: "",
@@ -155,6 +156,12 @@ export default function CatalogShares() {
   useEffect(() => {
     load().catch((e) => setError(e.message));
   }, []);
+
+  useEffect(() => {
+    const saved = String(user?.whatsapp || "").trim();
+    if (!saved || waEdited.current) return;
+    setForm((cur) => (cur.vendorWhatsapp === saved ? cur : { ...cur, vendorWhatsapp: saved }));
+  }, [user?.whatsapp]);
 
   function applyContact(contact) {
     if (!contact) return;
@@ -297,7 +304,16 @@ export default function CatalogShares() {
               {HOURS.map((h) => <option key={h} value={h}>{h} horas</option>)}
             </select>
           </div>
-          <div><label>WhatsApp del comercial</label><input value={form.vendorWhatsapp} onChange={(e) => setForm({ ...form, vendorWhatsapp: e.target.value })} required placeholder="51 9XX XXX XXX" /></div>
+          <div>
+            <label>WhatsApp del comercial</label>
+            <input
+              value={form.vendorWhatsapp}
+              onChange={(e) => { waEdited.current = true; setForm({ ...form, vendorWhatsapp: e.target.value }); }}
+              required
+              placeholder="51 9XX XXX XXX"
+            />
+            <p className="field-hint">{user?.whatsapp ? "Sale del WhatsApp de tu perfil. Puedes cambiarlo solo para este enlace." : "Regístralo en Mi perfil para que se complete solo. Aquí puedes escribirlo o corregirlo."}</p>
+          </div>
           <div><label>Nota</label><input value={form.clientNote} onChange={(e) => setForm({ ...form, clientNote: e.target.value })} placeholder="Opcional" /></div>
           <button className="btn-primary" type="submit" disabled={Boolean(sunat?.activeShare)}>Generar enlace</button>
         </form>

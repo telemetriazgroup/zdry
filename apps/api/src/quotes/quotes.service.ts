@@ -87,7 +87,13 @@ import {
 import { missingAccountFields, missingQuoteFields, presentSunat } from "../domain/ruc-sunat";
 
 const HOLD_MS = 48 * 60 * 60 * 1000;
-const PAGE_SIZE = 12;
+const DEFAULT_PAGE_SIZE = 32;
+
+export function catalogPageSize(raw?: string) {
+  const n = parseInt(String(raw ?? ""), 10);
+  if (!Number.isFinite(n)) return DEFAULT_PAGE_SIZE;
+  return Math.min(96, Math.max(8, n));
+}
 const VENDOR_EMAIL = "vendedor@zdry.pe";
 
 function publicMediaFields(c: {
@@ -276,7 +282,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       manufacturers: manufacturers.map((m) => m.manufacturer).filter((x) => x && x !== "—"),
       freightZones: FREIGHT_ZONES,
       freightVehicles: FREIGHT_VEHICLE_LABELS,
-      pageSize: PAGE_SIZE,
+      pageSize: DEFAULT_PAGE_SIZE,
     };
   }
 
@@ -289,8 +295,10 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     year?: string;
     sort?: string;
     page?: string;
+    pageSize?: string;
   }) {
     const page = Math.max(1, parseInt(query.page || "1", 10) || 1);
+    const pageSize = catalogPageSize(query.pageSize);
     const where: Prisma.ContainerWhereInput = { ...(await this.catalogWhere()) };
     if (query.type) where.type = query.type;
     if (query.cat) where.cat = query.cat;
@@ -318,8 +326,8 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         where,
         include: { depot: true, photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { slot: true } } },
         orderBy,
-        skip: (page - 1) * PAGE_SIZE,
-        take: PAGE_SIZE,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
       }),
       this.loadVisibility(),
       this.loadPricing(),
@@ -366,7 +374,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       });
     }
 
-    return { items, total, page, pageSize: PAGE_SIZE, pages: Math.max(1, Math.ceil(total / PAGE_SIZE)) };
+    return { items, total, page, pageSize, pages: Math.max(1, Math.ceil(total / pageSize)) };
   }
 
   async catalogUnit(iso: string) {

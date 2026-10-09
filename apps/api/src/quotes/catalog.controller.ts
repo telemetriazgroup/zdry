@@ -27,8 +27,9 @@ export class CatalogController {
     @Query("year") year?: string,
     @Query("sort") sort?: string,
     @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
   ) {
-    return this.quotes.catalogList({ q, type, cat, depot, manufacturer, year, sort, page });
+    return this.quotes.catalogList({ q, type, cat, depot, manufacturer, year, sort, page, pageSize });
   }
 
   @Public()

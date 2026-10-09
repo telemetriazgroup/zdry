@@ -37,7 +37,26 @@ function publicNotes(notes) {
     .filter((part) => part && !/^producto odoo\s*:/i.test(part))
     .join(". ");
 }
-const GALLERY_MS = 3500;
+const DEFAULT_GALLERY_SEC = 40;
+const DEFAULT_PAGE_SIZE = 32;
+const GALLERY_KEY = "zdry_catalog_gallery_sec";
+const PAGE_KEY = "zdry_catalog_page_size";
+
+function readStoredInt(key, fallback, min, max) {
+  try {
+    const n = parseInt(localStorage.getItem(key) || "", 10);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
+  } catch {
+    return fallback;
+  }
+}
+
+function clampInt(raw, fallback, min, max) {
+  const n = parseInt(String(raw), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
 const LEAD_MS = 5000;
 const LIST_SPLASH_MSGS = [
   "Bienvenido a ZDRY...",
@@ -112,15 +131,15 @@ function mediaSrc(iso, slot, version) {
   return `${apiUrl(`/catalog/${iso}/photos/${slot}`)}${q}`;
 }
 
-function CardCover({ iso, slots, version }) {
+function CardCover({ iso, slots, version, everyMs }) {
   const [i, setI] = useState(0);
   const [hover, setHover] = useState(false);
   useEffect(() => { setI(0); }, [iso, slots.join(",")]);
   useEffect(() => {
     if (hover || slots.length <= 1) return undefined;
-    const t = setInterval(() => setI((x) => (x + 1) % slots.length), GALLERY_MS);
+    const t = setInterval(() => setI((x) => (x + 1) % slots.length), everyMs);
     return () => clearInterval(t);
-  }, [hover, slots.length, iso]);
+  }, [hover, slots.length, iso, everyMs]);
   const slot = slots[i];
   if (slot == null) return <span className="muted">Sin foto</span>;
   return (
@@ -261,6 +280,10 @@ export default function Catalog() {
   const [data, setData] = useState({ items: [], total: 0, page: 1, pages: 1 });
   const [filters, setFilters] = useState({ q: "", type: "", cat: "", depot: "", manufacturer: "", sort: "" });
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(() => readStoredInt(PAGE_KEY, DEFAULT_PAGE_SIZE, 8, 96));
+  const [gallerySec, setGallerySec] = useState(() => readStoredInt(GALLERY_KEY, DEFAULT_GALLERY_SEC, 5, 180));
+  const [pageSizeInput, setPageSizeInput] = useState(() => String(readStoredInt(PAGE_KEY, DEFAULT_PAGE_SIZE, 8, 96)));
+  const [galleryInput, setGalleryInput] = useState(() => String(readStoredInt(GALLERY_KEY, DEFAULT_GALLERY_SEC, 5, 180)));
   const [cart, setCart] = useState(loadCart);
   const [pdp, setPdp] = useState(null);
   const [thumb, setThumb] = useState(0);
@@ -288,8 +311,9 @@ export default function Catalog() {
     const p = new URLSearchParams();
     Object.entries(filters).forEach(([k, v]) => { if (v) p.set(k, v); });
     p.set("page", String(page));
+    p.set("pageSize", String(pageSize));
     return p.toString();
-  }, [filters, page]);
+  }, [filters, page, pageSize]);
 
   const load = useCallback(() => {
     const showList = !routeIso && !listSplashDone.current;
@@ -461,9 +485,9 @@ export default function Catalog() {
         const idx = pdpSlots.indexOf(cur);
         return pdpSlots[(idx < 0 ? 0 : idx + 1) % pdpSlots.length];
       });
-    }, GALLERY_MS);
+    }, gallerySec * 1000);
     return () => clearInterval(id);
-  }, [pdp, galleryPaused, pdpSlotKey]);
+  }, [pdp, galleryPaused, pdpSlotKey, gallerySec]);
 
   function catalogHome() {
     return shareToken ? `/c/${shareToken}` : "/";
@@ -719,14 +743,72 @@ export default function Catalog() {
               <small>{copy.stockHint}</small>
             </span>
           </div>
-          <label className="stock-sort">
-            {copy.sortLabel}
-            <select value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}>
-              <option value="">{copy.sortIso}</option>
-              <option value="price">{copy.sortPrice}</option>
-              <option value="year">{copy.sortYear}</option>
-            </select>
-          </label>
+          <div className="stock-tools">
+            <label className="stock-sort">
+              Fotos cada
+              <input
+                type="number"
+                min={5}
+                max={180}
+                inputMode="numeric"
+                aria-label="Segundos entre fotos"
+                value={galleryInput}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setGalleryInput(raw);
+                  const n = parseInt(raw, 10);
+                  if (!Number.isFinite(n) || n < 5 || n > 180) return;
+                  setGallerySec(n);
+                  try { localStorage.setItem(GALLERY_KEY, String(n)); } catch { /* ignore */ }
+                }}
+                onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                onBlur={(e) => {
+                  const sec = clampInt(e.target.value, DEFAULT_GALLERY_SEC, 5, 180);
+                  setGallerySec(sec);
+                  setGalleryInput(String(sec));
+                  try { localStorage.setItem(GALLERY_KEY, String(sec)); } catch { /* ignore */ }
+                }}
+              />
+            </label>
+            <label className="stock-sort">
+              Por página
+              <input
+                type="number"
+                min={8}
+                max={96}
+                inputMode="numeric"
+                aria-label="Unidades por página"
+                value={pageSizeInput}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setPageSizeInput(raw);
+                  const n = parseInt(raw, 10);
+                  if (!Number.isFinite(n) || n < 8 || n > 96) return;
+                  try { localStorage.setItem(PAGE_KEY, String(n)); } catch { /* ignore */ }
+                  if (n === pageSize) return;
+                  setPage(1);
+                  setPageSize(n);
+                }}
+                onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                onBlur={(e) => {
+                  const n = clampInt(e.target.value, DEFAULT_PAGE_SIZE, 8, 96);
+                  setPageSizeInput(String(n));
+                  try { localStorage.setItem(PAGE_KEY, String(n)); } catch { /* ignore */ }
+                  if (n === pageSize) return;
+                  setPage(1);
+                  setPageSize(n);
+                }}
+              />
+            </label>
+            <label className="stock-sort">
+              {copy.sortLabel}
+              <select value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}>
+                <option value="">{copy.sortIso}</option>
+                <option value="price">{copy.sortPrice}</option>
+                <option value="year">{copy.sortYear}</option>
+              </select>
+            </label>
+          </div>
         </div>
         <div className="steps-block">
           <h3 className="steps-title">{copy.stepsTitle}</h3>
@@ -747,7 +829,7 @@ export default function Catalog() {
           {data.items.map((u) => (
             <article className="card" key={u.iso}>
               <div className="card-media" onClick={() => openUnit(u.iso)}>
-                <CardCover iso={u.iso} slots={publishedSlots(u)} version={u.mediaVersion} />
+                <CardCover iso={u.iso} slots={publishedSlots(u)} version={u.mediaVersion} everyMs={gallerySec * 1000} />
                 <span className="badge" style={{ background: "var(--navy)" }}>{u.type}</span>
                 <span className="badge-status">{u.status}</span>
                 {u.demo ? <span className="badge-status" style={{ top: 34, background: "#d9622f" }}>DEMO</span> : null}
@@ -783,10 +865,23 @@ export default function Catalog() {
         {data.total === 0 ? (
           <p className="empty-stock">{copy.emptyStock}</p>
         ) : null}
-        <div className="pager">
-          {Array.from({ length: data.pages }, (_, i) => (
-            <button key={i} className={`btn-ghost ${page === i + 1 ? "active" : ""}`} type="button" onClick={() => setPage(i + 1)}>{i + 1}</button>
-          ))}
+        <div className="pager" role="navigation" aria-label="Páginas del catálogo">
+          <span className="pager-status">Página {Math.min(page, data.pages || 1)} de {data.pages || 1}</span>
+          {Array.from({ length: data.pages }, (_, i) => {
+            const n = i + 1;
+            const current = page === n;
+            return (
+              <button
+                key={n}
+                className={`btn-ghost ${current ? "active" : ""}`}
+                type="button"
+                aria-current={current ? "page" : undefined}
+                onClick={() => setPage(n)}
+              >
+                {n}
+              </button>
+            );
+          })}
         </div>
       </div>
 
