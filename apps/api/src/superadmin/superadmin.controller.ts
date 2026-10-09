@@ -58,4 +58,18 @@ export class SuperadminController {
   wipe(@Body() body: { confirm?: string }, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.svc.wipe(body.confirm || "", user, req.ip);
   }
+
+  @Get("type-audit")
+  typeAudit() {
+    return this.svc.typeAudit();
+  }
+
+  @Post("type-audit/apply")
+  applyTypeAudit(
+    @Body() body: { ids?: string[]; applyCondition?: boolean },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.svc.applyTypeAudit(body, user, req.ip);
+  }
 }

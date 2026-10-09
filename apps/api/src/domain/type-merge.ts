@@ -1,5 +1,28 @@
 /** El tipo que queda conserva sus reglas. El absorbido se reescribe hacia él y, si choca, se descarta. */
 
+import { nominalFeet } from "./type-from-product";
+
+export function mergeDimensionError(
+  keep: string,
+  absorb: string[],
+  dimsOf: (code: string) => string,
+): string | null {
+  const keepSize = nominalFeet(keep, dimsOf(keep));
+  if (keepSize.mixed || !keepSize.feet) {
+    return `${keep} no tiene una sola medida en pies. No se fusiona con otro tipo.`;
+  }
+  for (const code of absorb) {
+    const size = nominalFeet(code, dimsOf(code));
+    if (size.mixed || !size.feet) {
+      return `${code} no tiene una sola medida en pies. No se fusiona con ${keep}.`;
+    }
+    if (size.feet !== keepSize.feet) {
+      return `No se puede fusionar ${code} con ${keep}: uno es de ${size.feet} pies y el otro de ${keepSize.feet} pies.`;
+    }
+  }
+  return null;
+}
+
 export function parseTypeMerge(body: { keep?: unknown; absorb?: unknown }): { keep: string; absorb: string[] } {
   const keep = String(body.keep || "").trim().toUpperCase();
   const raw = Array.isArray(body.absorb) ? body.absorb : [body.absorb];

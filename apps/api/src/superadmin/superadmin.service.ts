@@ -20,6 +20,14 @@ import {
 import { sameOdooOrigin } from "../domain/odoo-link";
 import { OdooClient } from "../odoo/odoo.client";
 import { OdooLinkService } from "../odoo/odoo-link.service";
+import { auditEquipment, TypeAuditRow, TypeMaster } from "../domain/type-from-product";
+import { refreshRulePrices } from "../odoo-import/acquisition-overlay.store";
+
+function productText(src: unknown): { name: string; code: string } {
+  if (!src || typeof src !== "object") return { name: "", code: "" };
+  const row = src as { productName?: string; productCode?: string; product?: string };
+  return { name: String(row.productName || row.product || ""), code: String(row.productCode || "") };
+}
 
 const KEEP_SETTINGS = new Set([
   "system_initialized",
@@ -282,6 +290,154 @@ export class SuperadminService {
       }
     }
     return n;
+  }
+
+  async typeAudit() {
+    const built = await this.collectTypeAudit();
+    return {
+      scannedContainers: built.scannedContainers,
+      scannedLots: built.scannedLots,
+      typeCount: built.rows.filter((row) => row.suggestedType).length,
+      conditionCount: built.rows.filter((row) => row.suggestedCat).length,
+      rows: built.rows,
+    };
+  }
+
+  async applyTypeAudit(body: { ids?: string[]; applyCondition?: boolean }, user: AuthUser, ip: string | undefined) {
+    const ids = [...new Set((body.ids || []).map((id) => String(id || "").trim()).filter(Boolean))];
+    if (!ids.length) throw new BadRequestException("Elige al menos un equipo.");
+    const wanted = new Set(ids);
+    const built = await this.collectTypeAudit();
+    const chosen = built.rows.filter((row) => wanted.has(row.id) && (row.suggestedType || (body.applyCondition && row.suggestedCat)));
+    if (!chosen.length) throw new BadRequestException("Ninguna fila elegida tiene una sugerencia aplicable.");
+    const applyCondition = body.applyCondition === true;
+    let types = 0;
+    let conditions = 0;
+    const priced: string[] = [];
+    for (const row of chosen) {
+      if (row.source === "contenedor" && row.suggestedType && row.suggestedType !== row.currentType) {
+        await this.prisma.container.update({ where: { iso: row.iso }, data: { type: row.suggestedType } });
+        await this.prisma.containerHistory.create({
+          data: {
+            iso: row.iso,
+            type: "Tipo",
+            detail: `Tipo corregido de ${row.currentType} a ${row.suggestedType} según «${row.productName}». No cambia el producto en Odoo ni las cotizaciones ya emitidas.`,
+          },
+        });
+        if (row.candidateId) {
+          await this.prisma.odooLotCandidate.update({ where: { id: row.candidateId }, data: { zdryType: row.suggestedType } });
+        }
+        priced.push(row.iso);
+        types += 1;
+      } else if (row.source === "lote" && row.candidateId && row.suggestedType && row.suggestedType !== row.currentType) {
+        await this.prisma.odooLotCandidate.update({ where: { id: row.candidateId }, data: { zdryType: row.suggestedType } });
+        types += 1;
+      }
+      if (applyCondition && row.suggestedCat && row.suggestedCat !== row.currentCat) {
+        if (row.source === "contenedor") {
+          await this.prisma.container.update({ where: { iso: row.iso }, data: { cat: row.suggestedCat } });
+          await this.prisma.containerHistory.create({
+            data: {
+              iso: row.iso,
+              type: "Condición",
+              detail: `Condición corregida de ${row.currentCat || "vacía"} a ${row.suggestedCat} según «${row.productName}».`,
+            },
+          });
+          if (row.candidateId) {
+            await this.prisma.odooLotCandidate.update({ where: { id: row.candidateId }, data: { zdryCat: row.suggestedCat } });
+          }
+          priced.push(row.iso);
+        } else if (row.candidateId) {
+          await this.prisma.odooLotCandidate.update({ where: { id: row.candidateId }, data: { zdryCat: row.suggestedCat } });
+        }
+        conditions += 1;
+      }
+    }
+    const prices = priced.length ? await refreshRulePrices(this.prisma, { isos: [...new Set(priced)] }) : { updated: 0 };
+    await this.audit.log({
+      user,
+      action: "type_audit_apply",
+      entity: "Container",
+      entityId: "type-audit",
+      after: { types, conditions, prices: prices.updated, ids: chosen.map((row) => row.id) },
+      ip,
+    });
+    return { types, conditions, pricesRecalculated: prices.updated };
+  }
+
+  private async collectTypeAudit() {
+    const [types, containers, candidates] = await Promise.all([
+      this.prisma.containerType.findMany(),
+      this.prisma.container.findMany({
+        where: { archivedAt: null },
+        select: { iso: true, type: true, cat: true, odooLotId: true, odooSource: true },
+      }),
+      this.prisma.odooLotCandidate.findMany({
+        where: { status: { not: "ignored" } },
+        select: {
+          id: true,
+          isoNormalized: true,
+          containerIso: true,
+          odooLotId: true,
+          productName: true,
+          productCode: true,
+          zdryType: true,
+          zdryCat: true,
+        },
+      }),
+    ]);
+    const masters: TypeMaster[] = types.map((row) => ({
+      code: row.code,
+      label: row.label,
+      dims: row.dims,
+      archivedAt: row.archivedAt,
+    }));
+    const byLot = new Map(candidates.filter((row) => row.odooLotId).map((row) => [row.odooLotId, row]));
+    const byIso = new Map<string, (typeof candidates)[number]>();
+    for (const row of candidates) {
+      const key = (row.containerIso || row.isoNormalized || "").toUpperCase();
+      if (key && !byIso.has(key)) byIso.set(key, row);
+    }
+    const usedCandidate = new Set<string>();
+    const rows: Array<TypeAuditRow & { candidateId: string | null }> = [];
+    let scannedContainers = 0;
+    for (const unit of containers) {
+      const cand = (unit.odooLotId ? byLot.get(unit.odooLotId) : undefined) || byIso.get(unit.iso.toUpperCase());
+      const source = productText(unit.odooSource);
+      const productName = cand?.productName || source.name;
+      const productCode = cand?.productCode || source.code;
+      if (!productName && !productCode) continue;
+      scannedContainers += 1;
+      if (cand) usedCandidate.add(cand.id);
+      const found = auditEquipment({
+        id: unit.iso,
+        iso: unit.iso,
+        source: "contenedor",
+        currentType: unit.type,
+        currentCat: unit.cat,
+        productName,
+        productCode,
+      }, masters);
+      if (found) rows.push({ ...found, candidateId: cand?.id || null });
+    }
+    let scannedLots = 0;
+    for (const cand of candidates) {
+      if (usedCandidate.has(cand.id) || cand.containerIso) continue;
+      if (!cand.productName && !cand.productCode) continue;
+      scannedLots += 1;
+      const found = auditEquipment({
+        id: `cand:${cand.id}`,
+        iso: cand.isoNormalized || cand.containerIso || "",
+        source: "lote",
+        currentType: cand.zdryType || "",
+        currentCat: cand.zdryCat || "",
+        productName: cand.productName,
+        productCode: cand.productCode,
+      }, masters);
+      if (found) rows.push({ ...found, candidateId: cand.id });
+    }
+    rows.sort((a, b) => a.iso.localeCompare(b.iso) || a.id.localeCompare(b.id));
+    return { rows, scannedContainers, scannedLots };
   }
 
   private async deleteOperationalData(keepUserId: string) {

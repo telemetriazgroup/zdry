@@ -1,4 +1,5 @@
 import { parseIso6346 } from "./iso6346";
+import { canonicalTypeFromProduct } from "./type-from-product";
 
 export function normalizeOdooSerial(raw: string) {
   return String(raw || "")
@@ -22,13 +23,7 @@ export function inspectOdooIso(raw: string) {
 }
 
 export function inferTypeFromProduct(name: string, code: string, fallback = "40HC") {
-  const hay = `${code} ${name}`.toUpperCase();
-  if (hay.includes("45") && (hay.includes("HC") || hay.includes("HIGH"))) return "45HC";
-  if (hay.includes("40") && (hay.includes("HC") || hay.includes("HIGH"))) return "40HC";
-  if (hay.includes("40")) return "40GP";
-  if (hay.includes("20") && (hay.includes("OT") || hay.includes("OPEN"))) return "20OT";
-  if (hay.includes("20")) return "20GP";
-  return fallback;
+  return canonicalTypeFromProduct(name, code, fallback);
 }
 
 export function inferCatFromProduct(name: string, fallback = "ASIS") {

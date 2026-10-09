@@ -34,6 +34,11 @@ describe("odoo-lot-map", () => {
     expect(inferTypeFromProduct("CONTENEDOR DRY 40 HC SEGUNDO US", "CDD40HC004")).toBe("40HC");
   });
 
+  it("no confunde open side con open top ni deja un 40 OT como standard", () => {
+    expect(inferTypeFromProduct("CONTENEDOR DRY 20 DC OPEN SIDE NUEVO", "CDE040")).toBe("20GP");
+    expect(inferTypeFromProduct("CONTENEDOR DRY 40 OT SEGUNDO USO", "")).toBe("40OT");
+  });
+
   it("usa el último tramo de la ubicación Odoo como nombre de almacén", () => {
     expect(titleFromLocation("ZGROU/Existencias")).toBe("Existencias");
     expect(titleFromLocation("Principal Callao: Recepciones")).toBe("Principal Callao: Recepciones");

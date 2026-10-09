@@ -1,6 +1,23 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../api.js";
 
+function typeFeet(type) {
+  if (!type) return "";
+  const code = String(type.code || "").toUpperCase();
+  const fromCode = code.match(/^(20|40|45)/);
+  if (fromCode) return fromCode[1];
+  const found = [...String(type.dims || "").matchAll(/(\d{2})'/g)].map((m) => m[1]);
+  const unique = [...new Set(found)];
+  return unique.length === 1 ? unique[0] : "";
+}
+
+function sameFeet(candidate, keep) {
+  if (!keep) return false;
+  const left = typeFeet(keep);
+  const right = typeFeet(candidate);
+  return !!left && left === right;
+}
+
 export default function Masters() {
   const [tab, setTab] = useState("depots");
   const [showArchived, setShowArchived] = useState(false);
@@ -226,7 +243,7 @@ export default function Masters() {
           <form className="form-grid" onSubmit={mergeTypes}>
             <div>
               <label>El que queda</label>
-              <select value={mergeKeep} onChange={(e) => setMergeKeep(e.target.value)} required>
+              <select value={mergeKeep} onChange={(e) => { setMergeKeep(e.target.value); setMergeAbsorb(""); }} required>
                 <option value="">Elegir</option>
                 {types.filter((t) => !t.archivedAt).map((t) => (
                   <option key={t.code} value={t.code}>{t.code} · {t.label} · {t.unitCount || 0}</option>
@@ -237,14 +254,14 @@ export default function Masters() {
               <label>Se archiva</label>
               <select value={mergeAbsorb} onChange={(e) => setMergeAbsorb(e.target.value)} required>
                 <option value="">Elegir</option>
-                {types.filter((t) => !t.archivedAt && t.code !== mergeKeep).map((t) => (
+                {types.filter((t) => !t.archivedAt && t.code !== mergeKeep && sameFeet(t, types.find((row) => row.code === mergeKeep))).map((t) => (
                   <option key={t.code} value={t.code}>{t.code} · {t.label} · {t.unitCount || 0}</option>
                 ))}
               </select>
             </div>
             <button className="btn-primary" type="submit">Fusionar</button>
           </form>
-          <p className="section-sub">Los equipos del tipo archivado pasan al que queda y ese código queda en cero. Puedes verlo con «Ver archivados».</p>
+          <p className="section-sub">Los equipos del tipo archivado pasan al que queda y ese código queda en cero. No se fusiona un 20 pies con un 40 pies. Puedes ver el archivado con «Ver archivados».</p>
           <div className="tablewrap">
           <table className="data">
             <thead><tr><th>Código</th><th>Etiqueta</th><th>Medidas</th><th>Equipos</th><th>Estado</th><th></th></tr></thead>

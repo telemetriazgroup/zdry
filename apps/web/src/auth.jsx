@@ -42,6 +42,7 @@ export const ROLE_NAV = {
     { to: "/app/integraciones", label: "Integración Odoo" },
     { to: "/app/estadistica-dry", label: "Estadística DRY" },
     { to: "/app/almacen/odoo", label: "Odoo — regularizar" },
+    { to: "/app/tipos-odoo", label: "Tipos según Odoo" },
     { to: "/app/catalogo-textos", label: "Textos del catálogo" },
     { to: "/app/configuracion", label: "Configuración" },
     { to: "/app/auditoria", label: "Auditoría" },

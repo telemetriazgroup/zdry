@@ -19,7 +19,7 @@ import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
 import { masterListWhere } from "../domain/masters";
 import { ACQUISITION_REFS_KEY, normalizeAcquisitionRefs, normalizeSafetyMarginRules, SAFETY_MARGIN_KEY } from "../domain/pricing";
-import { parseTypeMerge, retargetTypeRows } from "../domain/type-merge";
+import { mergeDimensionError, parseTypeMerge, retargetTypeRows } from "../domain/type-merge";
 import { refreshRulePrices } from "../odoo-import/acquisition-overlay.store";
 
 @Controller("masters")
@@ -107,6 +107,8 @@ export class MastersController {
     if (!byCode.has(keep)) throw new BadRequestException("El tipo que queda no existe.");
     const missing = absorb.filter((code) => !byCode.has(code));
     if (missing.length) throw new BadRequestException(`No existe el tipo ${missing.join(", ")}.`);
+    const dimension = mergeDimensionError(keep, absorb, (code) => byCode.get(code)?.dims || "");
+    if (dimension) throw new BadRequestException(dimension);
 
     const units = await this.prisma.container.findMany({
       where: { type: { in: absorb } },

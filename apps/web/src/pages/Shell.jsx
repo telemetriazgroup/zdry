@@ -22,6 +22,7 @@ import Profile from "./Profile.jsx";
 import OdooIntegrations from "./OdooIntegrations.jsx";
 import OdooBandeja from "./OdooBandeja.jsx";
 import SystemBackup from "./SystemBackup.jsx";
+import TypeAudit from "./TypeAudit.jsx";
 import DryStats from "./DryStats.jsx";
 import Alquileres from "./Alquileres.jsx";
 import CatalogShares from "./CatalogShares.jsx";
@@ -226,6 +227,7 @@ export default function Shell() {
             <Route path="integraciones" element={<Gate nav={nav} role={user.role} path="/app/integraciones"><OdooIntegrations /></Gate>} />
             <Route path="estadistica-dry" element={<Gate nav={nav} role={user.role} path="/app/estadistica-dry"><DryStats /></Gate>} />
             <Route path="respaldo" element={<Gate nav={nav} role={user.role} path="/app/respaldo"><SystemBackup /></Gate>} />
+            <Route path="tipos-odoo" element={<Gate nav={nav} role={user.role} path="/app/tipos-odoo"><TypeAudit /></Gate>} />
             <Route path="*" element={<Navigate to="/app" replace />} />
           </Routes>
         </div>

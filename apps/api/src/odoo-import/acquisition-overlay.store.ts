@@ -80,7 +80,7 @@ export function overlayUnitFrom(c: {
   };
 }
 
-export async function refreshRulePrices(prisma: PrismaService, filter: { warehouse?: string; vendor?: string } = {}) {
+export async function refreshRulePrices(prisma: PrismaService, filter: { warehouse?: string; vendor?: string; isos?: string[] } = {}) {
   const [rules, refsRow, dry, overlays, safety] = await Promise.all([
     prisma.pricingRule.findMany(),
     prisma.appSetting.findUnique({ where: { key: ACQUISITION_REFS_KEY } }),
@@ -102,6 +102,10 @@ export async function refreshRulePrices(prisma: PrismaService, filter: { warehou
   };
   if (filter.warehouse) where.odooWarehouse = filter.warehouse;
   if (filter.vendor) where.odooVendorName = filter.vendor;
+  if (filter.isos) {
+    if (!filter.isos.length) return { updated: 0 };
+    where.iso = { in: filter.isos };
+  }
   const rows = await prisma.container.findMany({ where, select: {
     iso: true, type: true, cat: true, manufacturer: true, fobCif: true, costSource: true,
     odooWarehouse: true, odooVendorName: true, originCountry: true, overlaySkipKeys: true, overlayExtras: true,
