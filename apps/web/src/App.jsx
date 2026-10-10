@@ -4,6 +4,7 @@ import { AuthProvider, homeFor, ROLE_LABELS, useAuth } from "./auth.jsx";
 import Login from "./pages/Login.jsx";
 import Shell from "./pages/Shell.jsx";
 import Catalog from "./pages/Catalog.jsx";
+import EnvioFicha from "./pages/EnvioFicha.jsx";
 import VisitaPublica from "./pages/VisitaPublica.jsx";
 import Account from "./pages/Account.jsx";
 import Legal from "./pages/Legal.jsx";
@@ -88,6 +89,7 @@ export default function App() {
         <Route path="/" element={<Catalog />} />
         <Route path="/c/:shareToken" element={<Catalog />} />
         <Route path="/c/:shareToken/u/:iso" element={<Catalog />} />
+        <Route path="/e/:token" element={<EnvioFicha />} />
         <Route path="/visita" element={<VisitaPublica />} />
         <Route path="/visita/:token" element={<VisitaPublica />} />
         <Route path="/u/:iso" element={<Catalog />} />

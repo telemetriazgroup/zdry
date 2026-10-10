@@ -12,7 +12,7 @@ import {
   UnprocessableEntityException,
 } from "@nestjs/common";
 import { Prisma, Role } from "@prisma/client";
-import { randomUUID } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { StorageService } from "../storage/storage.service";
@@ -53,6 +53,8 @@ import { isMediaApproved, PHOTO_STATUS_ACTIVE } from "../domain/catalog-media";
 import { loadDefaultWatermark } from "../domain/watermark";
 import { Readable } from "stream";
 import { CATALOG_COPY_KEY, normalizeCatalogCopy } from "../domain/catalog-copy";
+import { handoffMessage } from "../domain/catalog-handoff";
+import { mediaExtension, zipStored } from "../domain/zip-store";
 import { CATALOG_COMMERCE_KEY, normalizeCatalogCommerce, publicQuotesBlockedMessage } from "../domain/catalog-commerce";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { isOwnSaleStock } from "../domain/iso6346";
@@ -95,6 +97,12 @@ export function catalogPageSize(raw?: string) {
   return Math.min(96, Math.max(8, n));
 }
 const VENDOR_EMAIL = "vendedor@zdry.pe";
+
+async function readStream(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
 
 function publicMediaFields(c: {
   photos: { slot: number }[];
@@ -296,7 +304,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     sort?: string;
     page?: string;
     pageSize?: string;
-  }) {
+  }, commercial = false) {
     const page = Math.max(1, parseInt(query.page || "1", 10) || 1);
     const pageSize = catalogPageSize(query.pageSize);
     const where: Prisma.ContainerWhereInput = { ...(await this.catalogWhere()) };
@@ -366,8 +374,9 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         commercialStatus: c.commercialStatus,
         demo: c.demo,
         showPrice,
-        priceList: showPrice ? prices.priceList : null,
-        priceMin: null,
+        priceList: commercial || showPrice ? prices.priceList : null,
+        priceMin: commercial ? prices.priceMin : null,
+        margin: commercial ? Math.round(prices.priceList - prices.priceMin) : null,
         igv: showPrice ? igvOf(prices.priceList) : null,
         gross: showPrice ? grossOf(prices.priceList) : null,
         ...publicMediaFields(c),
@@ -433,6 +442,126 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  async catalogCommercialUnit(iso: string) {
+    const code = String(iso || "").trim().toUpperCase();
+    const c = await this.prisma.container.findFirst({
+      where: { iso: code, ...(await this.catalogWhere()) },
+      include: { depot: true, photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { slot: true } } },
+    });
+    if (!c) throw new NotFoundException("Esa unidad ya no está en el catálogo.");
+    const [pricing, typeRow, catRow, acquisition] = await Promise.all([
+      this.loadPricing(),
+      this.prisma.containerType.findUnique({ where: { code: c.type } }),
+      this.prisma.category.findUnique({ where: { code: c.cat } }),
+      this.loadAcquisitionRefs(),
+    ]);
+    const prices = await this.ensureUnitPrices(c.iso, pricing, acquisition);
+    return {
+      iso: c.iso,
+      type: c.type,
+      typeLabel: typeRow?.label || c.type,
+      dims: typeRow?.dims,
+      cat: c.cat,
+      catLabel: catRow?.label || c.cat,
+      year: c.year,
+      manufacturer: c.manufacturer,
+      color: c.color,
+      tareKg: c.tareKg,
+      mgwKg: c.mgwKg,
+      payloadKg: c.payloadKg,
+      cbm: c.cbm != null ? n(c.cbm) : null,
+      depotId: c.depotId,
+      depotName: c.depot.name,
+      depotCity: c.depot.city,
+      status: c.status,
+      priceList: prices.priceList,
+      priceMin: prices.priceMin,
+      margin: Math.round(prices.priceList - prices.priceMin),
+      odooDescription: c.odooDescription || "",
+      inspectionNotes: publicCatalogNotes(c.inspectionNotes),
+      ...publicMediaFields(c),
+    };
+  }
+
+  private async requireHandoff(token: string) {
+    const row = await this.prisma.catalogHandoff.findUnique({ where: { token: String(token || "").trim() } });
+    if (!row || row.expiresAt.getTime() <= Date.now()) throw new NotFoundException("Esta ficha ya no está disponible.");
+    return row;
+  }
+
+  async createHandoff(iso: string, body: { shareId?: string; includePrice?: boolean }, user: AuthUser) {
+    const share = await this.prisma.catalogShare.findUnique({ where: { id: String(body.shareId || "") } });
+    if (!share || share.archivedAt) throw new NotFoundException("Enlace no encontrado.");
+    const seesAll = user.role === "superadmin" || user.role === "admin" || user.role === "gerente";
+    if (!seesAll && share.vendorId !== user.id) throw new ForbiddenException("Ese enlace no es tuyo.");
+    const unit = await this.catalogCommercialUnit(iso);
+    const includePrice = body.includePrice === true;
+    const token = randomBytes(12).toString("hex");
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    await this.prisma.catalogHandoff.create({
+      data: { token, iso: unit.iso, shareId: share.id, includePrice, vendorId: user.id, expiresAt },
+    });
+    await this.audit.log({
+      user,
+      action: "catalog_handoff",
+      entity: "CatalogHandoff",
+      entityId: token,
+      after: { iso: unit.iso, shareId: share.id, includePrice },
+    });
+    return {
+      token,
+      path: `/e/${token}`,
+      clientPhone: share.clientPhone,
+      contactName: share.contactName || share.clientName,
+      includePrice,
+      message: handoffMessage({
+        contactName: share.contactName || share.clientName,
+        typeLabel: unit.typeLabel,
+        iso: unit.iso,
+        catLabel: unit.catLabel,
+        year: unit.year,
+        depotName: unit.depotName,
+        manufacturer: unit.manufacturer,
+        includePrice,
+        priceList: unit.priceList,
+        url: "{url}",
+      }),
+    };
+  }
+
+  async handoffView(token: string) {
+    const row = await this.requireHandoff(token);
+    const unit = await this.catalogCommercialUnit(row.iso);
+    return {
+      iso: unit.iso,
+      typeLabel: unit.typeLabel,
+      catLabel: unit.catLabel,
+      year: unit.year,
+      manufacturer: unit.manufacturer,
+      color: unit.color,
+      tareKg: unit.tareKg,
+      mgwKg: unit.mgwKg,
+      depotName: unit.depotName,
+      inspectionNotes: unit.inspectionNotes,
+      photos: unit.photos,
+      hasVideo: unit.hasVideo,
+      mediaVersion: unit.mediaVersion,
+      includePrice: row.includePrice,
+      priceList: row.includePrice ? unit.priceList : null,
+      expiresAt: row.expiresAt,
+    };
+  }
+
+  async handoffPhoto(token: string, slot: number) {
+    const row = await this.requireHandoff(token);
+    return this.catalogPhoto(row.iso, slot);
+  }
+
+  async handoffVideo(token: string) {
+    const row = await this.requireHandoff(token);
+    return this.catalogVideo(row.iso);
+  }
+
   async catalogPhoto(iso: string, slot: number) {
     if (!(await this.isCatalogVisible(iso))) throw new NotFoundException("Foto no disponible.");
     const c = await this.prisma.container.findUnique({ where: { iso } });
@@ -461,6 +590,31 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     const buf = await loadDefaultWatermark();
     if (!buf?.length) throw new NotFoundException("No hay marca de agua.");
     return new StreamableFile(Readable.from(buf), { type: "image/png", disposition: "inline" });
+  }
+
+  async commercialMediaZip(iso: string) {
+    const unit = await this.catalogCommercialUnit(iso);
+    const photos = await this.prisma.inspectionPhoto.findMany({
+      where: { iso: unit.iso, status: PHOTO_STATUS_ACTIVE, slot: { in: unit.photos } },
+      orderBy: { slot: "asc" },
+    });
+    const container = await this.prisma.container.findUnique({ where: { iso: unit.iso } });
+    const files: Array<{ name: string; data: Buffer }> = [];
+    for (const photo of photos) {
+      const obj = await this.storage.get(photo.publicKey || photo.storageKey);
+      const data = await readStream(obj.stream);
+      const ext = mediaExtension(obj.contentType || photo.mimeType, "jpg");
+      files.push({ name: `foto-${String(photo.slot + 1).padStart(2, "0")}.${ext}`, data });
+    }
+    if (container?.video360Key && unit.hasVideo) {
+      const obj = await this.storage.get(container.video360Key);
+      const data = await readStream(obj.stream);
+      const ext = mediaExtension(container.video360Mime || obj.contentType, "mp4");
+      files.push({ name: `video.${ext}`, data });
+    }
+    if (!files.length) throw new BadRequestException("Esta unidad no tiene fotos ni video publicados.");
+    const name = `${unit.iso}-fotos.zip`;
+    return { name, body: zipStored(files) };
   }
 
   async catalogVideo(iso: string) {

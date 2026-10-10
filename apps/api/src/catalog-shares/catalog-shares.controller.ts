@@ -46,6 +46,12 @@ export class CatalogSharesController {
     return this.shares.renew(id, body?.hours, user, req.ip);
   }
 
+  @Post(":id/edit")
+  @Roles("superadmin", "admin", "vendedor")
+  edit(@Param("id") id: string, @Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.shares.edit(id, body, user, req.ip);
+  }
+
   @Post(":id/archive")
   @Roles("superadmin", "admin", "vendedor")
   archive(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {

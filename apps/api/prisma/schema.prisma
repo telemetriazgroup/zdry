@@ -1275,6 +1275,20 @@ model PriceException {
   @@index([vendorId, createdAt])
 }
 
+model CatalogHandoff {
+  id           String   @id @default(uuid())
+  token        String   @unique
+  iso          String
+  shareId      String
+  includePrice Boolean  @default(false)
+  vendorId     String
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([iso])
+  @@index([expiresAt])
+}
+
 model CatalogShareEvent {
   id        String       @id @default(uuid())
   shareId   String

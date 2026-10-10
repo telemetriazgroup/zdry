@@ -10,6 +10,23 @@
   gap: 16px;
   align-items: start;
 }
+.share-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.share-pager { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.share-client { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: inherit; font: inherit; }
+.share-client:hover b { color: var(--orange, #d9622f); }
+tr.share-row-on td { background: #fff7f2; }
+button.share-pick { width: 100%; background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+button.share-pick.on b { color: var(--orange, #d9622f); }
+button.share-unit { display: block; }
+.share-brief-main { background: #f4f6f8; border-radius: 8px; min-height: 160px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.share-brief-main img, .share-brief-main video { width: 100%; max-height: 280px; object-fit: contain; }
+.share-brief-photos { display: flex; gap: 6px; overflow: auto; margin: 8px 0; }
+.share-brief-photos button { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 0; cursor: pointer; }
+.share-brief-photos button.on { border-color: var(--orange, #d9622f); }
+.share-brief-photos img { width: 72px; height: 54px; object-fit: cover; display: block; border-radius: 5px; }
+.commercial-send { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.commercial-send .btn-whatsapp { justify-content: center; }
+.handoff-card { max-width: 860px; margin: 18px auto; }
 .share-board .panel { min-width: 0; }
 .share-scroll { max-height: calc(100vh - 280px); overflow: auto; }
 .share-actions { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap; align-items: center; }

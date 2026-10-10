@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { api, formatWhen, APP_ROOT } from "../api.js";
+import { Link } from "react-router-dom";
+import { api, apiUrl, formatWhen, APP_ROOT } from "../api.js";
 import { whatsappDigits } from "../catalog-copy.js";
 import { useAuth } from "../auth.jsx";
+import { downloadCommercialMedia } from "./CommercialSend.jsx";
 
 const HOURS = Array.from({ length: 10 }, (_, i) => (i + 1) * 24);
+const LINK_PAGE = 4;
 const KIND = {
   open: "Abrió el catálogo",
   view_unit: "Vio un DRY",
@@ -29,7 +32,7 @@ function usd(value) {
   return `USD ${Math.round(n).toLocaleString("en-US")}`;
 }
 
-function ShareActivity({ detail }) {
+function ShareActivity({ detail, picked, onPick }) {
   const metrics = detail?.metrics;
   if (!detail || !metrics) return <p className="section-sub">Elige un enlace para ver qué revisa el cliente.</p>;
   const units = metrics.units || [];
@@ -54,11 +57,11 @@ function ShareActivity({ detail }) {
       {units.length ? (
         <div className="share-bars">
           {units.map((u) => (
-            <div className="share-bar-row" key={`v-${u.iso}`}>
+            <button className={`share-bar-row share-pick ${picked === u.iso ? "on" : ""}`} type="button" key={`v-${u.iso}`} onClick={() => onPick?.(u.iso)}>
               <b>{u.iso}</b>
               <div className="share-bar"><span style={{ width: `${Math.max(8, ((u.views || u.count || 0) / viewsMax) * 100)}%` }} /></div>
               <span>{u.views || u.count || 0}</span>
-            </div>
+            </button>
           ))}
         </div>
       ) : <p className="muted">Todavía no abre fichas.</p>}
@@ -66,11 +69,11 @@ function ShareActivity({ detail }) {
       {units.length ? (
         <div className="share-bars">
           {units.map((u) => (
-            <div className="share-bar-row" key={`p-${u.iso}`}>
+            <button className={`share-bar-row share-pick ${picked === u.iso ? "on" : ""}`} type="button" key={`p-${u.iso}`} onClick={() => onPick?.(u.iso)}>
               <b>{u.iso}</b>
               <div className="share-bar price"><span style={{ width: `${u.priceList ? Math.max(8, (Number(u.priceList) / priceMax) * 100) : 0}%` }} /></div>
               <span>{usd(u.priceList)}</span>
-            </div>
+            </button>
           ))}
         </div>
       ) : null}
@@ -85,13 +88,13 @@ function ShareActivity({ detail }) {
         </div>
       </div>
       {units.map((u) => (
-        <div className="share-unit" key={`m-${u.iso}`}>
+        <button className={`share-unit share-pick ${picked === u.iso ? "on" : ""}`} type="button" key={`m-${u.iso}`} onClick={() => onPick?.(u.iso)}>
           <b>{u.iso}</b> {u.type ? `· ${u.type}` : ""} {u.cat ? `· ${u.cat}` : ""} · {usd(u.priceList)}
           <p>{u.views || 0} aperturas · vuelve {u.returns || 0} · {u.images || 0} fotos ({u.distinctImages || 0} distintas)</p>
           {(u.places || []).map((place, i) => (
             <p key={`${u.iso}-${i}`}>{place.ip || "sin IP"} · {place.device || "dispositivo"}{place.client ? ` · ${place.client}` : ""}</p>
           ))}
-        </div>
+        </button>
       ))}
       <b>Desde dónde entró</b>
       <ul className="dash-list">
@@ -100,6 +103,72 @@ function ShareActivity({ detail }) {
         ))}
         {!(metrics.opens || []).length ? <li className="muted">Aún no abre el enlace.</li> : null}
       </ul>
+    </>
+  );
+}
+
+function UnitBrief({ unit, error }) {
+  const [slot, setSlot] = useState(unit?.photos?.[0] ?? 0);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
+  useEffect(() => {
+    setSlot(unit?.photos?.[0] ?? (unit?.hasVideo ? "video" : 0));
+  }, [unit?.iso]);
+  if (error) return <p className="err">{error}</p>;
+  if (!unit) return <p className="section-sub">Elige un equipo de la actividad para ver las fotos que vio el cliente, el dato ya sincronizado y el margen de negociación.</p>;
+  const version = unit.mediaVersion;
+  const photo = (n) => `${apiUrl(`/catalog/${unit.iso}/photos/${n}`)}${version ? `?v=${encodeURIComponent(version)}` : ""}`;
+  return (
+    <>
+      <h3 style={{ marginTop: 0 }}>{unit.typeLabel} · {unit.iso}</h3>
+      <p className="section-sub">{unit.catLabel} · {unit.depotName} · {unit.status}</p>
+      <div className="share-brief-main">
+        {slot === "video" && unit.hasVideo ? (
+          <video src={`${apiUrl(`/catalog/${unit.iso}/video`)}${version ? `?v=${encodeURIComponent(version)}` : ""}`} controls />
+        ) : unit.photos?.includes(slot) ? (
+          <img src={photo(slot)} alt={`${unit.iso} foto ${slot + 1}`} />
+        ) : <span className="muted">Sin foto aprobada</span>}
+      </div>
+      <div className="share-brief-photos">
+        {(unit.photos || []).map((n) => (
+          <button key={n} type="button" className={slot === n ? "on" : ""} onClick={() => setSlot(n)}>
+            <img src={photo(n)} alt={`Foto ${n + 1}`} />
+          </button>
+        ))}
+        {unit.hasVideo ? <button type="button" className={slot === "video" ? "on" : ""} onClick={() => setSlot("video")}>360°</button> : null}
+      </div>
+      <table className="spec-table">
+        <tbody>
+          <tr><td>Fabricante</td><td>{unit.manufacturer}</td></tr>
+          <tr><td>Año</td><td>{unit.year || "—"}</td></tr>
+          <tr><td>Tara / MGW</td><td>{unit.tareKg || "—"} / {unit.mgwKg || "—"} kg</td></tr>
+          <tr><td>Color</td><td>{unit.color || "—"}</td></tr>
+          <tr><td>Precio de lista</td><td>{usd(unit.priceList)}</td></tr>
+          <tr><td>Mínimo</td><td>{usd(unit.priceMin)}</td></tr>
+          <tr><td>Margen para negociar</td><td>{usd(unit.margin)}</td></tr>
+        </tbody>
+      </table>
+      <p className="field-hint">Dato ya sincronizado de Odoo, sin volver a consultarlo. {unit.odooDescription || "Sin descripción guardada."}</p>
+      <button
+        className="btn-ghost"
+        type="button"
+        disabled={downloading}
+        onClick={async () => {
+          setDownloadError("");
+          setDownloading(true);
+          try {
+            await downloadCommercialMedia(unit.iso);
+          } catch (err) {
+            setDownloadError(err.message);
+          } finally {
+            setDownloading(false);
+          }
+        }}
+      >
+        {downloading ? "Preparando descarga…" : "Descargar fotos y video"}
+      </button>
+      {downloadError ? <p className="err">{downloadError}</p> : null}
+      <p className="field-hint">El archivo es para subirlo a mano en WhatsApp. El chat no puede llevar las fotos solo.</p>
     </>
   );
 }
@@ -131,6 +200,11 @@ export default function CatalogShares() {
   const waEdited = useRef(false);
   const [archivedView, setArchivedView] = useState(false);
   const [renewHours, setRenewHours] = useState(72);
+  const [linkPage, setLinkPage] = useState(1);
+  const [editing, setEditing] = useState(null);
+  const [pickedIso, setPickedIso] = useState("");
+  const [pickedUnit, setPickedUnit] = useState(null);
+  const [pickedError, setPickedError] = useState("");
   const [form, setForm] = useState({
     ruc: "",
     clientCompany: "",
@@ -156,8 +230,22 @@ export default function CatalogShares() {
   }
 
   useEffect(() => {
+    setLinkPage(1);
     load(archivedView).catch((e) => setError(e.message));
   }, [archivedView]);
+
+  useEffect(() => {
+    if (!pickedIso) {
+      setPickedUnit(null);
+      setPickedError("");
+      return;
+    }
+    let cancelled = false;
+    api(`/catalog/commercial/${pickedIso}`)
+      .then((unit) => { if (!cancelled) { setPickedUnit(unit); setPickedError(""); } })
+      .catch((e) => { if (!cancelled) { setPickedUnit(null); setPickedError(e.message); } });
+    return () => { cancelled = true; };
+  }, [pickedIso]);
 
   useEffect(() => {
     const saved = String(user?.whatsapp || "").trim();
@@ -283,6 +371,7 @@ export default function CatalogShares() {
 
   async function open(id) {
     setOpenId(id);
+    setPickedIso("");
     try {
       setDetail(await api(`/catalog-shares/mine/${id}`));
     } catch (err) {
@@ -290,11 +379,40 @@ export default function CatalogShares() {
     }
   }
 
+  function startEdit(row) {
+    setEditing({
+      id: row.id,
+      contactName: row.contactName || row.clientName || "",
+      clientPhone: row.clientPhone || "",
+      clientEmail: row.clientEmail || "",
+      clientNote: row.clientNote || "",
+      vendorWhatsapp: row.vendorWhatsapp || "",
+    });
+  }
+
+  async function saveEdit(e) {
+    e.preventDefault();
+    setError("");
+    try {
+      const row = await api(`/catalog-shares/${editing.id}/edit`, { method: "POST", body: editing });
+      setMsg(`Enlace de ${row.clientCompany || row.clientName} actualizado.`);
+      setEditing(null);
+      if (openId === row.id) setDetail(await api(`/catalog-shares/mine/${row.id}`));
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  const linkPages = Math.max(1, Math.ceil(rows.length / LINK_PAGE));
+  const safePage = Math.min(linkPage, linkPages);
+  const pageRows = rows.slice((safePage - 1) * LINK_PAGE, safePage * LINK_PAGE);
+
   return (
     <>
       <h2 className="section-title">Enlaces de catálogo</h2>
       <p className="section-sub">
-        Validas el RUC en SUNAT, indicas a la persona que verá el catálogo y el WhatsApp del comercial. La vigencia va de 24 a 240 horas. Un enlace vigente se puede extender; uno vencido se reactiva con las mismas horas. Archivar lo saca de la lista y lo deja inutilizable. Cada cliente tiene un solo enlace activo, y ese enlace solo permanece abierto en un lugar: si entra en otro, la sesión anterior se cierra.
+        Validas el RUC en SUNAT, indicas a la persona que verá el catálogo y el WhatsApp del comercial. La vigencia va de 24 a 240 horas. Un enlace vigente se puede extender; uno vencido se reactiva con las mismas horas. Archivar lo saca de la lista y lo deja inutilizable. Puedes corregir el contacto de un enlace ya creado. Cada cliente tiene un solo enlace activo, y ese enlace solo permanece abierto en un lugar: si entra en otro, la sesión anterior se cierra.
       </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
@@ -349,9 +467,11 @@ export default function CatalogShares() {
       </div>
 
       <div className="share-board">
+        <div className="share-stack">
         <div className="panel">
           <div className="odoo-toolbar">
             <h3 style={{ margin: 0 }}>Enlaces</h3>
+            <Link className="btn-ghost" to={{ pathname: "/", search: "?vista=comercial" }}>Ver catálogo comercial</Link>
             <button className="btn-ghost" type="button" onClick={() => setArchivedView((v) => !v)}>
               {archivedView ? "Ver vigentes" : "Ver archivados"}
             </button>
@@ -364,13 +484,30 @@ export default function CatalogShares() {
               </label>
             )}
           </div>
-          <div className="tablewrap share-scroll">
+          {editing ? (
+            <form className="form-grid" onSubmit={saveEdit}>
+              <div><label>Persona que verá el catálogo</label><input value={editing.contactName} onChange={(e) => setEditing({ ...editing, contactName: e.target.value })} required /></div>
+              <div><label>Teléfono del contacto</label><input value={editing.clientPhone} onChange={(e) => setEditing({ ...editing, clientPhone: e.target.value })} required /></div>
+              <div><label>Correo del contacto</label><input type="email" value={editing.clientEmail} onChange={(e) => setEditing({ ...editing, clientEmail: e.target.value })} required /></div>
+              <div><label>WhatsApp del comercial</label><input value={editing.vendorWhatsapp} onChange={(e) => setEditing({ ...editing, vendorWhatsapp: e.target.value })} required /></div>
+              <div><label>Nota</label><input value={editing.clientNote} onChange={(e) => setEditing({ ...editing, clientNote: e.target.value })} /></div>
+              <div className="action-row">
+                <button className="btn-primary" type="submit">Guardar enlace</button>
+                <button className="btn-ghost" type="button" onClick={() => setEditing(null)}>Cancelar</button>
+              </div>
+            </form>
+          ) : null}
+          <div className="tablewrap">
             <table className="data">
               <thead><tr><th>Cliente</th><th>Vence</th><th>Estado</th><th></th></tr></thead>
               <tbody>
-                {rows.map((r) => (
-                  <tr key={r.id}>
-                    <td><b>{r.clientCompany || r.clientName}</b><br /><span className="muted">{r.ruc ? `RUC ${r.ruc} · ` : ""}{r.contactName || r.clientName}{r.accessCode ? ` · clave ${r.accessCode}` : ""}</span></td>
+                {pageRows.map((r) => (
+                  <tr key={r.id} className={openId === r.id ? "share-row-on" : ""}>
+                    <td>
+                      <button className="share-client" type="button" onClick={() => open(r.id)}>
+                        <b>{r.clientCompany || r.clientName}</b><br /><span className="muted">{r.ruc ? `RUC ${r.ruc} · ` : ""}{r.contactName || r.clientName}{r.accessCode ? ` · clave ${r.accessCode}` : ""}</span>
+                      </button>
+                    </td>
                     <td>{formatWhen(r.expiresAt)}</td>
                     <td>{STATUS[r.status] || (r.live ? "Activo" : "Vencido")}</td>
                     <td>
@@ -399,6 +536,9 @@ export default function CatalogShares() {
                           </button>
                         ) : null}
                         {r.status === "archivado" ? null : (
+                          <button className="btn-ghost" type="button" onClick={() => startEdit(r)}>Editar</button>
+                        )}
+                        {r.status === "archivado" ? null : (
                           <button className="btn-ghost" type="button" onClick={() => archive(r.id)}>Archivar</button>
                         )}
                       </div>
@@ -409,11 +549,22 @@ export default function CatalogShares() {
               </tbody>
             </table>
           </div>
+          {rows.length > LINK_PAGE ? (
+            <div className="share-pager">
+              <button className="btn-ghost" type="button" disabled={safePage <= 1} onClick={() => setLinkPage(safePage - 1)}>Anterior</button>
+              <span>Página {safePage} de {linkPages}</span>
+              <button className="btn-ghost" type="button" disabled={safePage >= linkPages} onClick={() => setLinkPage(safePage + 1)}>Siguiente</button>
+            </div>
+          ) : null}
+        </div>
+        <div className="panel">
+          <UnitBrief unit={pickedUnit} error={pickedError} />
+        </div>
         </div>
         <div className="panel">
           <h3>{detail ? `Actividad · ${detail.clientName}` : "Actividad del cliente"}</h3>
           <div className="share-scroll">
-            <ShareActivity detail={detail} />
+            <ShareActivity detail={detail} picked={pickedIso} onPick={setPickedIso} />
             {detail?.events?.length ? (
               <ul className="dash-list">
                 {detail.events.slice(0, 40).map((e) => (

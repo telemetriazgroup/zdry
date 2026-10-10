@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, ApiError, apiUrl, goAppRoot, goCatalogHome, publicUrl } from "../api.js";
 import { useAuth } from "../auth.jsx";
 import {
@@ -11,6 +11,7 @@ import {
   whatsappUrl,
 } from "../catalog-copy.js";
 import SiteFooter from "./SiteFooter.jsx";
+import CommercialSend from "./CommercialSend.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 import VideoMarks, { videoSilenceProps } from "../video-marks.jsx";
 
@@ -284,7 +285,9 @@ function loadCart() {
 
 export default function Catalog() {
   const { iso: routeIso, shareToken } = useParams();
+  const [searchParams] = useSearchParams();
   const { user, ready, logout, login, register } = useAuth();
+  const commercial = !shareToken && searchParams.get("vista") === "comercial" && ["superadmin", "admin", "vendedor"].includes(user?.role);
   const nav = useNavigate();
   const [meta, setMeta] = useState(null);
   const [data, setData] = useState({ items: [], total: 0, page: 1, pages: 1 });
@@ -329,7 +332,7 @@ export default function Catalog() {
     const showList = !routeIso && !listSplashDone.current;
     const started = Date.now();
     if (showList) setSplash("list");
-    api(`/catalog?${query}`)
+    api(`${commercial ? "/catalog/commercial" : "/catalog"}?${query}`)
       .then((d) => {
         setData(d);
         if (!showList) return;
@@ -351,7 +354,7 @@ export default function Catalog() {
           setSplash((cur) => (cur === "list" ? null : cur));
         }
       });
-  }, [query, routeIso, shareToken]);
+  }, [query, routeIso, shareToken, commercial]);
 
   const catalogOpen = Boolean(user) || Boolean(shareToken && shareUnlocked);
 
@@ -418,7 +421,7 @@ export default function Catalog() {
     setSplash("detail");
     const started = Date.now();
     let cancelled = false;
-    api(`/catalog/${routeIso}`)
+    api(commercial ? `/catalog/commercial/${routeIso}` : `/catalog/${routeIso}`)
       .then((u) => {
         if (cancelled) return;
         const slots = publishedSlots(u);
@@ -445,7 +448,7 @@ export default function Catalog() {
     return () => {
       cancelled = true;
     };
-  }, [routeIso, ready, catalogOpen]);
+  }, [routeIso, ready, catalogOpen, commercial]);
 
   const loadAccount = useCallback(() => {
     if (!user || user.role !== "cliente") {
@@ -555,11 +558,13 @@ export default function Catalog() {
   }, [filters.type, filters.cat, filters.depot, filters.manufacturer, filters.sort, shareToken]);
 
   function openUnit(iso) {
-    nav(shareToken ? `/c/${shareToken}/u/${iso}` : `/u/${iso}`);
+    const search = commercial ? "?vista=comercial" : "";
+    nav(`${shareToken ? `/c/${shareToken}/u/${iso}` : `/u/${iso}`}${search}`);
   }
 
   function closeUnit() {
     if (shareToken) nav(`/c/${shareToken}`);
+    else if (commercial) nav({ pathname: "/", search: "?vista=comercial" });
     else goCatalogHome(nav);
   }
 
@@ -748,6 +753,16 @@ export default function Catalog() {
             <ShareClock expiresAt={share.expiresAt} />
           </aside>
         ) : null}
+        {commercial ? (
+          <aside className="share-banner">
+            <div>
+              <span>Modo comercial</span>
+              <b>Precio de lista, mínimo y margen</b>
+              <p>El cliente no ve estos números. Si no quiere recorrer el catálogo, abre una ficha y envíale las fotos y el video.</p>
+            </div>
+            <Link to="/app/enlaces-catalogo" className="btn-ghost">Volver a enlaces</Link>
+          </aside>
+        ) : null}
         {error ? <div className="err">{error}</div> : null}
         {msg ? <div className="ok-msg">{msg}</div> : null}
         <div className="stock-bar" ref={listTop}>
@@ -801,12 +816,14 @@ export default function Catalog() {
                   <span>{u.depotName}</span>
                 </div>
                 <div className="card-footer">
-                  {u.showPrice ? (
+                  {commercial ? (
+                    <div className="card-price">Lista {money(u.priceList)} <small>Mínimo {money(u.priceMin)} · margen {money(u.margin)}</small></div>
+                  ) : u.showPrice ? (
                     <div className="card-price">{money(u.gross)} <small>oferta · IGV incl. · neto {money(u.priceList)}</small></div>
                   ) : (
                     <span className="price-cta">{copy.requestPrice}</span>
                   )}
-                  {quotesOn ? (
+                  {commercial ? null : quotesOn ? (
                     <button className="link-btn" type="button" onClick={() => startFormalQuote(u.iso)}>
                       {u.showPrice ? copy.requestQuote : copy.requestPrice}
                     </button>
@@ -914,7 +931,12 @@ export default function Catalog() {
                 </table>
                 {publicNotes(pdp.inspectionNotes) ? <p className="section-sub" style={{ marginTop: 10 }}>{publicNotes(pdp.inspectionNotes)}</p> : null}
                 <div className="price-box">
-                  {pdp.showPrice ? (
+                  {commercial ? (
+                    <>
+                      <div className="amt">{money(pdp.priceList)}</div>
+                      <div className="muted">Lista · mínimo {money(pdp.priceMin)} · margen para negociar {money(pdp.margin)}</div>
+                    </>
+                  ) : pdp.showPrice ? (
                     <>
                       <div className="amt">{money(pdp.gross)}</div>
                       <div className="muted">Precio de oferta · IGV 18% {money(pdp.igv)} · neto {money(pdp.priceList)}</div>
@@ -926,7 +948,8 @@ export default function Catalog() {
                     </>
                   )}
                 </div>
-                <div className="freight">
+                {commercial ? <CommercialSend unit={pdp} /> : null}
+                {commercial ? null : <div className="freight">
                   <label>Lugar de despacho</label>
                   <input
                     value={dispatchPlace}
@@ -934,8 +957,8 @@ export default function Catalog() {
                     placeholder="Ej. Ate, Callao, Ica…"
                     maxLength={200}
                   />
-                </div>
-                <div className="pdp-cta-inline">
+                </div>}
+                {commercial ? null : <div className="pdp-cta-inline">
                   {pdp.reserved ? (
                     <button className="btn-primary" style={{ marginTop: 16, width: "100%" }} type="button" disabled>Reservado</button>
                   ) : (
@@ -950,15 +973,17 @@ export default function Catalog() {
                           {pdp.showPrice ? copy.requestQuote : copy.requestPrice}
                         </button>
                       ) : null}
-                      <WhatsAppLink className={quotesOn ? "link-btn" : "btn-whatsapp"} href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp, dispatchPlace))} onClick={() => trackShare("whatsapp", pdp.iso)}>
-                        {copy.whatsappCta}
-                      </WhatsAppLink>
+                      {commercial ? null : (
+                        <WhatsAppLink className={quotesOn ? "link-btn" : "btn-whatsapp"} href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp, dispatchPlace))} onClick={() => trackShare("whatsapp", pdp.iso)}>
+                          {copy.whatsappCta}
+                        </WhatsAppLink>
+                      )}
                     </>
                   )}
-                </div>
+                </div>}
               </div>
             </div>
-            {pdp.reserved ? null : (
+            {pdp.reserved || commercial ? null : (
               <div className="pdp-cta-bar">
                 {quotesOn ? (
                   <button

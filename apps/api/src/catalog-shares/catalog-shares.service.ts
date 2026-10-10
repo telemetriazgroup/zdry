@@ -399,6 +399,35 @@ export class CatalogSharesService {
     }
   }
 
+  async edit(id: string, body: Record<string, unknown>, user: AuthUser, ip?: string) {
+    const row = await this.prisma.catalogShare.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException("Enlace no encontrado.");
+    if (!this.canSeeAll(user) && row.vendorId !== user.id) throw new ForbiddenException("Ese enlace no es tuyo.");
+    if (row.archivedAt) throw new BadRequestException("Un enlace archivado no se edita.");
+    const contactName = String(body.contactName || "").trim().slice(0, 120);
+    if (contactName.length < 2) throw new BadRequestException("Indica el nombre de la persona que verá el catálogo.");
+    const clientEmail = String(body.clientEmail || "").trim().toLowerCase().slice(0, 160);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clientEmail)) throw new BadRequestException("Indica el correo de la persona de contacto.");
+    const clientPhone = whatsappDigits(body.clientPhone).slice(0, 20);
+    if (clientPhone.length < 7) throw new BadRequestException("Indica el teléfono de la persona de contacto.");
+    const vendorWhatsapp = whatsappDigits(body.vendorWhatsapp);
+    if (vendorWhatsapp.length < 9) throw new BadRequestException("Indica el WhatsApp del comercial (mínimo 9 dígitos).");
+    const clientNote = String(body.clientNote || "").trim().slice(0, 300);
+    const updated = await this.prisma.catalogShare.update({
+      where: { id },
+      data: { contactName, clientName: contactName, clientPhone, clientEmail, clientNote, vendorWhatsapp },
+    });
+    await this.audit.log({
+      user,
+      action: "edit",
+      entity: "CatalogShare",
+      entityId: id,
+      after: { contactName, clientPhone, clientEmail },
+      ip,
+    });
+    return this.present({ ...updated, events: [] });
+  }
+
   async suspend(id: string, user: AuthUser, ip?: string) {
     const row = await this.prisma.catalogShare.findUnique({ where: { id } });
     if (!row) throw new NotFoundException("Enlace no encontrado.");

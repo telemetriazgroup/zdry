@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Post, Query, Req, Res, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, Req, Res, StreamableFile, UseGuards } from "@nestjs/common";
+import { Readable } from "stream";
 import { Request, Response } from "express";
 import { Public } from "../auth/public.decorator";
 import { CatalogAccessGuard } from "./catalog-access.guard";
@@ -111,6 +112,66 @@ export class CatalogController {
     @Req() req: Request,
   ) {
     return this.quotes.requestQuote(body, user, req.ip);
+  }
+
+  @Get("commercial")
+  @Roles("superadmin", "admin", "vendedor")
+  commercialList(
+    @Query("q") q?: string,
+    @Query("type") type?: string,
+    @Query("cat") cat?: string,
+    @Query("depot") depot?: string,
+    @Query("manufacturer") manufacturer?: string,
+    @Query("year") year?: string,
+    @Query("sort") sort?: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+  ) {
+    return this.quotes.catalogList({ q, type, cat, depot, manufacturer, year, sort, page, pageSize }, true);
+  }
+
+  @Get("commercial/:iso/descarga")
+  @Roles("superadmin", "admin", "vendedor")
+  async commercialDownload(@Param("iso") iso: string, @Res({ passthrough: true }) res: Response) {
+    const file = await this.quotes.commercialMediaZip(iso);
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Length", String(file.body.length));
+    res.setHeader("Content-Disposition", `attachment; filename="${file.name}"`);
+    return new StreamableFile(Readable.from(file.body));
+  }
+
+  @Get("commercial/:iso")
+  @Roles("superadmin", "admin", "vendedor")
+  commercialUnit(@Param("iso") iso: string) {
+    return this.quotes.catalogCommercialUnit(iso);
+  }
+
+  @Post("commercial/:iso/envio")
+  @Roles("superadmin", "admin", "vendedor")
+  createHandoff(
+    @Param("iso") iso: string,
+    @Body() body: { shareId?: string; includePrice?: boolean },
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.quotes.createHandoff(iso, body, user);
+  }
+
+  @Public()
+  @Get("envio/:token")
+  handoff(@Param("token") token: string) {
+    return this.quotes.handoffView(token);
+  }
+
+  @Public()
+  @Get("envio/:token/photos/:slot")
+  handoffPhoto(@Param("token") token: string, @Param("slot") slot: string) {
+    return this.quotes.handoffPhoto(token, parseInt(slot, 10));
+  }
+
+  @Public()
+  @Get("envio/:token/video")
+  handoffVideo(@Param("token") token: string) {
+    return this.quotes.handoffVideo(token);
   }
 
   @Public()
