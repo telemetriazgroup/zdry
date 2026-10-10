@@ -5,8 +5,11 @@ function money(n) {
   return "$" + Math.round(Number(n)).toLocaleString("en-US");
 }
 
-export default function CommercialStock({ rows, preview, onExit }) {
+export default function CommercialStock({ rows, preview, onExit, canRequest, exceptions, onRequest }) {
   const [q, setQ] = useState("");
+  const [ask, setAsk] = useState(null);
+  const [form, setForm] = useState({ clientName: "", clientCompany: "", ruc: "", requestedPrice: "", reason: "" });
+  const [sending, setSending] = useState(false);
   const visible = useMemo(() => {
     const raw = q.trim().toUpperCase();
     if (!raw) return rows;
@@ -53,11 +56,12 @@ export default function CommercialStock({ rows, preview, onExit }) {
                 <th>Precio de lista</th>
                 <th>Mínimo permitido</th>
                 <th>Rango</th>
+                {canRequest ? <th></th> : null}
               </tr>
             </thead>
             <tbody>
               {visible.length === 0 ? (
-                <tr><td colSpan={8}>{rows.length ? "Ninguna unidad coincide con la búsqueda." : "No hay unidades publicadas."}</td></tr>
+                <tr><td colSpan={canRequest ? 9 : 8}>{rows.length ? "Ninguna unidad coincide con la búsqueda." : "No hay unidades publicadas."}</td></tr>
               ) : visible.map((r) => (
                 <tr key={r.iso}>
                   <td>{r.iso}{r.demo ? <span className="demo-chip">DEMO</span> : null}</td>
@@ -68,11 +72,63 @@ export default function CommercialStock({ rows, preview, onExit }) {
                   <td><b>{money(r.priceList)}</b></td>
                   <td>{money(r.priceMin)}</td>
                   <td>{money(r.priceMin)} – {money(r.priceList)}</td>
+                  {canRequest && r.priceMin ? (
+                    <td>
+                      <button className="btn-ghost" type="button" onClick={() => { setAsk(r); setForm({ clientName: "", clientCompany: "", ruc: "", requestedPrice: "", reason: "" }); }}>
+                        Pedir menos
+                      </button>
+                    </td>
+                  ) : null}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        {ask ? (
+          <form className="form-grid" style={{ marginTop: 14 }} onSubmit={async (e) => {
+            e.preventDefault();
+            setSending(true);
+            try {
+              await onRequest?.({ ...form, iso: ask.iso, requestedPrice: Number(form.requestedPrice) });
+              setAsk(null);
+            } finally {
+              setSending(false);
+            }
+          }}>
+            <div>
+              <label>Unidad</label>
+              <input value={`${ask.iso} · mínimo ${money(ask.priceMin)}`} readOnly />
+            </div>
+            <div><label>Cliente</label><input value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value })} required /></div>
+            <div><label>Empresa</label><input value={form.clientCompany} onChange={(e) => setForm({ ...form, clientCompany: e.target.value })} /></div>
+            <div><label>RUC</label><input value={form.ruc} onChange={(e) => setForm({ ...form, ruc: e.target.value })} inputMode="numeric" /></div>
+            <div><label>Precio que pide</label><input type="number" min="1" value={form.requestedPrice} onChange={(e) => setForm({ ...form, requestedPrice: e.target.value })} required /></div>
+            <div><label>Por qué está debajo del mínimo</label><input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} required /></div>
+            <div className="action-row">
+              <button className="btn-primary" type="submit" disabled={sending}>{sending ? "Enviando…" : "Enviar a aprobación"}</button>
+              <button className="btn-ghost" type="button" onClick={() => setAsk(null)}>Cancelar</button>
+            </div>
+          </form>
+        ) : null}
+        {Array.isArray(exceptions) && exceptions.length ? (
+          <div style={{ marginTop: 14 }}>
+            <h3>Solicitudes de precio</h3>
+            <table className="data">
+              <thead><tr><th>Unidad</th><th>Cliente</th><th>Pedido</th><th>Aprobado</th><th>Estado</th></tr></thead>
+              <tbody>
+                {exceptions.map((x) => (
+                  <tr key={x.id}>
+                    <td>{x.iso}</td>
+                    <td>{x.clientName}</td>
+                    <td>{money(x.requestedPrice)}</td>
+                    <td>{x.approvedPrice == null ? "—" : money(x.approvedPrice)}</td>
+                    <td>{x.status}{x.reviewNote ? ` · ${x.reviewNote}` : ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
       </div>
     </>
   );

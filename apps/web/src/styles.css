@@ -12,7 +12,7 @@
 }
 .share-board .panel { min-width: 0; }
 .share-scroll { max-height: calc(100vh - 280px); overflow: auto; }
-.share-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.share-actions { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap; align-items: center; }
 .share-icon {
   width: 32px; height: 32px; padding: 0;
   border: 1px solid var(--line); border-radius: 8px; background: #fff; color: #1b2b4b;

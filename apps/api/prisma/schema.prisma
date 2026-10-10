@@ -1242,12 +1242,37 @@ model CatalogShare {
   hours          Int
   expiresAt      DateTime
   suspendedAt    DateTime?
+  archivedAt     DateTime?
   createdAt      DateTime            @default(now())
   events         CatalogShareEvent[]
 
   @@index([vendorId, createdAt])
   @@index([expiresAt])
   @@index([ruc, suspendedAt])
+}
+
+model PriceException {
+  id             String    @id @default(uuid())
+  iso            String
+  vendorId       String
+  vendorName     String
+  clientName     String
+  clientCompany  String    @default("")
+  ruc            String    @default("")
+  reason         String
+  requestedPrice Decimal   @db.Decimal(12, 2)
+  approvedPrice  Decimal?  @db.Decimal(12, 2)
+  priceList      Decimal   @db.Decimal(12, 2)
+  priceMin       Decimal   @db.Decimal(12, 2)
+  status         String    @default("pendiente")
+  reviewNote     String    @default("")
+  reviewedById   String?
+  reviewedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([status, createdAt])
+  @@index([iso])
+  @@index([vendorId, createdAt])
 }
 
 model CatalogShareEvent {

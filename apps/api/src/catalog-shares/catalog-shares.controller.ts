@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Req } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, Req } from "@nestjs/common";
 import { Request } from "express";
 import { Public } from "../auth/public.decorator";
 import { Roles } from "../auth/roles.decorator";
@@ -18,8 +18,8 @@ export class CatalogSharesController {
 
   @Get()
   @Roles("superadmin", "admin", "vendedor")
-  list(@CurrentUser() user: AuthUser) {
-    return this.shares.list(user);
+  list(@CurrentUser() user: AuthUser, @Query("archived") archived?: string) {
+    return this.shares.list(user, archived === "1" || archived === "true");
   }
 
   @Post("ruc")
@@ -38,6 +38,18 @@ export class CatalogSharesController {
   @Roles("superadmin", "admin", "vendedor")
   suspend(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.shares.suspend(id, user, req.ip);
+  }
+
+  @Post(":id/renew")
+  @Roles("superadmin", "admin", "vendedor")
+  renew(@Param("id") id: string, @Body() body: { hours?: number }, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.shares.renew(id, body?.hours, user, req.ip);
+  }
+
+  @Post(":id/archive")
+  @Roles("superadmin", "admin", "vendedor")
+  archive(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.shares.archive(id, user, req.ip);
   }
 
   @Get("mine/:id")

@@ -44,6 +44,7 @@ import {
   assimilateCostPlan,
   classifyLotOrigin,
   dossierKindForMove,
+  catalogAfterDispatch,
   lotAvailability,
   isDryContainerProduct,
   splitOdooProductLabel,
@@ -3047,21 +3048,23 @@ export class OdooImportService {
     });
     if (!row || row.demo) return;
     const where = { iso: row.iso };
-    if (avail.availability === "left" && row.status !== "Vendido") {
+    const leave = catalogAfterDispatch(row, avail.availability, avail.pickingName);
+    if (leave) {
       await this.prisma.container.update({
         where,
         data: {
-          status: "Vendido",
-          commercialStatus: "vendido",
+          status: leave.status,
+          commercialStatus: leave.commercialStatus,
           gateOut: true,
-          mediaStatus: row.mediaStatus === "aprobado" ? "oculto" : row.mediaStatus,
+          mediaStatus: leave.mediaStatus,
+          ...(leave.clearApproval ? { mediaApprovedAt: null } : {}),
         },
       });
       await this.prisma.containerHistory.create({
         data: {
           iso: row.iso,
           type: "Salida Odoo",
-          detail: `Salida ${avail.pickingName || "OUT"} hecha${avail.destName ? ` hacia ${avail.destName}` : ""}. Ya no se publica ni queda en recepción.`,
+          detail: `${leave.detail}${avail.destName ? ` Cliente: ${avail.destName}.` : ""}`,
         },
       });
       return;

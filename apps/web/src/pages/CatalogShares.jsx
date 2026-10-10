@@ -13,7 +13,7 @@ const KIND = {
   cart: "Carrito",
   search: "Búsqueda",
 };
-const STATUS = { activo: "Activo", suspendido: "Suspendido", vencido: "Vencido" };
+const STATUS = { activo: "Activo", suspendido: "Suspendido", vencido: "Vencido", archivado: "Archivado" };
 
 function Icon({ children }) {
   return (
@@ -129,6 +129,8 @@ export default function CatalogShares() {
   const [looking, setLooking] = useState(false);
   const [sunat, setSunat] = useState(null);
   const waEdited = useRef(false);
+  const [archivedView, setArchivedView] = useState(false);
+  const [renewHours, setRenewHours] = useState(72);
   const [form, setForm] = useState({
     ruc: "",
     clientCompany: "",
@@ -148,14 +150,14 @@ export default function CatalogShares() {
     contacts: [],
   });
 
-  async function load() {
-    const list = await api("/catalog-shares");
+  async function load(archived = archivedView) {
+    const list = await api(`/catalog-shares${archived ? "?archived=1" : ""}`);
     setRows(Array.isArray(list) ? list : []);
   }
 
   useEffect(() => {
-    load().catch((e) => setError(e.message));
-  }, []);
+    load(archivedView).catch((e) => setError(e.message));
+  }, [archivedView]);
 
   useEffect(() => {
     const saved = String(user?.whatsapp || "").trim();
@@ -252,6 +254,33 @@ export default function CatalogShares() {
     }
   }
 
+  async function renew(id) {
+    setError("");
+    try {
+      const row = await api(`/catalog-shares/${id}/renew`, { method: "POST", body: { hours: renewHours } });
+      setMsg(row.status === "activo"
+        ? `Enlace de ${row.clientCompany || row.clientName} vigente hasta ${formatWhen(row.expiresAt)}.`
+        : "Enlace actualizado.");
+      await load(false);
+      setArchivedView(false);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function archive(id) {
+    if (!window.confirm("¿Archivar este enlace? Deja de funcionar y sale de la lista de trabajo.")) return;
+    setError("");
+    try {
+      await api(`/catalog-shares/${id}/archive`, { method: "POST" });
+      setMsg("Enlace archivado.");
+      if (openId === id) setDetail(null);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   async function open(id) {
     setOpenId(id);
     try {
@@ -265,7 +294,7 @@ export default function CatalogShares() {
     <>
       <h2 className="section-title">Enlaces de catálogo</h2>
       <p className="section-sub">
-        Validas el RUC en SUNAT, indicas a la persona que verá el catálogo y el WhatsApp del comercial. La vigencia va de 24 a 240 horas. Cada cliente tiene un solo enlace activo, y ese enlace solo permanece abierto en un lugar: si entra en otro, la sesión anterior se cierra.
+        Validas el RUC en SUNAT, indicas a la persona que verá el catálogo y el WhatsApp del comercial. La vigencia va de 24 a 240 horas. Un enlace vigente se puede extender; uno vencido se reactiva con las mismas horas. Archivar lo saca de la lista y lo deja inutilizable. Cada cliente tiene un solo enlace activo, y ese enlace solo permanece abierto en un lugar: si entra en otro, la sesión anterior se cierra.
       </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
@@ -321,7 +350,20 @@ export default function CatalogShares() {
 
       <div className="share-board">
         <div className="panel">
-          <h3>Enlaces</h3>
+          <div className="odoo-toolbar">
+            <h3 style={{ margin: 0 }}>Enlaces</h3>
+            <button className="btn-ghost" type="button" onClick={() => setArchivedView((v) => !v)}>
+              {archivedView ? "Ver vigentes" : "Ver archivados"}
+            </button>
+            {archivedView ? null : (
+              <label className="stock-sort" style={{ textTransform: "none", letterSpacing: 0 }}>
+                Horas al extender
+                <select value={renewHours} onChange={(e) => setRenewHours(Number(e.target.value))} aria-label="Horas para extender o reactivar">
+                  {HOURS.map((h) => <option key={h} value={h}>{h} h</option>)}
+                </select>
+              </label>
+            )}
+          </div>
           <div className="tablewrap share-scroll">
             <table className="data">
               <thead><tr><th>Cliente</th><th>Vence</th><th>Estado</th><th></th></tr></thead>
@@ -351,11 +393,19 @@ export default function CatalogShares() {
                             <Icon><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="M8 12h8" stroke="currentColor" strokeWidth="1.8" /></Icon>
                           </button>
                         ) : null}
+                        {r.status === "activo" || r.status === "vencido" ? (
+                          <button className="btn-ghost" type="button" onClick={() => renew(r.id)}>
+                            {r.status === "vencido" ? "Reactivar" : "Extender"}
+                          </button>
+                        ) : null}
+                        {r.status === "archivado" ? null : (
+                          <button className="btn-ghost" type="button" onClick={() => archive(r.id)}>Archivar</button>
+                        )}
                       </div>
                     </td>
                   </tr>
                 ))}
-                {!rows.length ? <tr><td colSpan={4}>Aún no hay enlaces. Genera el primero para un cliente.</td></tr> : null}
+                {!rows.length ? <tr><td colSpan={4}>{archivedView ? "No hay enlaces archivados." : "Aún no hay enlaces. Genera el primero para un cliente."}</td></tr> : null}
               </tbody>
             </table>
           </div>

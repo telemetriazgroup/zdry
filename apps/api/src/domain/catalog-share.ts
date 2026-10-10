@@ -139,10 +139,29 @@ export function clientFromAgent(userAgent: string): string {
   return [browser, os].filter(Boolean).join(" · ");
 }
 
-export function shareStatus(row: { suspendedAt?: Date | string | null; expiresAt: Date | string }, now = new Date()) {
+export function shareStatus(
+  row: { archivedAt?: Date | string | null; suspendedAt?: Date | string | null; expiresAt: Date | string },
+  now = new Date(),
+) {
+  if (row.archivedAt) return "archivado" as const;
   if (row.suspendedAt) return "suspendido" as const;
   if (!shareIsLive(row.expiresAt, now)) return "vencido" as const;
   return "activo" as const;
+}
+
+/** Extender suma horas a un enlace vigente. Reactivar abre de nuevo uno vencido, contando desde ahora. */
+export function planShareRenew(
+  row: { archivedAt?: Date | string | null; suspendedAt?: Date | string | null; expiresAt: Date | string },
+  hours: unknown,
+  now = new Date(),
+): { mode: "extend" | "reactivate"; hours: number; expiresAt: Date } {
+  if (row.archivedAt) throw new Error("Este enlace está archivado.");
+  if (row.suspendedAt) throw new Error("Este enlace está suspendido. Genera uno nuevo.");
+  const span = clampShareHours(hours);
+  if (shareIsLive(row.expiresAt, now)) {
+    return { mode: "extend", hours: span, expiresAt: shareExpiresAt(new Date(row.expiresAt), span) };
+  }
+  return { mode: "reactivate", hours: span, expiresAt: shareExpiresAt(now, span) };
 }
 
 const FILTER_LABEL: Record<string, string> = {

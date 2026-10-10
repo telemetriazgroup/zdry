@@ -14,6 +14,7 @@ import {
   newShareSession,
   newShareToken,
   normalizeShareDraft,
+  planShareRenew,
   normalizeShareEvent,
   readShareGrant,
   shareCodeMatches,
@@ -85,6 +86,7 @@ export class CatalogSharesService {
     hours: number;
     expiresAt: Date;
     suspendedAt: Date | null;
+    archivedAt?: Date | null;
     createdAt: Date;
     events?: Array<{ id: string; kind: string; iso: string | null; createdAt: Date; detail: Prisma.JsonValue | null; ip: string; device: string; userAgent?: string }>;
   }) {
@@ -114,6 +116,7 @@ export class CatalogSharesService {
       hours: row.hours,
       expiresAt: row.expiresAt,
       suspendedAt: row.suspendedAt,
+      archivedAt: row.archivedAt || null,
       createdAt: row.createdAt,
       live: status === "activo",
       status,
@@ -156,8 +159,9 @@ export class CatalogSharesService {
     };
   }
 
-  async list(user: AuthUser) {
-    const where = this.canSeeAll(user) ? {} : { vendorId: user.id };
+  async list(user: AuthUser, archived = false) {
+    const mine = this.canSeeAll(user) ? {} : { vendorId: user.id };
+    const where = { ...mine, archivedAt: archived ? { not: null } : null };
     const rows = await this.prisma.catalogShare.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -192,7 +196,7 @@ export class CatalogSharesService {
     }
     const now = new Date();
     const active = await this.prisma.catalogShare.findFirst({
-      where: { ruc: draft.ruc, suspendedAt: null, expiresAt: { gt: now } },
+      where: { ruc: draft.ruc, suspendedAt: null, archivedAt: null, expiresAt: { gt: now } },
     });
     if (active) {
       throw new BadRequestException("Este cliente ya tiene un enlace activo. Suspéndelo para crear otro.");
@@ -239,6 +243,7 @@ export class CatalogSharesService {
   async publicByToken(token: string) {
     const row = await this.prisma.catalogShare.findUnique({ where: { token: String(token || "").trim() } });
     if (!row) throw new NotFoundException("Ese enlace no existe.");
+    if (row.archivedAt) throw new BadRequestException("Este enlace fue archivado. Pide uno nuevo a tu comercial.");
     if (row.suspendedAt) {
       throw new BadRequestException("Este enlace fue suspendido. Pide uno nuevo a tu comercial.");
     }
@@ -259,6 +264,7 @@ export class CatalogSharesService {
   async unlock(token: string, code: unknown, res: Response) {
     const row = await this.prisma.catalogShare.findUnique({ where: { token: String(token || "").trim() } });
     if (!row) throw new NotFoundException("Ese enlace no existe.");
+    if (row.archivedAt) throw new BadRequestException("Este enlace fue archivado. Pide uno nuevo a tu comercial.");
     if (row.suspendedAt) throw new BadRequestException("Este enlace fue suspendido. Pide uno nuevo a tu comercial.");
     if (!shareIsLive(row.expiresAt)) throw new BadRequestException("Este enlace del catálogo ya venció. Pide uno nuevo a tu comercial.");
     const fail = this.pinFails.get(row.token);
@@ -288,7 +294,7 @@ export class CatalogSharesService {
     const grant = readShareGrant(raw);
     if (!grant) return "deny";
     const row = await this.prisma.catalogShare.findUnique({ where: { token: grant.token } });
-    if (!row || row.suspendedAt || !shareIsLive(row.expiresAt)) return "deny";
+    if (!row || row.archivedAt || row.suspendedAt || !shareIsLive(row.expiresAt)) return "deny";
     return grantMatchesSession(raw, row.activeSession);
   }
 
@@ -298,7 +304,7 @@ export class CatalogSharesService {
 
   async recordEvent(token: string, body: Record<string, unknown>, meta?: { ip?: string; userAgent?: string; cookie?: string }) {
     const row = await this.prisma.catalogShare.findUnique({ where: { token: String(token || "").trim() } });
-    if (!row || row.suspendedAt || !shareIsLive(row.expiresAt)) return { ok: false };
+    if (!row || row.archivedAt || row.suspendedAt || !shareIsLive(row.expiresAt)) return { ok: false };
     const gate = grantMatchesSession(meta?.cookie, row.activeSession);
     const ev = normalizeShareEvent(body);
     if (gate === "moved") return { ok: false, displaced: true };
@@ -340,7 +346,7 @@ export class CatalogSharesService {
     });
     const now = new Date();
     const active = await this.prisma.catalogShare.findFirst({
-      where: { ruc, suspendedAt: null, expiresAt: { gt: now } },
+      where: { ruc, suspendedAt: null, archivedAt: null, expiresAt: { gt: now } },
       select: { id: true, clientName: true, expiresAt: true, vendorName: true },
     });
     const person = contacts[0];
@@ -405,6 +411,69 @@ export class CatalogSharesService {
     await this.audit.log({
       user,
       action: "suspend",
+      entity: "CatalogShare",
+      entityId: id,
+      after: { ruc: row.ruc, clientCompany: row.clientCompany },
+      ip,
+    });
+    return this.present({ ...updated, events: [] });
+  }
+
+  async renew(id: string, hours: unknown, user: AuthUser, ip?: string) {
+    const row = await this.prisma.catalogShare.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException("Enlace no encontrado.");
+    if (!this.canSeeAll(user) && row.vendorId !== user.id) throw new ForbiddenException("Ese enlace no es tuyo.");
+    let plan;
+    try {
+      plan = planShareRenew(row, hours);
+    } catch (e) {
+      throw new BadRequestException((e as Error).message);
+    }
+    if (plan.mode === "reactivate") {
+      const other = await this.prisma.catalogShare.findFirst({
+        where: {
+          id: { not: row.id },
+          ruc: row.ruc,
+          suspendedAt: null,
+          archivedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+      });
+      if (row.ruc && other) {
+        throw new BadRequestException("Este cliente ya tiene un enlace activo. Suspéndelo o archívalo antes de reactivar este.");
+      }
+    }
+    const updated = await this.prisma.catalogShare.update({
+      where: { id },
+      data: {
+        hours: plan.hours,
+        expiresAt: plan.expiresAt,
+        ...(plan.mode === "reactivate" ? { activeSession: "" } : {}),
+      },
+    });
+    await this.audit.log({
+      user,
+      action: plan.mode,
+      entity: "CatalogShare",
+      entityId: id,
+      after: { expiresAt: plan.expiresAt, hours: plan.hours },
+      ip,
+    });
+    return this.present({ ...updated, events: [] });
+  }
+
+  async archive(id: string, user: AuthUser, ip?: string) {
+    const row = await this.prisma.catalogShare.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException("Enlace no encontrado.");
+    if (!this.canSeeAll(user) && row.vendorId !== user.id) throw new ForbiddenException("Ese enlace no es tuyo.");
+    if (row.archivedAt) return this.present({ ...row, events: [] });
+    const updated = await this.prisma.catalogShare.update({
+      where: { id },
+      data: { archivedAt: new Date(), activeSession: "" },
+    });
+    await this.audit.log({
+      user,
+      action: "archive",
       entity: "CatalogShare",
       entityId: id,
       after: { ruc: row.ruc, clientCompany: row.clientCompany },

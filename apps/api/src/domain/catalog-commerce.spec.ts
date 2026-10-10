@@ -1,5 +1,5 @@
 import { normalizeCatalogCommerce } from "./catalog-commerce";
-import { clampShareHours, deviceFromAgent, grantMatchesSession, newShareAccessCode, normalizeShareDraft, readShareGrant, shareCodeMatches, shareExpiresAt, shareIsLive, signShareGrant, summarizeShareEvents } from "./catalog-share";
+import { clampShareHours, deviceFromAgent, grantMatchesSession, newShareAccessCode, normalizeShareDraft, planShareRenew, readShareGrant, shareCodeMatches, shareExpiresAt, shareIsLive, shareStatus, signShareGrant, summarizeShareEvents } from "./catalog-share";
 
 describe("catalog commerce mode", () => {
   it("por defecto es modo WhatsApp: sin cotización ni altas públicas", () => {
@@ -91,5 +91,17 @@ describe("catalog share", () => {
     const exp = shareExpiresAt(start, 48);
     expect(shareIsLive(exp, new Date("2026-09-24T14:59:00.000Z"))).toBe(true);
     expect(shareIsLive(exp, new Date("2026-09-24T15:01:00.000Z"))).toBe(false);
+  });
+
+  it("extiende un enlace vigente y reactiva uno vencido desde ahora", () => {
+    const now = new Date("2026-10-10T12:00:00.000Z");
+    const live = planShareRenew({ expiresAt: new Date("2026-10-11T12:00:00.000Z") }, 24, now);
+    expect(live.mode).toBe("extend");
+    expect(live.expiresAt.toISOString()).toBe("2026-10-12T12:00:00.000Z");
+    const dead = planShareRenew({ expiresAt: new Date("2026-10-01T12:00:00.000Z") }, 48, now);
+    expect(dead.mode).toBe("reactivate");
+    expect(dead.expiresAt.toISOString()).toBe("2026-10-12T12:00:00.000Z");
+    expect(shareStatus({ archivedAt: now, expiresAt: now })).toBe("archivado");
+    expect(() => planShareRenew({ archivedAt: now, expiresAt: now }, 24, now)).toThrow(/archivado/);
   });
 });

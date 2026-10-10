@@ -15,6 +15,9 @@ export default function Inventory() {
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [exceptions, setExceptions] = useState([]);
+  const [reviewPrice, setReviewPrice] = useState({});
+  const [reviewNote, setReviewNote] = useState({});
   const [filterType, setFilterType] = useState("");
   const [filterCat, setFilterCat] = useState("");
   const [filterDepot, setFilterDepot] = useState("");
@@ -32,6 +35,32 @@ export default function Inventory() {
   function load() {
     const q = asCommercial ? "?view=comercial" : "";
     api(`/inventory${q}`).then(setRows).catch((e) => setError(e.message));
+    if (isVendor || hasRole(user, "admin")) {
+      api("/price-exceptions").then((list) => setExceptions(Array.isArray(list) ? list : [])).catch(() => setExceptions([]));
+    }
+  }
+
+  async function requestException(body) {
+    setError("");
+    try {
+      const row = await api("/price-exceptions", { method: "POST", body });
+      setMsg(`Solicitud enviada: ${row.iso} a $${row.requestedPrice} para ${row.clientName}. Un admin la evalúa.`);
+      load();
+    } catch (e) {
+      setError(e.message);
+      throw e;
+    }
+  }
+
+  async function reviewException(id, approve) {
+    setError("");
+    const note = reviewNote[id] || "";
+    const path = approve ? "approve" : "reject";
+    const body = approve ? { approvedPrice: reviewPrice[id] === "" || reviewPrice[id] == null ? undefined : Number(reviewPrice[id]), note } : { note };
+    await api(`/price-exceptions/${id}/${path}`, { method: "POST", body }).then((row) => {
+      setMsg(approve ? `Excepción aprobada: ${row.iso} a ${row.approvedPrice}.` : `Solicitud rechazada: ${row.iso}.`);
+      load();
+    }).catch((e) => setError(e.message));
   }
 
   useEffect(() => {
@@ -109,12 +138,43 @@ export default function Inventory() {
       <CommercialStock
         rows={rows}
         preview={asCommercial}
+        canRequest={isVendor}
+        exceptions={isVendor ? exceptions : []}
+        onRequest={requestException}
         onExit={() => {
           const next = new URLSearchParams(params);
           next.delete("vista");
           setParams(next, { replace: true });
         }}
       />
+    ) : null}
+    {hasRole(user, "admin") && !asCommercial && !isVendor ? (
+      <div className="panel" style={{ marginBottom: 14 }}>
+        <h3>Solicitudes de precio bajo el mínimo</h3>
+        <p className="section-sub">Si apruebas, queda un evento excepcional: ese cliente puede comprar esa unidad por debajo del mínimo. El rango de la regla no cambia.</p>
+        {exceptions.filter((x) => x.status === "pendiente").length ? (
+          <table className="data">
+            <thead><tr><th>Unidad</th><th>Comercial</th><th>Cliente</th><th>Mínimo</th><th>Pide</th><th>Aprobar en</th><th>Nota</th><th></th></tr></thead>
+            <tbody>
+              {exceptions.filter((x) => x.status === "pendiente").map((x) => (
+                <tr key={x.id}>
+                  <td>{x.iso}</td>
+                  <td>{x.vendorName}</td>
+                  <td>{x.clientName}{x.clientCompany ? ` · ${x.clientCompany}` : ""}<div className="muted">{x.reason}</div></td>
+                  <td>{x.priceMin}</td>
+                  <td>{x.requestedPrice}</td>
+                  <td><input type="number" aria-label={`Precio aprobado para ${x.iso}`} value={reviewPrice[x.id] ?? x.requestedPrice} onChange={(e) => setReviewPrice({ ...reviewPrice, [x.id]: e.target.value })} /></td>
+                  <td><input aria-label={`Nota para ${x.iso}`} value={reviewNote[x.id] || ""} onChange={(e) => setReviewNote({ ...reviewNote, [x.id]: e.target.value })} placeholder="Para rechazar, obligatoria" /></td>
+                  <td>
+                    <button className="btn-primary" type="button" onClick={() => reviewException(x.id, true)}>Aprobar</button>
+                    <button className="btn-ghost" type="button" style={{ marginLeft: 6 }} onClick={() => reviewException(x.id, false)}>Rechazar</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : <p className="section-sub">No hay solicitudes pendientes.</p>}
+      </div>
     ) : null}
     {canRecalc && !asCommercial ? (
       <div className="action-row" style={{ marginBottom: 12 }}>

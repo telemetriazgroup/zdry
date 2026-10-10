@@ -197,6 +197,35 @@ export function lotAvailability(moves: LotMoveFact[] | null | undefined): {
   return { availability: "stock", pickingName: null, destName: null };
 }
 
+/** Si Odoo ya despachó el equipo y sigue publicado, hay que quitarlo del catálogo. */
+export function catalogAfterDispatch(
+  row: { status: string; mediaStatus: string; gateOut?: boolean | null },
+  availability: LotAvailability,
+  pickingName?: string | null,
+): {
+  status: "Vendido";
+  commercialStatus: "vendido";
+  gateOut: true;
+  mediaStatus: string;
+  clearApproval: boolean;
+  detail: string;
+} | null {
+  if (availability !== "left") return null;
+  const published = row.mediaStatus === "aprobado";
+  if (row.status === "Vendido" && row.gateOut && !published) return null;
+  const picking = pickingName || "OUT";
+  return {
+    status: "Vendido",
+    commercialStatus: "vendido",
+    gateOut: true,
+    mediaStatus: published ? "oculto" : row.mediaStatus,
+    clearApproval: published,
+    detail: published
+      ? `Despachada en Odoo (${picking}). Se quitó del catálogo y queda en no publicar: ya no está disponible.`
+      : `Salida ${picking} hecha. Ya no se publica ni queda en recepción.`,
+  };
+}
+
 export function inferKindFallback(kind: string | null | undefined, poName?: string | null): OdooIntakeKind {
   if (kind === "adjustment" || kind === "purchase" || kind === "fabrication" || kind === "unknown") return kind;
   return poName ? "purchase" : "unknown";

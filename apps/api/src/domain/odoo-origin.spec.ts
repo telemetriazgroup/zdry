@@ -3,6 +3,7 @@ import {
   classifyLotOrigin,
   dossierKindForMove,
   isDryContainerProduct,
+  catalogAfterDispatch,
   lotAvailability,
   moNameFromText,
   originBadgeLabel,
@@ -309,6 +310,18 @@ describe("lotAvailability", () => {
       date: "2026-09-25 09:00:00",
     };
     expect(lotAvailability([...msku, back]).availability).toBe("stock");
+  });
+
+  it("si ya está en el catálogo, el despacho la deja en no publicar", () => {
+    const patch = catalogAfterDispatch(
+      { status: "Disponible", mediaStatus: "aprobado", gateOut: false },
+      "left",
+      "ZGROU/OUT/08515",
+    );
+    expect(patch).toMatchObject({ status: "Vendido", mediaStatus: "oculto", clearApproval: true, gateOut: true });
+    expect(patch?.detail).toMatch(/no publicar/);
+    expect(catalogAfterDispatch({ status: "Vendido", mediaStatus: "oculto", gateOut: true }, "left", "OUT")).toBeNull();
+    expect(catalogAfterDispatch({ status: "Vendido", mediaStatus: "aprobado", gateOut: true }, "left", "OUT")?.mediaStatus).toBe("oculto");
   });
 });
 
