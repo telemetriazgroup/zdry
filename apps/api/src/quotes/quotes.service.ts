@@ -492,6 +492,9 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
   async createHandoff(iso: string, body: { shareId?: string; includePrice?: boolean }, user: AuthUser) {
     const share = await this.prisma.catalogShare.findUnique({ where: { id: String(body.shareId || "") } });
     if (!share || share.archivedAt) throw new NotFoundException("Enlace no encontrado.");
+    if (share.suspendedAt || share.expiresAt.getTime() <= Date.now()) {
+      throw new BadRequestException("Solo puedes enviar a un enlace activo.");
+    }
     const seesAll = user.role === "superadmin" || user.role === "admin" || user.role === "gerente";
     if (!seesAll && share.vendorId !== user.id) throw new ForbiddenException("Ese enlace no es tuyo.");
     const unit = await this.catalogCommercialUnit(iso);

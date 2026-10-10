@@ -72,12 +72,7 @@ export const ROLE_NAV = {
   vendedor: [
     { to: "/app", label: "Inicio", end: true },
     { to: "/app/inventario", label: "Inventario" },
-    { to: "/app/bandeja", label: "Bandeja" },
-    { to: "/app/negociacion", label: "Negociación" },
-    { to: "/app/pagos", label: "Pagos por validar" },
-    { to: "/app/seguimiento", label: "Seguimiento" },
     { to: "/app/enlaces-catalogo", label: "Enlaces catálogo" },
-    { to: "/app/alquileres", label: "Alquileres" },
   ],
   compras: [
     { to: "/app", label: "Inicio", end: true },
