@@ -165,6 +165,12 @@ export class OdooImportController {
     return this.svc.sync(user, req.ip);
   }
 
+  @Post("sync-warehouses")
+  @Roles("superadmin", "admin", "gerente")
+  syncWarehouses(@Body() body: { isos?: string[] }) {
+    return this.svc.syncWarehouseMoves(body.isos || []);
+  }
+
   @Post("assimilate")
   assimilate(@Body() body: { ids?: string[] }, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.svc.assimilate(body.ids || [], user, req.ip);

@@ -36,6 +36,7 @@ import {
 } from "../domain/odoo-lot-map";
 import { planOdooRelink } from "../domain/odoo-reconcile";
 import { freshOdooLotIds, normalizeOdooWatch, ODOO_WATCH_KEY, type OdooWatchMode } from "../domain/odoo-import-watch";
+import { explicitEquipmentType, type TypeMaster } from "../domain/type-from-product";
 import { warehouseFromLocation } from "../domain/odoo-warehouse";
 import { listOdooLotNotes } from "../odoo/odoo-lot-photos";
 import { cacheOdooLotPhotos, listOrCacheOdooPhotos, openOrCacheOdooPhoto } from "./odoo-photo-cache.store";
@@ -51,7 +52,8 @@ import {
   type LotMoveFact,
 } from "../domain/odoo-origin";
 import { presentDryReferential, referentialHitFor } from "./dry-referential.store";
-import { depotForOdooLocation } from "./depot-map.store";
+import { refreshRulePrices } from "./acquisition-overlay.store";
+import { applyWarehouseMove, depotForOdooLocation } from "./depot-map.store";
 import { ExpedienteStore } from "../odoo-events/expediente.store";
 import { AssimilateLogStore } from "./assimilate-log.store";
 import { errorDetail } from "../domain/odoo-assimilate-log";
@@ -423,6 +425,7 @@ export class OdooImportService {
     if (this.isAborted(runId)) return;
 
     const lotIds = [...new Set(quants.map((q) => this.relId(q.lot_id)).filter((n): n is number => n > 0))];
+    const typeMasters = await this.loadTypeMasters();
     const lotMeta = await this.lotMeta();
     const lots = lotIds.length ? await this.hydrateLots(lotIds, lotMeta) : [];
     const lotMap = new Map(lots.map((l) => [Number(l.id), l]));
@@ -501,14 +504,20 @@ export class OdooImportService {
           },
         });
         if (existing.status === "assimilated" && existing.containerIso && !existing.localTouched) {
-          await this.fillEmptyFromOdoo(existing.containerIso, { ...row, locationName, material: attrs.material, zgroupCode: attrs.zgroupCode });
+          await this.fillEmptyFromOdoo(existing.containerIso, {
+            ...row,
+            locationName,
+            material: attrs.material,
+            zgroupCode: attrs.zgroupCode,
+            syncWarehouse: true,
+          });
         }
       } else {
         await this.prisma.odooLotCandidate.upsert({
           where: { odooLotId: lotId },
           create: {
             ...row,
-            zdryType: inferTypeFromProduct(productName, productCode, "40HC"),
+            zdryType: this.matchedTypeCode(productName, productCode, typeMasters),
             zdryCat: inferCatFromProduct(productName, "ASIS"),
           },
           update: data,
@@ -675,6 +684,7 @@ export class OdooImportService {
       }
 
       const lotMeta = await this.lotMeta();
+      const typeMasters = await this.loadTypeMasters();
       const lots = await this.hydrateLots(fresh, lotMeta);
       const lotMap = new Map(lots.map((l) => [Number(l.id), l]));
       const now = new Date();
@@ -722,7 +732,7 @@ export class OdooImportService {
               payload: { lot, quantLocation: q?.location_id, attrs, fieldMap: lotMeta.map, productName, productCode } as Prisma.InputJsonValue,
               lastSyncedAt: now,
               status: qty === 1 ? "pending" : "qty_anomaly",
-              zdryType: inferTypeFromProduct(productName, productCode, "40HC"),
+              zdryType: this.matchedTypeCode(productName, productCode, typeMasters),
               zdryCat: inferCatFromProduct(productName, "ASIS"),
             },
           });
@@ -839,6 +849,58 @@ export class OdooImportService {
       create: { key: ODOO_WATCH_KEY, value: next },
     });
     return next;
+  }
+
+  async syncWarehouseMoves(isos: string[]) {
+    const unique = [...new Set((isos || []).map((iso) => String(iso || "").trim()).filter(Boolean))].slice(0, 300);
+    if (!unique.length) return { checked: 0, moved: [] as { iso: string; from: string; to: string; location: string }[], recalculated: 0 };
+    const rows = await this.prisma.container.findMany({
+      where: { iso: { in: unique }, odooLotId: { not: null }, archivedAt: null, demo: false },
+      select: { iso: true, odooLotId: true, odooWarehouse: true, odooLocation: true },
+    });
+    const lotIds = rows.map((row) => row.odooLotId).filter((id): id is number => !!id && id > 0);
+    if (!lotIds.length) return { checked: 0, moved: [], recalculated: 0 };
+    let quants: Record<string, unknown>[] = [];
+    try {
+      quants = await this.odoo.searchRead(
+        "stock.quant",
+        [["lot_id", "in", lotIds], ["quantity", ">", 0], ["location_id.usage", "=", "internal"]],
+        ["lot_id", "location_id", "quantity"],
+        { limit: 2000 },
+      );
+    } catch (e) {
+      throw new BadRequestException(`No se pudo leer la ubicación en Odoo: ${(e as Error).message}`);
+    }
+    const locIds = [...new Set(quants.map((q) => this.relId(q.location_id)).filter((id): id is number => id > 0))];
+    const locations = locIds.length
+      ? await this.odoo.searchRead("stock.location", [["id", "in", locIds]], ["id", "complete_name", "name"], { limit: locIds.length })
+      : [];
+    const locName = new Map(locations.map((loc) => [Number(loc.id), String(loc.complete_name || loc.name || "")]));
+    const best = new Map<number, { qty: number; name: string }>();
+    for (const quant of quants) {
+      const lotId = this.relId(quant.lot_id);
+      if (!lotId) continue;
+      const name = locName.get(this.relId(quant.location_id)) || this.relName(quant.location_id);
+      const qty = Number(quant.quantity) || 0;
+      const current = best.get(lotId);
+      if (name && (!current || qty > current.qty)) best.set(lotId, { qty, name });
+    }
+    const moved: { iso: string; from: string; to: string; location: string }[] = [];
+    for (const row of rows) {
+      const hit = row.odooLotId ? best.get(row.odooLotId) : undefined;
+      if (!hit?.name) continue;
+      const result = await applyWarehouseMove(this.prisma, row.iso, hit.name);
+      const warehouse = result.warehouse || warehouseFromLocation(hit.name);
+      if (hit.name !== (row.odooLocation || "") || warehouse !== String(row.odooWarehouse || "").toUpperCase()) {
+        await this.prisma.odooLotCandidate.updateMany({
+          where: { odooLotId: row.odooLotId! },
+          data: { locationName: hit.name, odooWarehouse: warehouse },
+        });
+      }
+      if (result.warehouseChanged) moved.push({ iso: row.iso, from: result.from, to: result.to, location: hit.name });
+    }
+    const prices = moved.length ? await refreshRulePrices(this.prisma, { isos: moved.map((row) => row.iso) }) : { updated: 0 };
+    return { checked: rows.length, moved, recalculated: prices.updated };
   }
 
   async assimilate(ids: string[], user: AuthUser, ip?: string) {
@@ -1224,6 +1286,8 @@ export class OdooImportService {
     });
 
     const existing = await this.prisma.container.findUnique({ where: { iso } });
+    const liveLocation = await this.currentInternalLocation(cand.odooLotId).catch(() => null);
+    const locationName = liveLocation || cand.locationName;
     if (existing) {
       await this.prisma.odooLotCandidate.update({
         where: { id: cand.id },
@@ -1236,19 +1300,24 @@ export class OdooImportService {
           odooPickingName: cand.odooPickingName,
         },
       });
-      await this.fillEmptyFromOdoo(iso, { ...cand, ...plan });
+      if (liveLocation) {
+        const moved = await applyWarehouseMove(this.prisma, existing.iso, liveLocation);
+        if (moved.warehouseChanged) await refreshRulePrices(this.prisma, { isos: [existing.iso] });
+        await this.prisma.odooLotCandidate.update({
+          where: { id: cand.id },
+          data: { locationName: liveLocation, odooWarehouse: moved.warehouse || warehouseFromLocation(liveLocation) },
+        });
+      }
+      await this.fillEmptyFromOdoo(iso, { ...cand, ...plan, locationName });
       await this.pullOdooNotes({ ...cand, containerIso: existing.iso }).catch(() => undefined);
       await this.pullOdooPhotos({ id: cand.id, odooLotId: cand.odooLotId, containerIso: existing.iso }, opts.onPhotoProgress).catch(() => undefined);
       return { iso, created: false, isoReview: !isoInfo.iso6346Ok || existing.isoException };
     }
 
-    const { depot, warehouse } = await depotForOdooLocation(this.prisma, cand.locationName);
-    const types = await this.prisma.containerType.findMany({ where: { archivedAt: null } });
+    const { depot, warehouse } = await depotForOdooLocation(this.prisma, locationName);
+    const types = await this.loadTypeMasters();
     const cats = await this.prisma.category.findMany({ where: { archivedAt: null } });
-    const typeCode = this.pickCode(
-      types.map((t) => t.code),
-      cand.zdryType || inferTypeFromProduct(cand.productName, cand.productCode, types[0]?.code || "40HC"),
-    );
+    const typeCode = this.resolveAssimilateType(cand, types);
     const catCode = this.pickCode(
       cats.map((c) => c.code),
       cand.zdryCat || inferCatFromProduct(cand.productName, cats.find((c) => c.code === "ASIS")?.code || cats[0]?.code || "ASIS"),
@@ -1279,8 +1348,8 @@ export class OdooImportService {
           isoExceptionReason: isoInfo.isoException ? "Serial Odoo no cumple ISO 6346 — revisar en campo" : null,
           intakeOrigin: "odoo",
           odooLotId: cand.odooLotId,
-          odooLocation: cand.locationName,
-          odooWarehouse: warehouse || warehouseFromLocation(cand.locationName) || null,
+          odooLocation: locationName,
+          odooWarehouse: warehouse || warehouseFromLocation(locationName) || null,
           odooDua: cand.dua,
           odooPoName: plan.odooIntakeKind === "purchase" ? cand.odooPoName : null,
           odooPoId: plan.odooIntakeKind === "purchase" ? cand.odooPoId : null,
@@ -1313,7 +1382,7 @@ export class OdooImportService {
             plan.odooIntakeKind === "fabrication" && cand.odooSourceProductCode
               ? `. Antes [${cand.odooSourceProductCode}]${cand.odooSourceIntakeKind ? ` por ${cand.odooSourceIntakeKind}` : ""}${cand.odooSourcePoName ? ` ${cand.odooSourcePoName}` : ""}`
               : ""
-          }. Costo ${plan.costSource}${plan.fobCif ? ` USD ${plan.fobCif}` : ""}. Almacén: ${cand.locationName || "—"}. ${isoInfo.isoException ? "ISO 6346 pendiente de revisión." : "ISO 6346 válido."} Regularizar fotos y datos en Recepción.`,
+          }. Costo ${plan.costSource}${plan.fobCif ? ` USD ${plan.fobCif}` : ""}. Tipo ${typeCode}. Almacén: ${locationName || "—"}. ${isoInfo.isoException ? "ISO 6346 pendiente de revisión." : "ISO 6346 válido."} Regularizar fotos y datos en Recepción.`,
         },
       });
       await tx.odooLotCandidate.update({
@@ -1322,6 +1391,9 @@ export class OdooImportService {
           status: "assimilated",
           containerIso: iso,
           assimilatedAt: new Date(),
+          zdryType: typeCode,
+          locationName: locationName || cand.locationName,
+          odooWarehouse: warehouse || warehouseFromLocation(locationName) || null,
           odooIntakeKind: plan.odooIntakeKind,
           costSource: plan.costSource,
           odooPickingName: cand.odooPickingName,
@@ -1412,6 +1484,8 @@ export class OdooImportService {
         sync: fieldStatus[key],
       })),
       types: types.map((t) => ({ code: t.code, label: t.label })),
+      typeDecision: explicitEquipmentType(row.productName || "", row.productCode || "", types),
+      zdryTypeConfirmed: payloadExtras(row.payload).zdryTypeConfirmed === "1",
       categories: cats.map((c) => ({ code: c.code, label: c.label, color: c.color })),
       fieldMap: (row.payload && typeof row.payload === "object" && !Array.isArray(row.payload)
         ? (row.payload as { fieldMap?: unknown }).fieldMap
@@ -1461,6 +1535,12 @@ export class OdooImportService {
     }
     if (Object.keys(extraPatch).length) {
       data.payload = withPayloadExtras(row.payload, extraPatch) as Prisma.InputJsonValue;
+    }
+    if (body.zdryTypeConfirmed === true) {
+      const base = data.payload ?? row.payload;
+      data.payload = withPayloadExtras(base, {
+        zdryTypeConfirmed: this.str(body.zdryType) ? "1" : null,
+      }) as Prisma.InputJsonValue;
     }
 
     if (changedOwned.length) {
@@ -3891,6 +3971,48 @@ export class OdooImportService {
     };
   }
 
+  private async loadTypeMasters(): Promise<TypeMaster[]> {
+    return this.prisma.containerType.findMany({
+      where: { archivedAt: null },
+      select: { code: true, label: true, dims: true, archivedAt: true },
+    });
+  }
+
+  private matchedTypeCode(name: string, code: string, masters: TypeMaster[]) {
+    const decision = explicitEquipmentType(name, code, masters);
+    return decision.status === "matched" ? decision.code : null;
+  }
+
+  private resolveAssimilateType(
+    cand: { productName?: string | null; productCode?: string | null; zdryType?: string | null; payload?: unknown },
+    masters: TypeMaster[],
+  ) {
+    const confirmed = payloadExtras(cand.payload).zdryTypeConfirmed === "1";
+    const chosen = String(cand.zdryType || "").trim();
+    const master = masters.find((row) => !row.archivedAt && row.code.toUpperCase() === chosen.toUpperCase());
+    if (confirmed && master) return master.code;
+    const decision = explicitEquipmentType(cand.productName || "", cand.productCode || "", masters);
+    if (decision.status === "matched") return decision.code;
+    throw new BadRequestException(decision.reason);
+  }
+
+  private async currentInternalLocation(lotId: number): Promise<string | null> {
+    if (!lotId) return null;
+    const quants = await this.odoo.searchRead(
+      "stock.quant",
+      [["lot_id", "=", lotId], ["quantity", ">", 0], ["location_id.usage", "=", "internal"]],
+      ["location_id", "quantity"],
+      { limit: 20 },
+    );
+    if (!quants.length) return null;
+    const best = quants.reduce((left, right) => ((Number(right.quantity) || 0) > (Number(left.quantity) || 0) ? right : left));
+    const locId = this.relId(best.location_id);
+    if (!locId) return this.relName(best.location_id) || null;
+    const locs = await this.odoo.searchRead("stock.location", [["id", "=", locId]], ["complete_name", "name"], { limit: 1 });
+    const name = String(locs[0]?.complete_name || locs[0]?.name || this.relName(best.location_id) || "");
+    return name || null;
+  }
+
   private async fillEmptyFromOdoo(
     iso: string,
     cand: {
@@ -3924,6 +4046,7 @@ export class OdooImportService {
       fobCif?: number | null;
       intakeType?: string | null;
       invoicePending?: boolean;
+      syncWarehouse?: boolean;
     },
   ) {
     const c = await this.prisma.container.findUnique({ where: { iso } });
@@ -3972,9 +4095,14 @@ export class OdooImportService {
       data.intakeType = cand.intakeType;
       if (cand.invoicePending !== undefined) data.invoicePending = cand.invoicePending;
     }
-    if (!c.odooLocation && cand.locationName) data.odooLocation = cand.locationName;
-    if (!c.odooWarehouse && (cand.odooWarehouse || cand.locationName)) {
-      data.odooWarehouse = cand.odooWarehouse || warehouseFromLocation(cand.locationName);
+    if (cand.syncWarehouse && cand.locationName) {
+      const moved = await applyWarehouseMove(this.prisma, iso, cand.locationName);
+      if (moved.warehouseChanged) await refreshRulePrices(this.prisma, { isos: [iso] });
+    } else {
+      if (!c.odooLocation && cand.locationName) data.odooLocation = cand.locationName;
+      if (!c.odooWarehouse && (cand.odooWarehouse || cand.locationName)) {
+        data.odooWarehouse = cand.odooWarehouse || warehouseFromLocation(cand.locationName);
+      }
     }
     if (!c.odooDua && cand.dua) data.odooDua = cand.dua;
     if (!c.originCountry && cand.originCountry) data.originCountry = cand.originCountry;

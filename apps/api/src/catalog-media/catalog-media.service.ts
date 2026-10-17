@@ -241,6 +241,7 @@ export class CatalogMediaService {
       candidateId: cand?.id || null,
       intakeOrigin: c.intakeOrigin,
       odooWarehouse: (await this.odooLinks.viewerLocked()) ? null : c.odooWarehouse,
+      odooLocation: (await this.odooLinks.viewerLocked()) ? null : c.odooLocation,
       odooVendorName: (await this.odooLinks.viewerLocked()) ? null : c.odooVendorName,
       odooLocked: await this.odooLinks.viewerLocked(),
       awaitingReconcile: isPendingValuation(c),

@@ -216,6 +216,36 @@ export function auditEquipment(row: TypeAuditInput, masters: TypeMaster[]): Type
   };
 }
 
+export type EquipmentTypeDecision =
+  | { status: "matched"; code: string; reason: string }
+  | { status: "needs_exact"; reason: string };
+
+/** Concordancia explícita: el texto de Odoo nombra un código (40DC, 20DC, 40HC) que existe en los maestros. */
+export function explicitEquipmentType(name: string, code: string, masters: TypeMaster[]): EquipmentTypeDecision {
+  const shape = parseProductEquipment(name, code);
+  const live = activeMasters(masters);
+  const master = shape.namedCode
+    ? live.find((row) => row.code.toUpperCase() === shape.namedCode?.toUpperCase())
+    : undefined;
+  if (master) {
+    return {
+      status: "matched",
+      code: master.code,
+      reason: `Odoo nombra ${master.code} y ese tipo está en los maestros.`,
+    };
+  }
+  if (shape.namedCode) {
+    return {
+      status: "needs_exact",
+      reason: `Odoo nombra ${shape.namedCode} y ese tipo no está en los maestros. El encargado de despacho debe indicar el tipo exacto antes de asimilar.`,
+    };
+  }
+  return {
+    status: "needs_exact",
+    reason: "El producto de Odoo no nombra un tipo exacto (40DC, 20DC, 40HC…). El encargado de despacho debe indicarlo antes de asimilar.",
+  };
+}
+
 export function canonicalTypeFromProduct(name: string, code: string, fallback = "40HC") {
   const shape = parseProductEquipment(name, code);
   if (!shape.feet || !shape.family || shape.family === "ht") return fallback;

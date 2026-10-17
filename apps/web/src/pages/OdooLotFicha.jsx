@@ -39,7 +39,7 @@ function fichaForm(d) {
     originCountry: d.originCountry || "",
     material: d.material || "",
     description: d.description || d.odooDescription || "",
-    zdryType: d.zdryType || "",
+    zdryType: d.zdryTypeConfirmed ? (d.zdryType || "") : (d.typeDecision?.status === "matched" ? d.typeDecision.code : ""),
     zdryCat: d.zdryCat || "",
     zdryNotes: d.zdryNotes || "",
   };
@@ -683,6 +683,11 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
                 <option value="">—</option>
                 {(row.types || []).map((t) => <option key={t.code} value={t.code}>{t.label}</option>)}
               </select>
+              {row.typeDecision?.status === "matched" ? (
+                <small>Odoo nombra {row.typeDecision.code}. Se usa ese tipo al asimilar, salvo que el despacho elija otro y lo guarde.</small>
+              ) : (
+                <small>{row.typeDecision?.reason || "El encargado de despacho debe indicar el tipo exacto."}</small>
+              )}
             </label>
             <label>
               <span>Condición comercial</span>
@@ -705,8 +710,33 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
               <button
                 className="btn-ghost"
                 type="button"
-                disabled={saving || !!busy}
-                onClick={() => onAssimilated(row.id)}
+                disabled={saving || !!busy || (row.typeDecision?.status === "needs_exact" && !form.zdryType)}
+                onClick={async () => {
+                  const needsChoice = row.typeDecision?.status === "needs_exact";
+                  const changed = (form.zdryType || "") !== (row.zdryType || "");
+                  if (needsChoice && !form.zdryType) {
+                    setError(row.typeDecision?.reason || "Indica el tipo exacto.");
+                    return;
+                  }
+                  if (needsChoice || (changed && form.zdryType)) {
+                    setSaving(true);
+                    setError("");
+                    try {
+                      const d = await api(`/odoo-import/candidates/${id}`, {
+                        method: "PATCH",
+                        body: { zdryType: form.zdryType, zdryTypeConfirmed: true },
+                      });
+                      setRow(d);
+                      setForm(fichaForm(d));
+                    } catch (e) {
+                      setError(e.message);
+                      setSaving(false);
+                      return;
+                    }
+                    setSaving(false);
+                  }
+                  onAssimilated(row.id);
+                }}
               >
                 Asimilar a Recepción
               </button>

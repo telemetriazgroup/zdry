@@ -1,7 +1,9 @@
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   defaultPatioCode,
   OPERATIONAL_PATIOS,
+  planWarehouseMove,
   warehouseFromLocation,
   type PatioCode,
 } from "../domain/odoo-warehouse";
@@ -53,6 +55,56 @@ export async function depotForOdooLocation(prisma: PrismaService, locationName: 
     (await prisma.depot.findFirst({ where: { archivedAt: null }, orderBy: { name: "asc" } }));
   if (!fallback) throw new Error("No hay depósitos ZDRY. Corre el seed.");
   return { depot: fallback, warehouse };
+}
+
+export async function applyWarehouseMove(prisma: PrismaService, iso: string, locationName: string) {
+  const row = await prisma.container.findUnique({
+    where: { iso },
+    select: {
+      iso: true,
+      odooWarehouse: true,
+      odooLocation: true,
+      depotId: true,
+      depot: { select: { code: true, name: true } },
+    },
+  });
+  const from = String(row?.odooWarehouse || "").toUpperCase();
+  if (!row) return { warehouseChanged: false, from: "", to: "", warehouse: "", locationUpdated: false };
+  const plan = planWarehouseMove({ locationName, odooWarehouse: row.odooWarehouse });
+  const locationUpdated = String(row.odooLocation || "") !== String(locationName || "");
+  const data: Prisma.ContainerUpdateInput = {};
+  if (locationUpdated && locationName) data.odooLocation = locationName;
+  if (plan.warehouse && plan.warehouse !== from) data.odooWarehouse = plan.warehouse;
+  let depotName = row.depot?.name || "";
+  if (plan.depotCode && plan.depotCode !== row.depot?.code) {
+    await ensureOperationalDepots(prisma);
+    const depot = await depotByCode(prisma, plan.depotCode);
+    if (depot && depot.id !== row.depotId) {
+      data.depot = { connect: { id: depot.id } };
+      data.lado = null;
+      data.ruma = null;
+      data.columna = null;
+      data.nivel = null;
+      depotName = depot.name;
+    }
+  }
+  if (Object.keys(data).length) await prisma.container.update({ where: { iso }, data });
+  if (plan.warehouseChanged) {
+    await prisma.containerHistory.create({
+      data: {
+        iso,
+        type: "Traslado Odoo",
+        detail: `Plaza de costo ${from || "sin plaza"} → ${plan.warehouse} (${locationName}). Patio: ${depotName}. Los extras de almacén se recalculan con ${plan.warehouse}.`,
+      },
+    });
+  }
+  return {
+    warehouseChanged: plan.warehouseChanged,
+    from,
+    to: plan.warehouse,
+    warehouse: plan.warehouse,
+    locationUpdated,
+  };
 }
 
 export async function backfillWarehouseAndDepots(prisma: PrismaService) {

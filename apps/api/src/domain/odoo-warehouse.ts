@@ -75,6 +75,22 @@ export const ODOO_WAREHOUSE_LABELS: Record<string, string> = {
   [ODOO_WAREHOUSE_PIURA]: "Piura",
 };
 
+export function planWarehouseMove(input: {
+  locationName: string | null | undefined;
+  odooWarehouse: string | null | undefined;
+}): { warehouseChanged: boolean; warehouse: string; depotCode: PatioCode | null } {
+  const next = warehouseFromLocation(input.locationName);
+  const prev = String(input.odooWarehouse || "").toUpperCase();
+  if (!next) return { warehouseChanged: false, warehouse: prev, depotCode: null };
+  const warehouseChanged = next !== prev;
+  let depotCode: PatioCode | null = null;
+  if (warehouseChanged && next === ODOO_WAREHOUSE_PIURA) depotCode = PATIO_PIURA;
+  else if (warehouseChanged && next === ODOO_WAREHOUSE_ZGROU && prev && prev !== ODOO_WAREHOUSE_ZGROU) {
+    depotCode = PATIO_CALLAO_PENDING;
+  }
+  return { warehouseChanged, warehouse: next, depotCode };
+}
+
 export function warehouseFromLocation(locationName: string | null | undefined): string {
   const first = String(locationName || "")
     .split("/")

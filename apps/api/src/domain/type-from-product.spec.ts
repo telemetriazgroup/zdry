@@ -1,4 +1,4 @@
-import { auditEquipment, canonicalTypeFromProduct, parseProductEquipment } from "./type-from-product";
+import { auditEquipment, canonicalTypeFromProduct, explicitEquipmentType, parseProductEquipment } from "./type-from-product";
 import { mergeDimensionError } from "./type-merge";
 
 const masters = [
@@ -42,6 +42,30 @@ describe("canonicalTypeFromProduct", () => {
     expect(canonicalTypeFromProduct("CONTENEDOR DRY 40 OT SEGUNDO USO", "")).toBe("40OT");
     expect(canonicalTypeFromProduct("CONTENEDOR DRY 20 DC OPEN SIDE NUEVO", "CDE040")).toBe("20GP");
     expect(canonicalTypeFromProduct("CONTENEDOR DRY 20 DC NUEVO", "")).toBe("20GP");
+  });
+});
+
+describe("explicitEquipmentType", () => {
+  it("toma 40DC cuando Odoo dice 40 DC y el maestro existe", () => {
+    const decision = explicitEquipmentType("CONTENEDOR DRY 40 DC SEGUNDO USO", "", masters);
+    expect(decision).toEqual({ status: "matched", code: "40DC", reason: expect.stringContaining("40DC") });
+  });
+
+  it("toma 20DC y no lo cambia a 20GP", () => {
+    const decision = explicitEquipmentType("CONTENEDOR DRY 20 DC OPEN SIDE NUEVO", "CDE040", masters);
+    expect(decision.status).toBe("matched");
+    if (decision.status === "matched") expect(decision.code).toBe("20DC");
+  });
+
+  it("pide el tipo al despacho si el código nombrado no está en los maestros", () => {
+    const decision = explicitEquipmentType("CONTENEDOR DRY 40 DC SEGUNDO USO", "", [{ code: "40GP", dims: "40'" }]);
+    expect(decision.status).toBe("needs_exact");
+    expect(decision.reason).toContain("40DC");
+  });
+
+  it("pide el tipo al despacho si el producto no nombra medida", () => {
+    const decision = explicitEquipmentType("CONTENEDOR RECICLADO", "", masters);
+    expect(decision.status).toBe("needs_exact");
   });
 });
 

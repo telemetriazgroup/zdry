@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, apiUpload, ApiError, apiUrl, APP_ROOT, formatWhen } from "../api.js";
 import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
@@ -86,6 +86,11 @@ export default function CatalogMedia() {
   const [meta, setMeta] = useState({ photoLabels: [] });
   const [rows, setRows] = useState([]);
   const [iso, setIso] = useState("");
+  const rowsRef = useRef([]);
+  const isoRef = useRef("");
+  const syncingPlaza = useRef(false);
+  rowsRef.current = rows;
+  isoRef.current = iso;
   const [unit, setUnit] = useState(null);
   const [notes, setNotes] = useState("");
   const [conds, setConds] = useState({ conditionFloor: "", conditionRoof: "", conditionDoors: "", conditionPaint: "" });
@@ -225,6 +230,20 @@ export default function CatalogMedia() {
     api("/catalog-media/meta").then(setMeta).catch(() => {});
     loadList();
   }, [loadList]);
+
+  useEffect(() => {
+    if (!canApprove) return undefined;
+    const timer = setInterval(() => {
+      syncPlaza(false);
+    }, 120_000);
+    const first = setTimeout(() => {
+      syncPlaza(false);
+    }, 4000);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(first);
+    };
+  }, [canApprove]);
 
   useEffect(() => {
     setPage(1);
@@ -368,14 +387,56 @@ export default function CatalogMedia() {
     }
   }
 
+  const refreshOpenUnit = useCallback(async () => {
+    const current = isoRef.current;
+    if (!current) return;
+    const u = await api(`/catalog-media/${current}`);
+    setUnit(u);
+    if (canPrice) await loadOffer(current);
+  }, [canPrice]);
+
+  async function syncPlaza(announce) {
+    const isos = (rowsRef.current || []).map((row) => row.iso).filter(Boolean);
+    if (!isos.length || syncingPlaza.current) return { checked: 0, moved: [], recalculated: 0 };
+    syncingPlaza.current = true;
+    try {
+      const out = await api("/odoo-import/sync-warehouses", { method: "POST", body: { isos } });
+      if (out.moved?.length) {
+        const detail = out.moved.map((row) => `${row.iso} ${row.from || "sin plaza"} → ${row.to}`).join(", ");
+        setMsg(`Traslado detectado: ${detail}. Listas actualizadas: ${out.recalculated ?? 0}.`);
+        loadList();
+        await refreshOpenUnit().catch(() => {});
+      } else if (announce) {
+        setMsg(`Plaza Odoo revisada en ${out.checked ?? 0} unidad(es). Sin cambio de almacén.`);
+      }
+      return out;
+    } catch (e) {
+      if (announce) throw e;
+      return { checked: 0, moved: [], recalculated: 0, failed: true };
+    } finally {
+      syncingPlaza.current = false;
+    }
+  }
+
   async function recalculateLists() {
     setPublishBusy(true);
     setError("");
+    let syncNote = "";
+    try {
+      const sync = await syncPlaza(true);
+      const moves = sync?.moved?.length
+        ? ` Traslados: ${sync.moved.map((row) => `${row.iso} ${row.from || "sin plaza"} → ${row.to}`).join(", ")}.`
+        : ` Plaza Odoo revisada (${sync?.checked ?? 0}), sin cambio de almacén.`;
+      syncNote = moves;
+    } catch (e) {
+      const reason = e instanceof ApiError ? e.message : e.message;
+      syncNote = ` ${reason} Se recalcula con la plaza ya guardada.`;
+    }
     try {
       const out = await api("/config/recalculate-prices", { method: "POST", body: {} });
-      setMsg(`Listas recalculadas: ${out.updated ?? 0}. El precio guardado queda igual al cálculo. Las ofertas a mano no se tocaron.`);
+      setMsg(`Listas recalculadas: ${out.updated ?? 0}.${syncNote} Las ofertas a mano no se tocaron.`);
       loadList();
-      if (iso) await loadOffer(iso);
+      if (isoRef.current) await loadOffer(isoRef.current);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : e.message);
     } finally {
@@ -1016,7 +1077,15 @@ export default function CatalogMedia() {
         {unit && !commercialView ? (
           <div className="panel catalog-detail-panel">
             <h3>{unit.iso}</h3>
-            <p className="section-sub">{unit.type} · {unit.cat} · {unit.depotName} · {unit.manufacturer} {unit.year || ""}</p>
+            <p className="section-sub">
+              {unit.type} · {unit.cat} · patio {unit.depotName}
+              {unit.odooWarehouse ? ` · plaza de costo ${unit.odooWarehouse}` : ""}
+              {unit.odooLocation ? ` · ${unit.odooLocation}` : ""}
+              {" · "}{unit.manufacturer} {unit.year || ""}
+            </p>
+            {String(unit.depotName || "").toLowerCase().includes("piura") && unit.odooWarehouse && String(unit.odooWarehouse).toUpperCase() !== "PIURA" ? (
+              <p className="err">El patio es {unit.depotName}, pero la plaza de costo sigue en {unit.odooWarehouse}. Recalcular listas lee el traslado en Odoo y vuelve a armar los extras, incluido Tracking Piura.</p>
+            ) : null}
             <p className="recv-who">Ingresó {unit.registeredByName || "—"} · {formatWhen(unit.createdAt)}</p>
             <div style={{ color: st.color, fontWeight: 800, marginBottom: 10 }}>{st.label}</div>
             <p className="section-sub">{photoCount} foto{photoCount === 1 ? "" : "s"} activa{photoCount === 1 ? "" : "s"}{unit.hasVideo ? " · video 360°" : ""}{(unit.history || []).length ? ` · ${(unit.history || []).length} en historial` : ""}.</p>
