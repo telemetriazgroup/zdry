@@ -113,6 +113,9 @@ export function moveDossierDraft(input: {
     unitPrice?: number | null;
     discount?: number | null;
     unitNet?: number | null;
+    dealKind?: string | null;
+    vendorName?: string | null;
+    rentEnd?: string | null;
     invoiceName?: string | null;
     invoiceState?: string | null;
     invoicePayment?: string | null;
@@ -142,6 +145,9 @@ export function moveDossierDraft(input: {
       unitPrice: input.saleUnit?.unitPrice ?? null,
       discount: input.saleUnit?.discount ?? null,
       unitNet: input.saleUnit?.unitNet ?? null,
+      dealKind: input.saleUnit?.dealKind ?? null,
+      vendorName: input.saleUnit?.vendorName ?? null,
+      rentEnd: input.saleUnit?.rentEnd ?? null,
       invoiceName: input.saleUnit?.invoiceName ?? null,
       invoiceState: input.saleUnit?.invoiceState ?? null,
       invoicePayment: input.saleUnit?.invoicePayment ?? null,

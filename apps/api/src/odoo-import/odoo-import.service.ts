@@ -3020,16 +3020,7 @@ export class OdooImportService {
           .map((m) => String(m.origin)),
       ),
     ];
-    const sales = saleNames.length
-      ? await this.odoo
-          .searchRead(
-            "sale.order",
-            [["name", "in", saleNames]],
-            ["id", "name", "partner_id", "state", "amount_total", "date_order", "client_order_ref", "invoice_ids", "invoice_status"],
-            { limit: saleNames.length },
-          )
-          .catch(() => [])
-      : [];
+    const sales = saleNames.length ? await this.readSaleOrders(saleNames) : [];
     const saleIds = sales.map((row) => Number(row.id)).filter((id) => id > 0);
     const invoiceIds = [
       ...new Set(
@@ -3147,6 +3138,25 @@ export class OdooImportService {
       n += 1;
     }
     return { checked: n, left };
+  }
+
+  /** Cabecera de la cotización: comercial, suscripción y asunto. Si un campo no existe, se lee el resto. */
+  private async readSaleOrders(names: string[]) {
+    const core = ["id", "name", "partner_id", "state", "amount_total", "date_order", "client_order_ref", "invoice_ids", "invoice_status", "user_id"];
+    const extra = ["is_subscription", "plan_id", "x_studio_asunto_cotizacion", "x_studio_leasing", "end_date", "note"];
+    let fields = core;
+    try {
+      const known = await this.odoo.fieldsGet("sale.order");
+      const have = [...core, ...extra].filter((field) => Boolean(known[field]));
+      if (have.includes("name")) fields = have;
+    } catch {
+      fields = core;
+    }
+    try {
+      return await this.odoo.searchRead("sale.order", [["name", "in", names]], fields, { limit: names.length });
+    } catch {
+      return this.odoo.searchRead("sale.order", [["name", "in", names]], core, { limit: names.length });
+    }
   }
 
   /** Precio de la cotización por línea. Si un campo studio no existe, se lee igual el precio. */

@@ -1,4 +1,5 @@
-import { netFromSaleLine, saleLineForUnit, saleUnitFromOrder, withinLastDays } from "./sale-realized";
+import { judgeExitDeal, saleMargin } from "./exit-economics";
+import { netFromSaleLine, saleLineForUnit, saleUnitFromOrder, vendorWeek, withinLastDays } from "./sale-realized";
 
 const eituLines = [
   {
@@ -82,6 +83,52 @@ describe("precio de la línea vendida", () => {
         "CAIU3411377",
       ),
     ).toBeNull();
+  });
+
+  it("un alquiler no se resta del costo del equipo y guarda al comercial", () => {
+    const file = saleUnitFromOrder({
+      iso: "CAIU8532296",
+      order: {
+        id: 31,
+        name: "10020264231",
+        is_subscription: true,
+        plan_id: [4, "Monthly (ZGROUP S.A.)"],
+        user_id: [9, "Karla Leandro"],
+        x_studio_asunto_cotizacion: "ALQUILER DE CONTENEDOR DRY 40 HC",
+        end_date: "2026-12-12",
+        invoice_ids: [7],
+        invoice_status: "invoiced",
+      },
+      lines: [
+        { id: 1, order_id: [31, "10020264231"], price_unit: 120, price_subtotal: 120, name: "ALQUILER DE CONTENEDOR DRY 40 HC MENSUAL", product_uom_qty: 1 },
+        { id: 2, order_id: [31, "10020264231"], price_unit: 0, price_subtotal: 0, name: "ASIGNAR CODIGOS", x_studio_equipo: "CAIU8532296", product_uom_qty: 1, qty_delivered: 1 },
+      ],
+      invoices: [{ id: 7, name: "F FF1-000008781", state: "posted", payment_state: "paid", invoice_date: "2026-10-14", move_type: "out_invoice" }],
+      pickingName: "ZGROU/OUT/08920",
+    });
+    expect(file.dealKind).toBe("alquiler");
+    expect(file.unitNet).toBe(120);
+    expect(file.vendorName).toBe("Karla Leandro");
+    expect(file.rentEnd).toBe("2026-12-12");
+    expect(saleMargin(file.unitNet, 1540, "alquiler")).toBe(120);
+    expect(judgeExitDeal({ priceSource: "rule", soldNet: file.unitNet, kind: "alquiler", ruleMin: 1656, ruleList: 1711, inventoryList: null }).verdict).toBe("alquiler");
+  });
+
+  it("ordena a los comerciales por ventas de dry de la semana y aparta el alquiler", () => {
+    const now = new Date("2026-10-17T20:00:00-05:00");
+    const rows = vendorWeek(
+      [
+        { vendor: "Karla Leandro", kind: "venta", date: "2026-10-15", result: 250 },
+        { vendor: "Karla Leandro", kind: "venta", date: "2026-10-16", result: 14 },
+        { vendor: "Karla Leandro", kind: "alquiler", date: "2026-10-12", result: 120 },
+        { vendor: "Olinda Lopez", kind: "venta", date: "2026-10-14", result: -40 },
+        { vendor: "Olinda Lopez", kind: "venta", date: "2026-09-01", result: 800 },
+      ],
+      now,
+    );
+    expect(rows.map((row) => row.name)).toEqual(["Karla Leandro", "Olinda Lopez"]);
+    expect(rows[0]).toMatchObject({ sales: 2, rents: 1, monthPace: 8 });
+    expect(rows[1]).toMatchObject({ sales: 1, rents: 0 });
   });
 
   it("si no hay subtotal, aplica el descuento como porcentaje", () => {

@@ -2,7 +2,7 @@ import { BadRequestException, HttpException, Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { ACQUISITION_REFS_KEY, computeListPrices, normalizeAcquisitionRefs } from "../domain/pricing";
 import { EXIT_VERDICT_LABEL, exitOriginLabel, judgeExitDeal, saleMargin, type ExitVerdict } from "../domain/exit-economics";
-import { withinLastDays } from "../domain/sale-realized";
+import { vendorWeek, withinLastDays, type DealKind } from "../domain/sale-realized";
 import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { OdooImportService } from "../odoo-import/odoo-import.service";
@@ -96,7 +96,8 @@ export class RealizedSalesService {
       byIso.set(snap.isoNormalized, list);
     }
 
-    let last7 = 0;
+    let openExits = 0;
+    const events: Array<{ vendor: string | null; kind: DealKind | null; date: string | null; result: number | null }> = [];
     const rows = units.map((unit) => {
       const productCode = sku.get(unit.odooLotId ?? -1) || unit.odooSourceProductCode || "";
       const priced = computeListPrices(overlayUnitFrom({ ...unit, productCode }, dry), pricing, refs, overlays, safety);
@@ -116,17 +117,22 @@ export class RealizedSalesService {
           const outDate = text(outData.date);
           const date = outDate || saleDate;
           const soldNet = positive(data.unitNet);
+          const dealKind: DealKind | null = text(data.dealKind) === "alquiler" ? "alquiler" : soldNet != null ? "venta" : null;
           const judged = judgeExitDeal({
             priceSource: unit.priceSource,
             soldNet,
-            kind: soldNet != null ? "venta" : null,
+            kind: dealKind,
             ruleMin: priced.priceMin,
             ruleList: priced.priceList,
             inventoryList: unit.priceList != null ? Number(unit.priceList) : null,
           });
           const verdict: ExitVerdict = judged.verdict;
+          const result = saleMargin(soldNet, priced.securedBase, dealKind);
           return {
             saleName: sale.name,
+            dealKind,
+            vendorName: text(data.vendorName),
+            rentEnd: text(data.rentEnd),
             state: text(data.state),
             customer: text(data.partner),
             saleDate,
@@ -136,9 +142,14 @@ export class RealizedSalesService {
             unitPrice: positive(data.unitPrice),
             discount: data.discount != null && data.discount !== "" ? Number(data.discount) : null,
             soldNet,
-            result: saleMargin(soldNet, priced.securedBase, soldNet != null ? "venta" : null),
+            result,
             verdict,
-            verdictLabel: soldNet == null && sale.name ? "Falta el precio de la línea en Odoo" : EXIT_VERDICT_LABEL[verdict],
+            verdictLabel:
+              dealKind === "alquiler"
+                ? "Alquiler: el equipo vuelve al almacén al terminar. No se resta el costo."
+                : soldNet == null && sale.name
+                  ? "Falta el precio de la línea en Odoo"
+                  : EXIT_VERDICT_LABEL[verdict],
             optimal: OPTIMAL.has(verdict),
             invoiceName: text(data.invoiceName),
             invoicePayment: text(data.invoicePayment),
@@ -151,9 +162,10 @@ export class RealizedSalesService {
         })
         .sort((a, b) => stamp(b.date) - stamp(a.date) || b.saleName.localeCompare(a.saleName));
 
-      const datedSales = history.filter((item) => withinLastDays(item.date, now, 7));
-      if (datedSales.length) last7 += datedSales.length;
-      else if (!history.length && outs.some((out) => withinLastDays(text(record(out.data).date), now, 7))) last7 += 1;
+      for (const item of history) {
+        events.push({ vendor: item.vendorName, kind: item.dealKind, date: item.date, result: item.result });
+      }
+      if (!history.length && outs.some((out) => withinLastDays(text(record(out.data).date), now, 7))) openExits += 1;
 
       const current = history[0] || null;
       return {
@@ -168,6 +180,9 @@ export class RealizedSalesService {
         costBase: priced.securedBase,
         priceSource: unit.priceSource || "rule",
         saleName: current?.saleName || null,
+        dealKind: current?.dealKind || null,
+        vendorName: current?.vendorName || null,
+        rentEnd: current?.rentEnd || null,
         customer: current?.customer || null,
         date: current?.date || null,
         saleDate: current?.saleDate || null,
@@ -189,17 +204,25 @@ export class RealizedSalesService {
       };
     });
 
-    const withResult = rows.filter((row) => row.result != null);
+    const salesOnly = rows.filter((row) => row.dealKind !== "alquiler" && row.result != null);
+    const vendors = vendorWeek(events, now);
+    const last7Sales = events.filter((event) => event.kind === "venta" && withinLastDays(event.date, now, 7)).length;
+    const last7Rents = events.filter((event) => event.kind === "alquiler" && withinLastDays(event.date, now, 7)).length;
     return {
       summary: {
         units: rows.length,
-        last7,
-        withPrice: rows.filter((row) => row.soldNet != null).length,
-        missingPrice: rows.filter((row) => row.soldNet == null).length,
+        last7: last7Sales,
+        last7Sales,
+        last7Rents,
+        openExits,
+        withPrice: rows.filter((row) => row.dealKind !== "alquiler" && row.soldNet != null).length,
+        missingPrice: rows.filter((row) => row.dealKind !== "alquiler" && row.soldNet == null).length,
+        rents: rows.filter((row) => row.dealKind === "alquiler").length,
         optimal: rows.filter((row) => row.optimal).length,
         below: rows.filter((row) => BELOW.has(row.verdict)).length,
-        gain: withResult.filter((row) => (row.result || 0) > 0).reduce((sum, row) => sum + (row.result || 0), 0),
-        loss: withResult.filter((row) => (row.result || 0) < 0).reduce((sum, row) => sum + (row.result || 0), 0),
+        gain: salesOnly.filter((row) => (row.result || 0) > 0).reduce((sum, row) => sum + (row.result || 0), 0),
+        loss: salesOnly.filter((row) => (row.result || 0) < 0).reduce((sum, row) => sum + (row.result || 0), 0),
+        vendors,
       },
       rows,
     };

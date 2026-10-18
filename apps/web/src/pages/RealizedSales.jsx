@@ -36,7 +36,8 @@ function payLabel(value) {
   return PAY[value] || value;
 }
 
-function resultWord(value) {
+function resultWord(value, kind) {
+  if (kind === "alquiler") return "Alquiler";
   if (value == null) return "Sin cálculo";
   if (value > 0) return "Ganancia";
   if (value < 0) return "Pérdida";
@@ -104,10 +105,45 @@ function SaleExpediente({ iso }) {
 }
 
 function Calculation({ row, deal }) {
+  const kind = deal?.dealKind || row.dealKind;
   const sold = deal?.soldNet ?? row.soldNet;
   const result = deal?.result ?? row.result;
-  const word = resultWord(result);
-  const tone = result > 0 ? "gain" : result < 0 ? "loss" : "";
+  const word = resultWord(result, kind);
+  const tone = kind === "alquiler" ? "" : result > 0 ? "gain" : result < 0 ? "loss" : "";
+  const vendor = deal?.vendorName || row.vendorName;
+  if (kind === "alquiler") {
+    return (
+      <div>
+        <h3 style={{ marginBottom: 4 }}>{row.iso}</h3>
+        <p className="section-sub" style={{ marginTop: 0 }}>
+          Alquiler · {row.type} · {row.cat}
+          {deal?.customer || row.customer ? ` · ${deal?.customer || row.customer}` : ""}
+          {" · "}{day(deal?.date || row.date)}
+        </p>
+        <p className="sale-result" style={{ fontSize: 22, margin: "8px 0" }}>
+          Cuota {sold != null ? money(sold) : "sin precio"}
+        </p>
+        <p className="section-sub">
+          No es una venta. El equipo vuelve al almacén cuando termina el alquiler
+          {(deal?.rentEnd || row.rentEnd) ? ` (${day(deal?.rentEnd || row.rentEnd)})` : ""}.
+          La cuota no se resta del costo del equipo.
+        </p>
+        <div className="sale-math">
+          <div><span>Cotización {deal?.saleName || row.saleName || "sin pedido"}</span><b>{sold != null ? money(sold) : "Sin cuota"}</b></div>
+          <div><span>Comercial</span><b>{vendor || "Sin comercial en la cotización"}</b></div>
+          <div><span>Costo del equipo, no se resta</span><b>{money(row.costBase)}</b></div>
+        </div>
+        <p className="section-sub">{deal?.verdictLabel || row.verdictLabel}</p>
+        <p className="section-sub">
+          {(deal?.invoiceName || row.invoiceName)
+            ? `Factura ${deal?.invoiceName || row.invoiceName}${payLabel(deal?.invoicePayment || row.invoicePayment) ? ` · ${payLabel(deal?.invoicePayment || row.invoicePayment)}` : ""}`
+            : "Sin factura todavía."}
+          {(deal?.outName || row.outName) ? ` Salida ${deal?.outName || row.outName}.` : ""}
+        </p>
+        {row.history?.length > 1 ? <History row={row} deal={deal} /> : null}
+      </div>
+    );
+  }
   return (
     <div>
       <h3 style={{ marginBottom: 4 }}>{row.iso}</h3>
@@ -124,6 +160,7 @@ function Calculation({ row, deal }) {
         <div><span>Extras de almacén</span><b>{money(row.overlayTotal || 0)}</b></div>
         <div><span>Margen de seguridad</span><b>{money(row.safetyAdd || 0)}</b></div>
         <div><span>Base de hoy</span><b>{money(row.costBase)}</b></div>
+        <div><span>Comercial</span><b>{vendor || "Sin comercial en la cotización"}</b></div>
         <div>
           <span>
             Cotización {deal?.saleName || row.saleName || "sin pedido"}
@@ -151,25 +188,29 @@ function Calculation({ row, deal }) {
           : "Sin factura todavía. El cálculo usa el precio de la cotización."}
         {(deal?.outName || row.outName) ? ` Salida ${deal?.outName || row.outName}.` : ""}
       </p>
-      {row.history?.length > 1 ? (
-        <div>
-          <b>Historial de esta serie</b>
-          {row.history.map((item) => (
-            <button
-              key={item.saleName}
-              type="button"
-              className={deal?.saleName === item.saleName ? "sale-pick on" : "sale-pick"}
-              onClick={() => deal?.onPick?.(item.saleName)}
-            >
-              <b>{day(item.date)} · {item.saleName}</b>
-              <span className="section-sub">
-                {" "}{item.soldNet != null ? money(item.soldNet) : "Sin precio"}
-                {" · "}{resultWord(item.result)} {item.result == null ? "" : money(item.result)}
-              </span>
-            </button>
-          ))}
-        </div>
-      ) : null}
+      {row.history?.length > 1 ? <History row={row} deal={deal} /> : null}
+    </div>
+  );
+}
+
+function History({ row, deal }) {
+  return (
+    <div>
+      <b>Historial de esta serie</b>
+      {row.history.map((item) => (
+        <button
+          key={item.saleName}
+          type="button"
+          className={deal?.saleName === item.saleName ? "sale-pick on" : "sale-pick"}
+          onClick={() => deal?.onPick?.(item.saleName)}
+        >
+          <b>{day(item.date)} · {item.saleName}</b>
+          <span className="section-sub">
+            {" "}{item.dealKind === "alquiler" ? "Alquiler" : item.soldNet != null ? money(item.soldNet) : "Sin precio"}
+            {" · "}{resultWord(item.result, item.dealKind)} {item.dealKind === "alquiler" || item.result == null ? "" : money(item.result)}
+          </span>
+        </button>
+      ))}
     </div>
   );
 }
@@ -264,13 +305,30 @@ export default function RealizedSales({ embedded = false }) {
         <>
           <div className="panel" style={{ marginBottom: 12 }}>
             <p className="section-sub" style={{ marginTop: 0 }}>
-              <b>{summary.last7 || 0}</b> en los últimos 7 días.
+              <b>{summary.last7Sales || 0}</b> venta(s) en los últimos 7 días.
+              {" "}{summary.last7Rents || 0} alquiler(es), que vuelven al almacén.
               {" "}{summary.units || 0} en cliente.
-              {" "}{summary.withPrice || 0} con precio.
-              {" "}{summary.missingPrice || 0} sin neto.
               {" "}{summary.optimal || 0} óptima(s), {summary.below || 0} por debajo.
-              {" "}Ganancia {money(summary.gain)}. Pérdida {money(summary.loss)}.
+              {" "}Ganancia de ventas {money(summary.gain)}. Pérdida de ventas {money(summary.loss)}.
             </p>
+            {summary.vendors?.length ? (
+              <div className="share-bars">
+                <b>Comerciales que cotizaron las salidas de estos 7 días</b>
+                {summary.vendors.map((vendor) => (
+                  <div className="share-bar-row" key={vendor.name}>
+                    <span>{vendor.name}</span>
+                    <div className="share-bar"><span style={{ width: `${vendor.share || 0}%` }} /></div>
+                    <b>{vendor.sales} venta{vendor.sales === 1 ? "" : "s"}{vendor.rents ? ` · ${vendor.rents} alquiler` : ""}</b>
+                  </div>
+                ))}
+                <p className="section-sub">
+                  Ritmo si esta semana se repite: {summary.vendors.reduce((sum, vendor) => sum + (vendor.monthPace || 0), 0)} ventas de dry al mes.
+                  Quien más vende ahora: {summary.vendors[0]?.name} ({summary.vendors[0]?.sales} en 7 días).
+                </p>
+              </div>
+            ) : (
+              <p className="section-sub">En los últimos 7 días no hay ventas de dry con comercial en la cotización.</p>
+            )}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <input
                 value={q}
@@ -311,10 +369,10 @@ export default function RealizedSales({ embedded = false }) {
                         </td>
                         <td>{day(row.date)}</td>
                         <td>{row.soldNet != null ? money(row.soldNet) : "—"}</td>
-                        <td className={row.result > 0 ? "sale-result gain" : row.result < 0 ? "sale-result loss" : ""}>
-                          {row.result == null ? "—" : money(row.result)}
+                        <td className={row.dealKind === "alquiler" ? "" : row.result > 0 ? "sale-result gain" : row.result < 0 ? "sale-result loss" : ""}>
+                          {row.dealKind === "alquiler" ? (row.soldNet != null ? money(row.soldNet) : "—") : row.result == null ? "—" : money(row.result)}
                           <br />
-                          <span className="section-sub">{resultWord(row.result)}</span>
+                          <span className="section-sub">{resultWord(row.result, row.dealKind)}</span>
                         </td>
                       </tr>
                     ))}

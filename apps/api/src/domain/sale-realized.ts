@@ -1,9 +1,14 @@
 import { lineFromOdoo, type DryDealLineDraft } from "./odoo-dry-dossier";
 
+export type DealKind = "venta" | "alquiler";
+
 export type SaleUnitPrice = {
   unitPrice: number | null;
   discount: number | null;
   unitNet: number | null;
+  dealKind: DealKind;
+  vendorName: string | null;
+  rentEnd: string | null;
   invoiceName: string | null;
   invoiceState: string | null;
   invoicePayment: string | null;
@@ -27,8 +32,9 @@ function productLines(rawLines: Record<string, unknown>[]) {
     .filter((line) => {
       if (line.displayType) return false;
       if (!(line.priceSubtotal > 0 || line.priceUnit > 0)) return false;
-      const blob = `${line.description} ${line.studioTipo} ${line.productName}`.toLowerCase();
-      if (/flete|servicio/.test(blob) && !/contenedor|dry/.test(blob)) return false;
+      const blob = `${line.description} ${line.studioTipo} ${line.productName}`;
+      if (/\balquiler\b/i.test(blob)) return false;
+      if (/flete|servicio/i.test(blob) && !/contenedor|dry/i.test(blob)) return false;
       return true;
     });
 }
@@ -51,6 +57,75 @@ export function saleLineForUnit(rawLines: Record<string, unknown>[], iso: string
     return lines.find((line) => line.qtyDelivered > 0) || lines[0];
   }
   return null;
+}
+
+function manyName(value: unknown) {
+  if (Array.isArray(value) && value.length > 1) return String(value[1] || "").trim() || null;
+  if (typeof value === "string" && value.trim()) return value.trim();
+  return null;
+}
+
+function lineBlob(line: DryDealLineDraft) {
+  return `${line.description} ${line.studioTipo} ${line.productName}`;
+}
+
+/** Suscripción, plan recurrente o asunto/línea de alquiler: el equipo vuelve; no es una venta. */
+export function quotationKind(order: Record<string, unknown>, lines: DryDealLineDraft[]): DealKind {
+  const plan = order.plan_id;
+  const hasPlan = Array.isArray(plan) ? Number(plan[0]) > 0 : Boolean(plan) && plan !== false;
+  if (order.is_subscription === true || hasPlan || order.x_studio_leasing === true) return "alquiler";
+  const text = [order.x_studio_asunto_cotizacion, order.note, ...lines.map(lineBlob)].join(" ");
+  if (/\balquiler\b/i.test(text)) return "alquiler";
+  return "venta";
+}
+
+/** Cuota del servicio de alquiler. No es el precio de venta del equipo. */
+export function rentFee(lines: DryDealLineDraft[]): number | null {
+  const fees = lines
+    .filter((line) => !line.displayType && /\balquiler\b/i.test(lineBlob(line)))
+    .map((line) => netFromSaleLine(line))
+    .filter((net): net is number => net != null && net > 0);
+  if (!fees.length) return null;
+  return Math.round(fees.reduce((sum, net) => sum + net, 0) * 100) / 100;
+}
+
+export type VendorWeekRow = {
+  name: string;
+  sales: number;
+  rents: number;
+  gain: number;
+  loss: number;
+  share: number;
+  monthPace: number;
+};
+
+/** Actividad de los últimos 7 días. El ritmo mensual repite esa semana cuatro veces. */
+export function vendorWeek(
+  deals: Array<{ vendor: string | null; kind: DealKind | null; date: string | null; result: number | null }>,
+  now: Date,
+): VendorWeekRow[] {
+  const map = new Map<string, { name: string; sales: number; rents: number; gain: number; loss: number }>();
+  for (const deal of deals) {
+    if (!deal.kind || !withinLastDays(deal.date, now, 7)) continue;
+    const name = deal.vendor || "Sin comercial";
+    const row = map.get(name) || { name, sales: 0, rents: 0, gain: 0, loss: 0 };
+    if (deal.kind === "alquiler") row.rents += 1;
+    else {
+      row.sales += 1;
+      if ((deal.result || 0) > 0) row.gain += deal.result || 0;
+      if ((deal.result || 0) < 0) row.loss += deal.result || 0;
+    }
+    map.set(name, row);
+  }
+  const list = [...map.values()].sort((a, b) => b.sales - a.sales || b.rents - a.rents || a.name.localeCompare(b.name));
+  const saleTotal = list.reduce((sum, row) => sum + row.sales, 0);
+  return list.map((row) => ({
+    ...row,
+    gain: Math.round(row.gain),
+    loss: Math.round(row.loss),
+    share: saleTotal ? Math.round((row.sales / saleTotal) * 1000) / 10 : 0,
+    monthPace: row.sales * 4,
+  }));
 }
 
 /** Neto de la línea. Si Odoo ya trae el subtotal, ese es el precio vendido (el descuento puede ser monto, no porcentaje). */
@@ -84,15 +159,21 @@ export function saleUnitFromOrder(input: {
 }): SaleUnitPrice {
   const orderId = Number(input.order.id) || 0;
   const rawLines = (input.lines || []).filter((line) => relId(line.order_id) === orderId);
-  const matched = saleLineForUnit(rawLines, input.iso);
+  const drafts = rawLines.map((row) => lineFromOdoo(row)).filter((line) => !line.displayType);
+  const dealKind = quotationKind(input.order, drafts);
+  const matched = dealKind === "venta" ? saleLineForUnit(rawLines, input.iso) : null;
+  const fee = dealKind === "alquiler" ? rentFee(drafts) : null;
   const invIds = new Set(
     (Array.isArray(input.order.invoice_ids) ? input.order.invoice_ids : []).map((id) => Number(id)).filter((id) => id > 0),
   );
   const invoice = customerInvoice((input.invoices || []).filter((row) => invIds.has(Number(row.id))));
   return {
-    unitPrice: matched && matched.priceUnit > 0 ? Math.round(matched.priceUnit * 100) / 100 : null,
+    unitPrice: dealKind === "alquiler" ? fee : matched && matched.priceUnit > 0 ? Math.round(matched.priceUnit * 100) / 100 : null,
     discount: matched ? matched.discount : null,
-    unitNet: netFromSaleLine(matched),
+    unitNet: dealKind === "alquiler" ? fee : netFromSaleLine(matched),
+    dealKind,
+    vendorName: manyName(input.order.user_id),
+    rentEnd: input.order.end_date ? String(input.order.end_date).slice(0, 10) : null,
     invoiceName: invoice?.name || null,
     invoiceState: invoice?.state || null,
     invoicePayment: invoice?.payment || null,
