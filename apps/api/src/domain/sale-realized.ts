@@ -1,6 +1,6 @@
 import { lineFromOdoo, type DryDealLineDraft } from "./odoo-dry-dossier";
 
-export type DealKind = "venta" | "alquiler";
+export type DealKind = "venta" | "alquiler" | "transformacion";
 
 export type SaleUnitPrice = {
   unitPrice: number | null;
@@ -86,11 +86,36 @@ function equipmentLine(lines: DryDealLineDraft[], iso: string): DryDealLineDraft
   );
 }
 
+function mentionsModule(order: Record<string, unknown>, lines: DryDealLineDraft[]) {
+  const text = [order.x_studio_asunto_cotizacion, order.note, ...lines.map((line) => `${lineBlob(line)} ${line.productCode}`)].join(" ");
+  return /\bm[oó]dulos?\b/i.test(text);
+}
+
+/** Línea con precio que nombra este dry. El resto de la cotización no es su venta. */
+function pricedDryLine(lines: DryDealLineDraft[], iso: string): DryDealLineDraft | null {
+  const key = compactKey(iso);
+  if (!key) return null;
+  return (
+    lines.find(
+      (line) =>
+        lineHasPrice(line) &&
+        [line.studioEquipo, line.description, line.lotName, line.productName, line.productCode].some((value) =>
+          compactKey(value).includes(key),
+        ),
+    ) || null
+  );
+}
+
 /**
- * La serie en precio 0 es alquiler: el contenedor vuelve.
- * También lo es una suscripción, un plan recurrente o la palabra alquiler.
+ * Un módulo en la cotización es una transformación: el dry fue el insumo.
+ * Solo es venta de este equipo si una línea con precio distinto de 0 trae su código.
+ * Si no, no se toma el precio de los módulos.
+ * La serie en precio 0, sin módulos, es alquiler: el contenedor vuelve.
  */
 export function quotationKind(order: Record<string, unknown>, lines: DryDealLineDraft[], iso?: string): DealKind {
+  if (iso && mentionsModule(order, lines)) {
+    return pricedDryLine(lines, iso) ? "venta" : "transformacion";
+  }
   if (iso) {
     const unit = equipmentLine(lines, iso);
     if (unit && !lineHasPrice(unit)) return "alquiler";
@@ -136,6 +161,7 @@ export function vendorWeek(
     if (!deal.kind || !withinLastDays(deal.date, now, 7)) continue;
     const name = deal.vendor || "Sin comercial";
     const row = map.get(name) || { name, sales: 0, rents: 0, gain: 0, loss: 0 };
+    if (deal.kind === "transformacion") continue;
     if (deal.kind === "alquiler") row.rents += 1;
     else {
       row.sales += 1;
@@ -190,6 +216,7 @@ export function saleUnitFromOrder(input: {
   const dealKind = quotationKind(input.order, drafts, input.iso);
   const matched = dealKind === "venta" ? saleLineForUnit(rawLines, input.iso) : null;
   const fee = dealKind === "alquiler" ? rentFee(drafts, input.iso) : null;
+  const closedNet = dealKind === "alquiler" ? fee : dealKind === "transformacion" ? null : netFromSaleLine(matched);
   const invIds = new Set(
     (Array.isArray(input.order.invoice_ids) ? input.order.invoice_ids : []).map((id) => Number(id)).filter((id) => id > 0),
   );
@@ -197,7 +224,7 @@ export function saleUnitFromOrder(input: {
   return {
     unitPrice: dealKind === "alquiler" ? fee : matched && matched.priceUnit > 0 ? Math.round(matched.priceUnit * 100) / 100 : null,
     discount: matched ? matched.discount : null,
-    unitNet: dealKind === "alquiler" ? fee : netFromSaleLine(matched),
+    unitNet: closedNet,
     dealKind,
     vendorName: manyName(input.order.user_id),
     rentEnd: input.order.end_date ? String(input.order.end_date).slice(0, 10) : null,

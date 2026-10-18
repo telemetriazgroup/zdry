@@ -155,6 +155,98 @@ describe("precio de la línea vendida", () => {
     }).verdict).toBe("alquiler");
   });
 
+  it("los módulos son transformación: el dry en precio 0 es el insumo y no suma la venta de los módulos", () => {
+    const file = saleUnitFromOrder({
+      iso: "LATU9011211",
+      order: {
+        id: 393,
+        name: "10020252393",
+        plan_id: [4, "Monthly (ZGROUP S.A.C)"],
+        user_id: [8, "Iliana Sánchez Sandoval"],
+        x_studio_asunto_cotizacion: "VENTA DE MODULOS PARA IMPLEMENTAR LA PLANTA MODULAR REFRIGERADA",
+        invoice_ids: [12],
+      },
+      lines: [
+        {
+          id: 1,
+          order_id: [393, "10020252393"],
+          price_unit: 11600,
+          price_subtotal: 11600,
+          name: "ZGROUP STORE : VENTA DE MODULO PARA ALMACENAMIENTO - MODULO DE 40 PIES",
+          product_uom_qty: 1,
+          qty_delivered: 1,
+        },
+        {
+          id: 2,
+          order_id: [393, "10020252393"],
+          price_unit: 8240,
+          price_subtotal: 8240,
+          name: "MODULO PARA OFICINA DE 20 PIES INCLUYE CAJA ISOTERMICA",
+          product_uom_qty: 1,
+          qty_delivered: 1,
+        },
+        {
+          id: 3,
+          order_id: [393, "10020252393"],
+          price_unit: 0,
+          price_subtotal: 0,
+          name: "ASIGNAR CODIGOS",
+          x_studio_equipo: "LATU9011211",
+          product_uom_qty: 1,
+          qty_delivered: 1,
+        },
+      ],
+      invoices: [{ id: 12, name: "F FF1-00003002", state: "posted", payment_state: "paid", invoice_date: "2025-09-29", move_type: "out_invoice" }],
+      pickingName: "ZGROU/OUT/08622",
+    });
+    expect(file.dealKind).toBe("transformacion");
+    expect(file.unitNet).toBeNull();
+    expect(file.vendorName).toBe("Iliana Sánchez Sandoval");
+    expect(saleMargin(136290, 4557, file.dealKind)).toBeNull();
+    expect(judgeExitDeal({
+      priceSource: "rule",
+      soldNet: file.unitNet,
+      kind: file.dealKind,
+      ruleMin: 4000,
+      ruleList: 4557,
+      inventoryList: null,
+    }).verdict).toBe("transformacion");
+  });
+
+  it("si un módulo con precio trae el código del dry, esa línea sí es la venta de ese equipo", () => {
+    const file = saleUnitFromOrder({
+      iso: "LATU9011211",
+      order: {
+        id: 394,
+        name: "10020252394",
+        x_studio_asunto_cotizacion: "VENTA DE MODULOS",
+      },
+      lines: [
+        {
+          id: 1,
+          order_id: [394, "10020252394"],
+          price_unit: 11600,
+          price_subtotal: 11600,
+          name: "VENTA DE MODULO PARA ALMACENAMIENTO",
+          product_uom_qty: 1,
+        },
+        {
+          id: 2,
+          order_id: [394, "10020252394"],
+          price_unit: 1790,
+          price_subtotal: 1790,
+          name: "VENTA DE CONTENEDOR DRY LATU9011211",
+          product_uom_qty: 1,
+          qty_delivered: 1,
+        },
+      ],
+      invoices: [],
+    });
+    expect(file.dealKind).toBe("venta");
+    expect(file.unitNet).toBe(1790);
+    expect(saleMargin(file.unitNet, 4557, file.dealKind)).toBe(1790 - 4557);
+  });
+
   it("ordena a los comerciales por ventas de dry de la semana y aparta el alquiler", () => {
     const now = new Date("2026-10-17T20:00:00-05:00");
     const rows = vendorWeek(

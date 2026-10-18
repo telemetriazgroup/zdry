@@ -38,6 +38,7 @@ function payLabel(value) {
 
 function resultWord(value, kind) {
   if (kind === "alquiler") return "Alquiler";
+  if (kind === "transformacion") return "Transformación";
   if (value == null) return "Sin cálculo";
   if (value > 0) return "Ganancia";
   if (value < 0) return "Pérdida";
@@ -109,8 +110,40 @@ function Calculation({ row, deal }) {
   const sold = deal?.soldNet ?? row.soldNet;
   const result = deal?.result ?? row.result;
   const word = resultWord(result, kind);
-  const tone = kind === "alquiler" ? "" : result > 0 ? "gain" : result < 0 ? "loss" : "";
+  const tone = kind === "alquiler" || kind === "transformacion" ? "" : result > 0 ? "gain" : result < 0 ? "loss" : "";
   const vendor = deal?.vendorName || row.vendorName;
+  if (kind === "transformacion") {
+    return (
+      <div>
+        <h3 style={{ marginBottom: 4 }}>{row.iso}</h3>
+        <p className="section-sub" style={{ marginTop: 0 }}>
+          Transformación · {row.type} · {row.cat}
+          {deal?.customer || row.customer ? ` · ${deal?.customer || row.customer}` : ""}
+          {" · "}{day(deal?.date || row.date)}
+        </p>
+        <p className="sale-result" style={{ fontSize: 22, margin: "8px 0" }}>
+          Transformación
+        </p>
+        <p className="section-sub">
+          La cotización vende módulos. Este dry fue el insumo para armarlos y no tiene una línea propia con precio.
+          No es la venta de este equipo ni un alquiler, y el costo no se resta.
+        </p>
+        <div className="sale-math">
+          <div><span>Cotización {deal?.saleName || row.saleName || "sin pedido"}</span><b>Módulos, no este dry</b></div>
+          <div><span>Comercial</span><b>{vendor || "Sin comercial en la cotización"}</b></div>
+          <div><span>Costo del equipo, no se resta</span><b>{money(row.costBase)}</b></div>
+        </div>
+        <p className="section-sub">{deal?.verdictLabel || row.verdictLabel}</p>
+        <p className="section-sub">
+          {(deal?.invoiceName || row.invoiceName)
+            ? `Factura ${deal?.invoiceName || row.invoiceName}${payLabel(deal?.invoicePayment || row.invoicePayment) ? ` · ${payLabel(deal?.invoicePayment || row.invoicePayment)}` : ""}`
+            : "Sin factura de este dry."}
+          {(deal?.outName || row.outName) ? ` Salida ${deal?.outName || row.outName}.` : ""}
+        </p>
+        {row.history?.length > 1 ? <History row={row} deal={deal} /> : null}
+      </div>
+    );
+  }
   if (kind === "alquiler") {
     return (
       <div>
@@ -206,8 +239,8 @@ function History({ row, deal }) {
         >
           <b>{day(item.date)} · {item.saleName}</b>
           <span className="section-sub">
-            {" "}{item.dealKind === "alquiler" ? "Alquiler" : item.soldNet != null ? money(item.soldNet) : "Sin precio"}
-            {" · "}{resultWord(item.result, item.dealKind)} {item.dealKind === "alquiler" || item.result == null ? "" : money(item.result)}
+            {" "}{item.dealKind === "alquiler" ? "Alquiler" : item.dealKind === "transformacion" ? "Transformación" : item.soldNet != null ? money(item.soldNet) : "Sin precio"}
+            {" · "}{resultWord(item.result, item.dealKind)} {item.dealKind === "alquiler" || item.dealKind === "transformacion" || item.result == null ? "" : money(item.result)}
           </span>
         </button>
       ))}
@@ -369,8 +402,8 @@ export default function RealizedSales({ embedded = false }) {
                         </td>
                         <td>{day(row.date)}</td>
                         <td>{row.soldNet != null ? money(row.soldNet) : "—"}</td>
-                        <td className={row.dealKind === "alquiler" ? "" : row.result > 0 ? "sale-result gain" : row.result < 0 ? "sale-result loss" : ""}>
-                          {row.dealKind === "alquiler" ? (row.soldNet != null ? money(row.soldNet) : "—") : row.result == null ? "—" : money(row.result)}
+                        <td className={row.dealKind === "alquiler" || row.dealKind === "transformacion" ? "" : row.result > 0 ? "sale-result gain" : row.result < 0 ? "sale-result loss" : ""}>
+                          {row.dealKind === "alquiler" ? (row.soldNet != null ? money(row.soldNet) : "—") : row.dealKind === "transformacion" || row.result == null ? "—" : money(row.result)}
                           <br />
                           <span className="section-sub">{resultWord(row.result, row.dealKind)}</span>
                         </td>

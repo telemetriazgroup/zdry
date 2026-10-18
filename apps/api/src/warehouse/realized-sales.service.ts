@@ -117,7 +117,9 @@ export class RealizedSalesService {
           const outDate = text(outData.date);
           const date = outDate || saleDate;
           const soldNet = positive(data.unitNet);
-          const dealKind: DealKind | null = text(data.dealKind) === "alquiler" ? "alquiler" : soldNet != null ? "venta" : null;
+          const storedKind = text(data.dealKind);
+          const dealKind: DealKind | null =
+            storedKind === "alquiler" || storedKind === "transformacion" ? storedKind : soldNet != null ? "venta" : null;
           const judged = judgeExitDeal({
             priceSource: unit.priceSource,
             soldNet,
@@ -147,9 +149,11 @@ export class RealizedSalesService {
             verdictLabel:
               dealKind === "alquiler"
                 ? "Alquiler: el equipo vuelve al almacén al terminar. No se resta el costo."
-                : soldNet == null && sale.name
-                  ? "Falta el precio de la línea en Odoo"
-                  : EXIT_VERDICT_LABEL[verdict],
+                : dealKind === "transformacion"
+                  ? "Transformación: el dry fue el insumo del módulo. No se toma el precio de esa venta."
+                  : soldNet == null && sale.name
+                    ? "Falta el precio de la línea en Odoo"
+                    : EXIT_VERDICT_LABEL[verdict],
             optimal: OPTIMAL.has(verdict),
             invoiceName: text(data.invoiceName),
             invoicePayment: text(data.invoicePayment),
@@ -204,7 +208,7 @@ export class RealizedSalesService {
       };
     });
 
-    const salesOnly = rows.filter((row) => row.dealKind !== "alquiler" && row.result != null);
+    const salesOnly = rows.filter((row) => row.dealKind === "venta" && row.result != null);
     const vendors = vendorWeek(events, now);
     const last7Sales = events.filter((event) => event.kind === "venta" && withinLastDays(event.date, now, 7)).length;
     const last7Rents = events.filter((event) => event.kind === "alquiler" && withinLastDays(event.date, now, 7)).length;
@@ -215,8 +219,8 @@ export class RealizedSalesService {
         last7Sales,
         last7Rents,
         openExits,
-        withPrice: rows.filter((row) => row.dealKind !== "alquiler" && row.soldNet != null).length,
-        missingPrice: rows.filter((row) => row.dealKind !== "alquiler" && row.soldNet == null).length,
+        withPrice: rows.filter((row) => row.dealKind === "venta" && row.soldNet != null).length,
+        missingPrice: rows.filter((row) => row.dealKind !== "alquiler" && row.dealKind !== "transformacion" && row.soldNet == null).length,
         rents: rows.filter((row) => row.dealKind === "alquiler").length,
         optimal: rows.filter((row) => row.optimal).length,
         below: rows.filter((row) => BELOW.has(row.verdict)).length,

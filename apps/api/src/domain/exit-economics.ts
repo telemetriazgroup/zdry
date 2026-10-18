@@ -6,6 +6,7 @@ export type ExitVerdict =
   | "igual_inventario"
   | "sobre_inventario"
   | "alquiler"
+  | "transformacion"
   | "sin_cotizacion"
   | "sin_precio";
 
@@ -25,7 +26,7 @@ export function exitOriginLabel(row: {
 export function judgeExitDeal(input: {
   priceSource?: string | null;
   soldNet: number | null;
-  kind: "venta" | "alquiler" | null;
+  kind: "venta" | "alquiler" | "transformacion" | null;
   ruleMin: number;
   ruleList: number;
   inventoryList: number | null;
@@ -37,6 +38,16 @@ export function judgeExitDeal(input: {
   result: number | null;
   resultKind: "margen_venta" | "ingreso_alquiler" | "sin_cierre";
 } {
+  if (input.kind === "transformacion") {
+    return {
+      verdict: "transformacion",
+      comparedTo: "ninguno",
+      referenceMin: null,
+      referenceList: null,
+      result: null,
+      resultKind: "sin_cierre",
+    };
+  }
   if (!input.kind || input.soldNet == null || !Number.isFinite(input.soldNet)) {
     return {
       verdict: input.kind ? "sin_precio" : "sin_cotizacion",
@@ -84,7 +95,12 @@ export function judgeExitDeal(input: {
   };
 }
 
-export function saleMargin(soldNet: number | null, costBase: number, kind: "venta" | "alquiler" | null): number | null {
+export function saleMargin(
+  soldNet: number | null,
+  costBase: number,
+  kind: "venta" | "alquiler" | "transformacion" | null,
+): number | null {
+  if (kind === "transformacion") return null;
   if (soldNet == null || !Number.isFinite(soldNet)) return null;
   if (kind === "alquiler") return Math.round(soldNet);
   if (kind !== "venta") return null;
@@ -99,6 +115,7 @@ export const EXIT_VERDICT_LABEL: Record<ExitVerdict, string> = {
   igual_inventario: "En el precio de inventario",
   sobre_inventario: "Por encima del precio de inventario",
   alquiler: "Alquiler: ingreso del contrato",
+  transformacion: "Transformación: el dry fue insumo del módulo. No es la venta de este equipo.",
   sin_cotizacion: "Salida sin cotización ZDRY",
   sin_precio: "Sin precio de cierre",
 };
