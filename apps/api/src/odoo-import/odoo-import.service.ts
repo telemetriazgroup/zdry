@@ -3039,11 +3039,7 @@ export class OdooImportService {
       ),
     ];
     const [saleLines, invoiceRows] = await Promise.all([
-      saleIds.length
-        ? this.odoo
-            .searchRead("sale.order.line", [["order_id", "in", saleIds]], [...DRY_DOSSIER_LINE_FIELDS], { limit: 800 })
-            .catch(() => [])
-        : [],
+      saleIds.length ? this.readSaleOrderLines(saleIds) : [],
       invoiceIds.length
         ? this.odoo
             .searchRead(
@@ -3151,6 +3147,26 @@ export class OdooImportService {
       n += 1;
     }
     return { checked: n, left };
+  }
+
+  /** Precio de la cotización por línea. Si un campo studio no existe, se lee igual el precio. */
+  private async readSaleOrderLines(saleIds: number[]) {
+    const core = ["id", "order_id", "name", "product_id", "product_uom_qty", "qty_delivered", "qty_invoiced", "price_unit", "price_subtotal", "discount", "display_type"];
+    const limit = Math.max(saleIds.length * 8, 200);
+    let fields = core;
+    try {
+      const known = await this.odoo.fieldsGet("sale.order.line");
+      const wanted = [...new Set([...core, ...DRY_DOSSIER_LINE_FIELDS])];
+      const have = wanted.filter((field) => Boolean(known[field]));
+      if (have.includes("price_unit") && have.includes("price_subtotal")) fields = have;
+    } catch {
+      fields = core;
+    }
+    try {
+      return await this.odoo.searchRead("sale.order.line", [["order_id", "in", saleIds]], fields, { limit });
+    } catch {
+      return this.odoo.searchRead("sale.order.line", [["order_id", "in", saleIds]], core, { limit });
+    }
   }
 
   /** Completa precio de línea y factura de las series que ya salieron. No crea lotes nuevos. */

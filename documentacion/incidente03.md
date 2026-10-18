@@ -21,6 +21,10 @@ Al detectar la salida, el expediente guardaba el pedido, pero el monto era el `a
 
 El módulo **Ventas realizadas** (menú y pestaña de Recepción) es para admin y superadmin. «Completar precios y facturas» vuelve a leer Odoo solo de las series que ya salieron.
 
+## Sin factura
+
+La salida ya autoriza el cálculo. El neto es el de la línea de la cotización (en 10020264184, 1,750 por equipo), aunque `invoice_status` sea «to invoice» y la cantidad facturada sea 0. La columna de factura dice «Sin factura todavía». No se usa el total del pedido cuando hay varias unidades. Si las líneas no traen el ISO pero todas tienen el mismo neto, se usa ese precio de cotización.
+
 ## Límite
 
 La base de costo es la de la ficha hoy, no una foto congelada el día de la venta. El precio vendido sí queda guardado por pedido. Producción no se publicó con este cambio.

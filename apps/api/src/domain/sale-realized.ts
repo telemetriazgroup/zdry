@@ -8,6 +8,7 @@ export type SaleUnitPrice = {
   invoiceState: string | null;
   invoicePayment: string | null;
   invoiceDate: string | null;
+  invoicePending: boolean;
   pickingName: string | null;
 };
 
@@ -20,18 +21,36 @@ function relId(value: unknown) {
   return Number(value) || 0;
 }
 
-/** La línea de esta serie dentro del pedido. El total del pedido puede incluir otros equipos. */
+function productLines(rawLines: Record<string, unknown>[]) {
+  return (rawLines || [])
+    .map((row) => lineFromOdoo(row))
+    .filter((line) => {
+      if (line.displayType) return false;
+      if (!(line.priceSubtotal > 0 || line.priceUnit > 0)) return false;
+      const blob = `${line.description} ${line.studioTipo} ${line.productName}`.toLowerCase();
+      if (/flete|servicio/.test(blob) && !/contenedor|dry/.test(blob)) return false;
+      return true;
+    });
+}
+
+/** La línea de esta serie. Si el pedido no trae el ISO pero todas las líneas valen igual, ese es el precio de la cotización. */
 export function saleLineForUnit(rawLines: Record<string, unknown>[], iso: string): DryDealLineDraft | null {
+  const lines = productLines(rawLines);
   const key = compactKey(iso);
-  if (!key) return null;
-  const lines = (rawLines || []).map((row) => lineFromOdoo(row)).filter((line) => !line.displayType);
-  return (
-    lines.find((line) =>
-      [line.studioEquipo, line.description, line.lotName, line.productName, line.productCode].some((value) =>
-        compactKey(value).includes(key),
-      ),
-    ) || null
-  );
+  const hit = key
+    ? lines.find((line) =>
+        [line.studioEquipo, line.description, line.lotName, line.productName, line.productCode].some((value) =>
+          compactKey(value).includes(key),
+        ),
+      )
+    : null;
+  if (hit) return hit;
+  if (lines.length === 1) return lines[0];
+  const nets = lines.map((line) => netFromSaleLine(line));
+  if (lines.length > 1 && nets.every((net) => net != null && net === nets[0])) {
+    return lines.find((line) => line.qtyDelivered > 0) || lines[0];
+  }
+  return null;
 }
 
 /** Neto de la línea. Si Odoo ya trae el subtotal, ese es el precio vendido (el descuento puede ser monto, no porcentaje). */
@@ -76,8 +95,9 @@ export function saleUnitFromOrder(input: {
     unitNet: netFromSaleLine(matched),
     invoiceName: invoice?.name || null,
     invoiceState: invoice?.state || null,
-    invoicePayment: invoice?.payment || (input.order.invoice_status ? String(input.order.invoice_status) : null),
+    invoicePayment: invoice?.payment || null,
     invoiceDate: invoice?.date || null,
+    invoicePending: !invoice,
     pickingName: input.pickingName || null,
   };
 }

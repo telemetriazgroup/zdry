@@ -23,8 +23,27 @@ const PAY = {
 };
 
 function payLabel(value) {
-  if (!value) return "Sin factura";
+  if (!value) return "";
   return PAY[value] || value;
+}
+
+function InvoiceCell({ name, payment, soldNet }) {
+  if (name) {
+    return (
+      <>
+        {name}
+        <br />
+        <span className="section-sub">{payLabel(payment) || "Factura emitida"}</span>
+      </>
+    );
+  }
+  return (
+    <>
+      Sin factura todavía
+      <br />
+      <span className="section-sub">{soldNet != null ? "Cálculo con el precio de la cotización" : "Aún no se facturó"}</span>
+    </>
+  );
 }
 
 export default function RealizedSales({ embedded = false }) {
@@ -78,7 +97,8 @@ export default function RealizedSales({ embedded = false }) {
       {embedded ? null : <h2 className="section-title">Ventas realizadas</h2>}
       <p className="section-sub">
         Cuando una serie sale a cliente, el expediente guarda el pedido de Odoo, el precio de esa unidad
-        (no el total del pedido), la factura y el día de la salida. La ganancia es ese neto menos la base
+        (no el total del pedido) y el día de la salida. Si todavía no hay factura, el cálculo usa igual el
+        precio de la cotización y queda marcado que la factura está pendiente. La ganancia es ese neto menos la base
         de hoy: OC o ajuste, extras de almacén y margen de seguridad. Óptima si el neto queda en el rango
         calculado o en el precio de inventario fijado a mano, o por encima. Admin y superadmin.
         {embedded ? (
@@ -165,9 +185,7 @@ export default function RealizedSales({ embedded = false }) {
                             <span className="section-sub">{row.verdictLabel}</span>
                           </td>
                           <td>
-                            {row.invoiceName || "Sin factura"}
-                            <br />
-                            <span className="section-sub">{payLabel(row.invoicePayment)}</span>
+                            <InvoiceCell name={row.invoiceName} payment={row.invoicePayment} soldNet={row.soldNet} />
                           </td>
                         </tr>
                         {open ? (
@@ -204,10 +222,15 @@ export default function RealizedSales({ embedded = false }) {
                                         <td>{day(item.date)}{item.saleDate && day(item.saleDate) !== day(item.date) ? ` · pedido ${day(item.saleDate)}` : ""}</td>
                                         <td>{item.saleName}</td>
                                         <td>{item.customer || "—"}</td>
-                                        <td>{item.soldNet != null ? money(item.soldNet) : "Falta la línea"}</td>
+                                        <td>
+                                          {item.soldNet != null ? money(item.soldNet) : "Falta la línea"}
+                                          {item.soldNet != null && !item.invoiceName ? (
+                                            <span className="section-sub"><br />Precio de la cotización</span>
+                                          ) : null}
+                                        </td>
                                         <td>{item.result == null ? "—" : money(item.result)}<br /><span className="section-sub">{item.verdictLabel}</span></td>
                                         <td>{item.outName || "—"}</td>
-                                        <td>{item.invoiceName || "Sin factura"} · {payLabel(item.invoicePayment)}</td>
+                                        <td><InvoiceCell name={item.invoiceName} payment={item.invoicePayment} soldNet={item.soldNet} /></td>
                                       </tr>
                                     ))}
                                   </tbody>
