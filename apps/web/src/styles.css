@@ -64,6 +64,13 @@ button.share-unit { display: block; }
 .share-bar.price > span { background: #1b2b4b; }
 .share-unit { border-top: 1px solid var(--line); padding: 8px 0; font-size: 12px; }
 .share-unit p { margin: 2px 0; color: #667085; }
+.sale-math { display: grid; gap: 6px; margin: 10px 0 14px; }
+.sale-math div { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.sale-math .total { font-weight: 700; border-bottom: 0; font-size: 16px; }
+.sale-result.gain { color: #0b7a32; }
+.sale-result.loss { color: #c92a2a; }
+.sale-pick { width: 100%; text-align: left; border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 8px 10px; margin: 0 0 6px; cursor: pointer; font: inherit; color: inherit; }
+.sale-pick.on { border-color: #fc6f18; background: #fff7f2; }
 @media (max-width: 900px) {
   .share-board { grid-template-columns: 1fr; }
   .share-kpis { grid-template-columns: 1fr 1fr; }

@@ -1,16 +1,15 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 
-function money(value) {
-  if (value == null || value === "" || Number.isNaN(Number(value))) return "—";
-  return `USD ${Number(value).toLocaleString("en-US")}`;
-}
+const PAGE_SIZE = 10;
 
-function day(value) {
-  if (!value) return "—";
-  return String(value).slice(0, 10);
-}
+const TRACE_LABEL = {
+  picking_in: "Entrada",
+  transfer: "Traslado",
+  picking_out: "Despacho",
+  repair: "Reparación",
+};
 
 const PAY = {
   paid: "Pagada",
@@ -22,27 +21,156 @@ const PAY = {
   no: "Sin factura",
 };
 
+function money(value) {
+  if (value == null || value === "" || Number.isNaN(Number(value))) return "—";
+  return `USD ${Number(value).toLocaleString("en-US")}`;
+}
+
+function day(value) {
+  if (!value) return "—";
+  return String(value).slice(0, 10);
+}
+
 function payLabel(value) {
   if (!value) return "";
   return PAY[value] || value;
 }
 
-function InvoiceCell({ name, payment, soldNet }) {
-  if (name) {
-    return (
-      <>
-        {name}
-        <br />
-        <span className="section-sub">{payLabel(payment) || "Factura emitida"}</span>
-      </>
-    );
-  }
+function resultWord(value) {
+  if (value == null) return "Sin cálculo";
+  if (value > 0) return "Ganancia";
+  if (value < 0) return "Pérdida";
+  return "En equilibrio";
+}
+
+function traceStamp(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return Number.MAX_SAFE_INTEGER;
+  const t = Date.parse(value.includes("T") ? value : value.replace(" ", "T"));
+  return Number.isFinite(t) ? t : Number.MAX_SAFE_INTEGER;
+}
+
+function SaleExpediente({ iso }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let stop = false;
+    setData(null);
+    setError("");
+    api(`/warehouse/units/${iso}/expediente`)
+      .then((next) => { if (!stop) setData(next); })
+      .catch((e) => { if (!stop) setError(e.message); });
+    return () => { stop = true; };
+  }, [iso]);
+
+  if (error) return <div className="err">{error}</div>;
+  if (!data) return <p className="section-sub">Cargando expediente…</p>;
+  const trace = [...(data.trace || [])].sort((a, b) => traceStamp(a.date) - traceStamp(b.date) || String(a.name).localeCompare(String(b.name)));
+  const empty = !data.sale?.length && !data.repairs?.length && !data.dispatch?.length && !trace.length;
   return (
-    <>
-      Sin factura todavía
-      <br />
-      <span className="section-sub">{soldNet != null ? "Cálculo con el precio de la cotización" : "Aún no se facturó"}</span>
-    </>
+    <div>
+      <h3>Expediente</h3>
+      {empty ? <p className="section-sub">Esta serie no tiene pedido, salida ni trazabilidad guardados.</p> : null}
+      {data.sale?.length ? (
+        <p className="section-sub">
+          Pedidos: {data.sale.map((doc) => doc.title).filter(Boolean).join(" · ")}
+        </p>
+      ) : null}
+      {data.dispatch?.length ? (
+        <p className="section-sub">
+          Salidas: {data.dispatch.map((doc) => doc.title).filter(Boolean).join(" · ")}
+        </p>
+      ) : null}
+      {trace.length ? (
+        <div className="tablewrap">
+          <table className="data">
+            <thead><tr><th>Fecha</th><th>Movimiento</th><th>Desde</th><th>Hacia</th></tr></thead>
+            <tbody>
+              {trace.map((row) => (
+                <tr key={`${row.kind}-${row.name}`}>
+                  <td>{row.date || "—"}</td>
+                  <td>{TRACE_LABEL[row.kind] || row.kind} · {row.name}</td>
+                  <td>{row.from || "—"}</td>
+                  <td>{row.to || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Calculation({ row, deal }) {
+  const sold = deal?.soldNet ?? row.soldNet;
+  const result = deal?.result ?? row.result;
+  const word = resultWord(result);
+  const tone = result > 0 ? "gain" : result < 0 ? "loss" : "";
+  return (
+    <div>
+      <h3 style={{ marginBottom: 4 }}>{row.iso}</h3>
+      <p className="section-sub" style={{ marginTop: 0 }}>
+        {row.type} · {row.cat}
+        {deal?.customer ? ` · ${deal.customer}` : row.customer ? ` · ${row.customer}` : ""}
+        {" · "}{day(deal?.date || row.date)}
+      </p>
+      <p className={`sale-result ${tone}`} style={{ fontSize: 22, margin: "8px 0" }}>
+        {word} {result == null ? "" : money(result)}
+      </p>
+      <div className="sale-math">
+        <div><span>Origen {row.origin || "sin OC"}</span><b>{money(row.rawBase)}</b></div>
+        <div><span>Extras de almacén</span><b>{money(row.overlayTotal || 0)}</b></div>
+        <div><span>Margen de seguridad</span><b>{money(row.safetyAdd || 0)}</b></div>
+        <div><span>Base de hoy</span><b>{money(row.costBase)}</b></div>
+        <div>
+          <span>
+            Cotización {deal?.saleName || row.saleName || "sin pedido"}
+            {deal?.unitPrice != null || row.unitPrice != null ? ` · unitario ${money(deal?.unitPrice ?? row.unitPrice)}` : ""}
+            {(deal?.discount ?? row.discount) ? ` · desc. ${deal?.discount ?? row.discount}` : ""}
+          </span>
+          <b>{sold != null ? money(sold) : "Sin precio"}</b>
+        </div>
+        <div className="total">
+          <span>{sold != null ? `${money(sold)} − ${money(row.costBase)}` : "Falta el precio de la cotización"}</span>
+          <b className={`sale-result ${tone}`}>{result == null ? "—" : `${word} ${money(result)}`}</b>
+        </div>
+      </div>
+      <p className="section-sub">
+        {deal?.verdictLabel || row.verdictLabel}
+        {row.comparedTo === "inventario"
+          ? ` Se compara contra el precio de inventario ${money(row.referenceList)}.`
+          : row.referenceMin != null
+            ? ` Rango calculado ${money(deal?.referenceMin ?? row.referenceMin)} a ${money(deal?.referenceList ?? row.referenceList)}.`
+            : ""}
+      </p>
+      <p className="section-sub">
+        {(deal?.invoiceName || row.invoiceName)
+          ? `Factura ${deal?.invoiceName || row.invoiceName}${payLabel(deal?.invoicePayment || row.invoicePayment) ? ` · ${payLabel(deal?.invoicePayment || row.invoicePayment)}` : ""}`
+          : "Sin factura todavía. El cálculo usa el precio de la cotización."}
+        {(deal?.outName || row.outName) ? ` Salida ${deal?.outName || row.outName}.` : ""}
+      </p>
+      {row.history?.length > 1 ? (
+        <div>
+          <b>Historial de esta serie</b>
+          {row.history.map((item) => (
+            <button
+              key={item.saleName}
+              type="button"
+              className={deal?.saleName === item.saleName ? "sale-pick on" : "sale-pick"}
+              onClick={() => deal?.onPick?.(item.saleName)}
+            >
+              <b>{day(item.date)} · {item.saleName}</b>
+              <span className="section-sub">
+                {" "}{item.soldNet != null ? money(item.soldNet) : "Sin precio"}
+                {" · "}{resultWord(item.result)} {item.result == null ? "" : money(item.result)}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -51,7 +179,9 @@ export default function RealizedSales({ embedded = false }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
   const [openIso, setOpenIso] = useState("");
+  const [dealName, setDealName] = useState("");
 
   function load() {
     return api("/warehouse/realized-sales")
@@ -92,21 +222,41 @@ export default function RealizedSales({ embedded = false }) {
     );
   }, [rows, q]);
 
+  const pages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const safePage = Math.min(page, pages);
+  const pageRows = visible.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const selected = visible.find((row) => row.iso === openIso) || null;
+  const deal = selected?.history?.find((item) => item.saleName === dealName) || selected?.history?.[0] || null;
+
+  useEffect(() => {
+    setPage(1);
+  }, [q]);
+
+  useEffect(() => {
+    if (!visible.length) {
+      setOpenIso("");
+      return;
+    }
+    if (!visible.some((row) => row.iso === openIso)) {
+      setOpenIso(visible[0].iso);
+      setDealName(visible[0].saleName || visible[0].history?.[0]?.saleName || "");
+    }
+  }, [visible, openIso]);
+
+  function choose(row) {
+    setOpenIso(row.iso);
+    setDealName(row.saleName || row.history?.[0]?.saleName || "");
+  }
+
+  const from = visible.length ? (safePage - 1) * PAGE_SIZE + 1 : 0;
+  const to = Math.min(safePage * PAGE_SIZE, visible.length);
+
   return (
     <div style={embedded ? { marginTop: 12 } : undefined}>
       {embedded ? null : <h2 className="section-title">Ventas realizadas</h2>}
       <p className="section-sub">
-        Cuando una serie sale a cliente, el expediente guarda el pedido de Odoo, el precio de esa unidad
-        (no el total del pedido) y el día de la salida. Si todavía no hay factura, el cálculo usa igual el
-        precio de la cotización y queda marcado que la factura está pendiente. La ganancia es ese neto menos la base
-        de hoy: OC o ajuste, extras de almacén y margen de seguridad. Óptima si el neto queda en el rango
-        calculado o en el precio de inventario fijado a mano, o por encima. Admin y superadmin.
-        {embedded ? (
-          <>
-            {" "}
-            <Link to="/app/ventas-realizadas">Abrir el módulo</Link>
-          </>
-        ) : null}
+        Diez ventas por página. Al elegir un equipo, a la derecha se arma la ganancia o la pérdida y se abre su expediente.
+        {embedded ? <> <Link to="/app/ventas-realizadas">Abrir el módulo</Link></> : null}
       </p>
       {error ? <div className="err">{error}</div> : null}
       {!data && !error ? <p className="section-sub">Leyendo ventas realizadas…</p> : null}
@@ -114,10 +264,10 @@ export default function RealizedSales({ embedded = false }) {
         <>
           <div className="panel" style={{ marginBottom: 12 }}>
             <p className="section-sub" style={{ marginTop: 0 }}>
-              <b>{summary.last7 || 0}</b> venta(s) o salida(s) en los últimos 7 días.
-              {" "}{summary.units || 0} equipo(s) en cliente.
-              {" "}{summary.withPrice || 0} con precio de línea.
-              {" "}{summary.missingPrice || 0} todavía sin el neto de Odoo.
+              <b>{summary.last7 || 0}</b> en los últimos 7 días.
+              {" "}{summary.units || 0} en cliente.
+              {" "}{summary.withPrice || 0} con precio.
+              {" "}{summary.missingPrice || 0} sin neto.
               {" "}{summary.optimal || 0} óptima(s), {summary.below || 0} por debajo.
               {" "}Ganancia {money(summary.gain)}. Pérdida {money(summary.loss)}.
             </p>
@@ -133,124 +283,65 @@ export default function RealizedSales({ embedded = false }) {
               </button>
             </div>
           </div>
-          <div className="panel">
-            <div className="tablewrap">
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th>Equipo</th>
-                    <th>Día</th>
-                    <th>Pedido</th>
-                    <th>Vendido</th>
-                    <th>Base</th>
-                    <th>Resultado</th>
-                    <th>Factura</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.map((row) => {
-                    const open = openIso === row.iso;
-                    return (
-                      <Fragment key={row.iso}>
-                        <tr onClick={() => setOpenIso(open ? "" : row.iso)} style={{ cursor: "pointer" }}>
-                          <td>
-                            <b>{row.iso}</b>
-                            <br />
-                            {row.type} · {row.cat}
-                          </td>
-                          <td>{day(row.date)}</td>
-                          <td>
-                            {row.saleName || "Sin pedido"}
-                            <br />
-                            {row.customer || row.outName || ""}
-                          </td>
-                          <td>
-                            {row.soldNet != null ? money(row.soldNet) : "—"}
-                            {row.unitPrice != null ? (
-                              <span className="section-sub">
-                                <br />
-                                unitario {money(row.unitPrice)}
-                                {row.discount ? ` · desc. ${row.discount}` : ""}
-                              </span>
-                            ) : null}
-                          </td>
-                          <td>
-                            {money(row.costBase)}
-                            <br />
-                            <span className="section-sub">{row.origin}</span>
-                          </td>
-                          <td>
-                            {row.result == null ? "—" : money(row.result)}
-                            <br />
-                            <span className="section-sub">{row.verdictLabel}</span>
-                          </td>
-                          <td>
-                            <InvoiceCell name={row.invoiceName} payment={row.invoicePayment} soldNet={row.soldNet} />
-                          </td>
-                        </tr>
-                        {open ? (
-                          <tr key={`${row.iso}-hist`}>
-                            <td colSpan={7}>
-                              <p className="section-sub">
-                                Base de hoy {money(row.rawBase)}
-                                {row.overlayTotal ? ` + extras ${money(row.overlayTotal)}` : ""}
-                                {row.safetyAdd ? ` + margen ${money(row.safetyAdd)}` : ""}
-                                {" = "}
-                                {money(row.costBase)}.
-                                {row.comparedTo === "inventario"
-                                  ? ` Se compara contra el precio de inventario ${money(row.referenceList)}.`
-                                  : row.referenceMin != null
-                                    ? ` Rango calculado ${money(row.referenceMin)} a ${money(row.referenceList)}.`
-                                    : ""}
-                              </p>
-                              {row.history?.length ? (
-                                <table className="data">
-                                  <thead>
-                                    <tr>
-                                      <th>Día de salida</th>
-                                      <th>Pedido</th>
-                                      <th>Cliente</th>
-                                      <th>Neto</th>
-                                      <th>Resultado</th>
-                                      <th>Salida</th>
-                                      <th>Factura</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {row.history.map((item) => (
-                                      <tr key={item.saleName}>
-                                        <td>{day(item.date)}{item.saleDate && day(item.saleDate) !== day(item.date) ? ` · pedido ${day(item.saleDate)}` : ""}</td>
-                                        <td>{item.saleName}</td>
-                                        <td>{item.customer || "—"}</td>
-                                        <td>
-                                          {item.soldNet != null ? money(item.soldNet) : "Falta la línea"}
-                                          {item.soldNet != null && !item.invoiceName ? (
-                                            <span className="section-sub"><br />Precio de la cotización</span>
-                                          ) : null}
-                                        </td>
-                                        <td>{item.result == null ? "—" : money(item.result)}<br /><span className="section-sub">{item.verdictLabel}</span></td>
-                                        <td>{item.outName || "—"}</td>
-                                        <td><InvoiceCell name={item.invoiceName} payment={item.invoicePayment} soldNet={item.soldNet} /></td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              ) : (
-                                <p className="section-sub">Hay salida, pero el pedido todavía no está en el expediente. Completar precios lo lee en Odoo.</p>
-                              )}
-                            </td>
-                          </tr>
-                        ) : null}
-                      </Fragment>
-                    );
-                  })}
-                  {!visible.length ? (
+          <div className="share-board">
+            <div className="panel">
+              <h3 style={{ marginTop: 0 }}>Ventas</h3>
+              <div className="tablewrap share-scroll">
+                <table className="data">
+                  <thead>
                     <tr>
-                      <td colSpan={7}>No hay ventas realizadas con ese filtro.</td>
+                      <th>Equipo</th>
+                      <th>Día</th>
+                      <th>Vendido</th>
+                      <th>Resultado</th>
                     </tr>
-                  ) : null}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {pageRows.map((row) => (
+                      <tr
+                        key={row.iso}
+                        className={row.iso === openIso ? "share-row-on" : ""}
+                        onClick={() => choose(row)}
+                        style={{ cursor: "pointer" }}
+                      >
+                        <td>
+                          <b>{row.iso}</b>
+                          <br />
+                          <span className="section-sub">{row.saleName || "Sin pedido"}</span>
+                        </td>
+                        <td>{day(row.date)}</td>
+                        <td>{row.soldNet != null ? money(row.soldNet) : "—"}</td>
+                        <td className={row.result > 0 ? "sale-result gain" : row.result < 0 ? "sale-result loss" : ""}>
+                          {row.result == null ? "—" : money(row.result)}
+                          <br />
+                          <span className="section-sub">{resultWord(row.result)}</span>
+                        </td>
+                      </tr>
+                    ))}
+                    {!pageRows.length ? (
+                      <tr><td colSpan={4}>No hay ventas con ese filtro.</td></tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+              <div className="odoo-pager">
+                <button className="btn-ghost" type="button" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>Anterior</button>
+                <span>{from}–{to} de {visible.length} · Página {safePage} / {pages}</span>
+                <button className="btn-ghost" type="button" disabled={safePage >= pages} onClick={() => setPage(safePage + 1)}>Siguiente</button>
+              </div>
+            </div>
+            <div className="panel share-scroll">
+              {selected ? (
+                <>
+                  <Calculation
+                    row={selected}
+                    deal={deal ? { ...deal, onPick: setDealName } : null}
+                  />
+                  <SaleExpediente iso={selected.iso} />
+                </>
+              ) : (
+                <p className="section-sub">Elige una venta para ver el cálculo y el expediente.</p>
+              )}
             </div>
           </div>
         </>
