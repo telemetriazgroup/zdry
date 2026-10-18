@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
+import { useAuth } from "../auth.jsx";
 import { downloadAuditExcel, downloadAuditPdf } from "../audit-export.js";
 
 function defaultFrom() {
@@ -13,6 +14,8 @@ function defaultTo() {
 }
 
 export default function AuditPage() {
+  const { user } = useAuth();
+  const adminView = user?.role === "admin";
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
   const [data, setData] = useState({ rows: [], total: 0, truncated: false });
@@ -58,8 +61,10 @@ export default function AuditPage() {
     <>
       <h2 className="section-title">Auditoría</h2>
       <p className="section-sub">
-        Registro append-only de logins, maestros, personas y cambios de sistema. Solo superusuario.
-        Busca por rango de fechas (hora de Lima) y descarga el reporte.
+        {adminView
+          ? "Lo que hacen los usuarios. No incluye las acciones del superadmin."
+          : "Registro de logins, maestros, personas y cambios de sistema."}
+        {" "}Busca por rango de fechas (hora de Lima) y descarga el reporte.
       </p>
       {error ? <div className="err">{error}</div> : null}
 

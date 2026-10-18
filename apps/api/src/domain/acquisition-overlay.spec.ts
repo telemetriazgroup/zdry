@@ -44,6 +44,13 @@ describe("acquisition-overlay", () => {
     expect(zgrou.base).toBe(1375);
   });
 
+  it("Todos aplica el extra en cada plaza y no en una unidad sin plaza", () => {
+    const all = { ...piuraMove, id: "all", key: "tracking", label: "Tracking", target: "TODOS", amount: 30 };
+    expect(applyOverlays({ amount: 500, kind: "fobCif" }, { odooWarehouse: "PIURA" }, [all]).overlayTotal).toBe(30);
+    expect(applyOverlays({ amount: 500, kind: "fobCif" }, { odooWarehouse: "ZGROU" }, [all]).overlayTotal).toBe(30);
+    expect(applyOverlays({ amount: 500, kind: "fobCif" }, { odooWarehouse: "" }, [all]).overlayTotal).toBe(0);
+  });
+
   it("applies oc no suma sobre referencial; skipKeys apaga un concepto", () => {
     expect(overlayAppliesTo("oc", "referential")).toBe(false);
     expect(overlayAppliesTo("referential", "fobCif")).toBe(false);

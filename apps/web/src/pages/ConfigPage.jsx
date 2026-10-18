@@ -893,6 +893,7 @@ export default function ConfigPage() {
         <p className="section-sub">
           Se suman a la OC o al referencial para armar la base. No pisan el costo Odoo. ZGROU y Piura son plazas de existencias;
           el patio fino (Principal / Gambeta) lo elige el coordinador y no cambia este extra.
+          Destino Todos aplica el concepto en cada plaza que ya existe, sin repetir la misma regla en Piura y en ZGROU.
         </p>
         {overlays.map((r, i) => (
           <div className="form-grid" key={r.id || i}>
@@ -919,6 +920,7 @@ export default function ConfigPage() {
               ) : (
                 <select value={r.target || ""} onChange={(e) => setOverlays(overlays.map((x, j) => j === i ? { ...x, target: e.target.value } : x))}>
                   <option value="">Elegir…</option>
+                  <option value="TODOS">Todos</option>
                   {(overlayMeta.warehouses || []).map((w) => (
                     <option key={w.code} value={w.code}>{w.label}</option>
                   ))}

@@ -4,6 +4,7 @@
  */
 
 export const ACQUISITION_OVERLAYS_KEY = "acquisition_overlays";
+export const OVERLAY_ALL_WAREHOUSES = "TODOS";
 
 export type OverlayApplies = "oc" | "referential" | "all";
 export type OverlayScope = "warehouse" | "vendor";
@@ -99,7 +100,10 @@ export function overlayAppliesTo(applies: OverlayApplies, acqKind: string): bool
 export function matchOverlayTarget(concept: OverlayConcept, unit: OverlayUnit): boolean {
   if (!concept.active) return false;
   if (concept.scope === "warehouse") {
-    return String(unit.odooWarehouse || "").toUpperCase() === concept.target.toUpperCase();
+    const warehouse = String(unit.odooWarehouse || "").toUpperCase();
+    const target = concept.target.toUpperCase();
+    if (target === OVERLAY_ALL_WAREHOUSES) return !!warehouse;
+    return warehouse === target;
   }
   const vendor = normalizeVendorTarget(unit.odooVendorName);
   return !!vendor && vendor.toLowerCase() === concept.target.toLowerCase();

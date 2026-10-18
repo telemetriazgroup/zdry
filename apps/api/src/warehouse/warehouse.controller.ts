@@ -19,12 +19,16 @@ import { Roles } from "../auth/roles.decorator";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
 import { hideOdooFor, hideOdooIdsFor, hideRatesFor, WarehouseService } from "./warehouse.service";
+import { ExitEconomicsService } from "./exit-economics.service";
 import { MAX_INSPECTION_VIDEO_BYTES } from "../domain/inspection-media";
 
 @Controller("warehouse")
 @Roles("admin", "almacen", "coordinador")
 export class WarehouseController {
-  constructor(private readonly warehouse: WarehouseService) {}
+  constructor(
+    private readonly warehouse: WarehouseService,
+    private readonly exits: ExitEconomicsService,
+  ) {}
 
   @Get("meta")
   meta(@CurrentUser() user: AuthUser) {
@@ -45,6 +49,12 @@ export class WarehouseController {
   @Roles("admin", "coordinador")
   atCustomer(@CurrentUser() user: AuthUser) {
     return this.warehouse.atCustomer(user);
+  }
+
+  @Get("exit-economics")
+  @Roles("admin")
+  exitEconomics() {
+    return this.exits.list();
   }
 
   @Get("pending")

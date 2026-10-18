@@ -9,6 +9,7 @@ import Masters from "./Masters.jsx";
 import People from "./People.jsx";
 import ConfigPage from "./ConfigPage.jsx";
 import AuditPage from "./AuditPage.jsx";
+import CommercialActivity from "./CommercialActivity.jsx";
 import ComingSoon from "./ComingSoon.jsx";
 import Compras from "./Compras.jsx";
 import Recepcion from "./Recepcion.jsx";
@@ -203,6 +204,7 @@ export default function Shell() {
             <Route path="maestros" element={<Gate nav={nav} role={user.role} path="/app/maestros"><Masters /></Gate>} />
             <Route path="configuracion" element={<Gate nav={nav} role={user.role} path="/app/configuracion"><ConfigPage /></Gate>} />
             <Route path="auditoria" element={<Gate nav={nav} role={user.role} path="/app/auditoria"><AuditPage /></Gate>} />
+            <Route path="comerciales" element={<Gate nav={nav} role={user.role} path="/app/comerciales"><CommercialActivity /></Gate>} />
             <Route path="precios" element={<Gate nav={nav} role={user.role} path="/app/precios"><ConfigPage /></Gate>} />
             <Route path="equipo" element={<Gate nav={nav} role={user.role} path="/app/equipo"><ComingSoon title="Desempeño del equipo" sprint="9" /></Gate>} />
             <Route path="bandeja" element={<Gate nav={nav} role={user.role} path="/app/bandeja"><QuotesHub /></Gate>} />

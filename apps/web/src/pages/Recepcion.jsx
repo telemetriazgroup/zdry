@@ -22,6 +22,75 @@ const EMPTY_VISIT = {
   equipmentCode: "",
 };
 
+function money(value) {
+  if (value == null || value === "") return "—";
+  return `USD ${Number(value).toLocaleString("en-US")}`;
+}
+
+function ExitEvolution({ data, error }) {
+  if (error) return <div className="err">{error}</div>;
+  if (!data) return <p className="section-sub">Leyendo salidas, cotizaciones y costos…</p>;
+  const summary = data.summary || {};
+  const rows = data.rows || [];
+  return (
+    <div className="panel" style={{ marginTop: 12 }}>
+      <h3>Evolución de salidas</h3>
+      <p className="section-sub">
+        {summary.units || 0} salida(s). {summary.withQuote || 0} con cotización ZDRY
+        {" "}({summary.sales || 0} venta, {summary.rents || 0} alquiler).
+        Ganancia de ventas {money(summary.salesGain)}. Ingreso de alquileres {money(summary.rentIncome)}.
+        {" "}{summary.below || 0} por debajo, {summary.inside || 0} en rango, {summary.above || 0} por encima.
+        El costo junta la OC o el ajuste, los extras de almacén y el margen de seguridad.
+        Si el precio de inventario se fijó a mano, se compara contra ese precio. Si no, contra el rango calculado.
+        El alquiler no resta el costo del equipo: el contenedor sigue siendo activo.
+      </p>
+      <div className="tablewrap">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>ISO</th>
+              <th>Origen</th>
+              <th>Costo</th>
+              <th>Cierre</th>
+              <th>Responsable</th>
+              <th>Resultado</th>
+              <th>Odoo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.iso}>
+                <td><b>{row.iso}</b><br />{row.type} · {row.cat}</td>
+                <td>{row.origin}{row.warehouse ? ` · ${row.warehouse}` : ""}</td>
+                <td>
+                  {money(row.rawBase)}
+                  {row.overlayTotal ? ` + extras ${money(row.overlayTotal)}` : ""}
+                  {row.safetyAdd ? ` + margen ${money(row.safetyAdd)}` : ""}
+                  <br />base {money(row.costBase)}
+                </td>
+                <td>
+                  {row.quoteNumber ? `${row.quoteNumber} · ${row.quoteKind}` : "Sin cotización ZDRY"}
+                  <br />{row.soldNet != null ? money(row.soldNet) : "—"}
+                  <br />{row.verdictLabel}
+                  {row.referenceMin != null ? ` · ref ${money(row.referenceMin)}${row.referenceList !== row.referenceMin ? `–${money(row.referenceList)}` : ""}` : ""}
+                </td>
+                <td>{row.responsible || "—"}<br />{row.customer || ""}</td>
+                <td>{row.result == null ? "—" : money(row.result)}</td>
+                <td>
+                  {row.odooSaleName || "Sin pedido"}
+                  <br />{row.odooInvoiceName || "Sin factura"}
+                  {row.odooInvoiceStatus ? ` · ${row.odooInvoiceStatus}` : ""}
+                </td>
+              </tr>
+            ))}
+            {!rows.length ? <tr><td colSpan={7}>No hay salidas asimiladas desde Odoo.</td></tr> : null}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 const TRACE_LABEL = {
   picking_in: "Entrada",
   transfer: "Traslado",
@@ -332,6 +401,9 @@ export default function Recepcion() {
   const [pending, setPending] = useState([]);
   const [validated, setValidated] = useState([]);
   const [listTab, setListTab] = useState("pendientes");
+  const [clienteView, setClienteView] = useState("lista");
+  const [exits, setExits] = useState(null);
+  const [exitsError, setExitsError] = useState("");
   const [mode, setMode] = useState("bandeja");
   const [inspectIso, setInspectIso] = useState(null);
   const [expOpen, setExpOpen] = useState(false);
@@ -2108,12 +2180,34 @@ export default function Recepcion() {
           En campo ({validated.length})
         </button>
         {user.role !== "almacen" ? (
-          <button type="button" className={listTab === "cliente" ? "on" : ""} onClick={() => { setListTab("cliente"); setPendingPage(1); }}>
+          <button type="button" className={listTab === "cliente" ? "on" : ""} onClick={() => { setListTab("cliente"); setClienteView("lista"); setPendingPage(1); }}>
             Venta / en cliente ({atCustomer.length})
           </button>
         ) : null}
       </div>
-      {board.length ? (
+      {listTab === "cliente" && canSeeOdoo ? (
+        <div className="recv-tabs">
+          <button type="button" className={clienteView === "lista" ? "on" : ""} onClick={() => setClienteView("lista")}>Equipos</button>
+          <button
+            type="button"
+            className={clienteView === "evolucion" ? "on" : ""}
+            onClick={() => {
+              setClienteView("evolucion");
+              if (!exits) {
+                api("/warehouse/exit-economics")
+                  .then(setExits)
+                  .catch((e) => setExitsError(e.message));
+              }
+            }}
+          >
+            Evolución de salidas
+          </button>
+        </div>
+      ) : null}
+      {listTab === "cliente" && clienteView === "evolucion" && canSeeOdoo ? (
+        <ExitEvolution data={exits} error={exitsError} />
+      ) : null}
+      {listTab === "cliente" && clienteView === "evolucion" && canSeeOdoo ? null : board.length ? (
         <>
           <h3 style={{ marginTop: 0 }}>
             {listTab === "campo" ? "En campo" : listTab === "cliente" ? "Venta / en cliente" : "Pendientes"} ({filteredPending.length}{(pendingQ.trim() || filterType || filterDepot || filterCat) ? ` de ${board.length}` : ""})
