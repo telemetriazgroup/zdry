@@ -114,6 +114,47 @@ describe("precio de la línea vendida", () => {
     expect(judgeExitDeal({ priceSource: "rule", soldNet: file.unitNet, kind: "alquiler", ruleMin: 1656, ruleList: 1711, inventoryList: null }).verdict).toBe("alquiler");
   });
 
+  it("la serie en precio 0 es alquiler y la cuota de 120 no es pérdida", () => {
+    const file = saleUnitFromOrder({
+      iso: "MSKU0671529",
+      order: { id: 94, name: "10020264094", invoice_ids: [], invoice_status: "to invoice" },
+      lines: [
+        {
+          id: 1,
+          order_id: [94, "10020264094"],
+          price_unit: 120,
+          price_subtotal: 120,
+          name: "SERVICIO DE CONTENEDOR DRY 40 HC TARIFA MENSUAL",
+          product_uom_qty: 1,
+          qty_delivered: 0,
+        },
+        {
+          id: 2,
+          order_id: [94, "10020264094"],
+          price_unit: 0,
+          price_subtotal: 0,
+          name: "ASIGNAR CODIGOS",
+          x_studio_equipo: "MSKU067152-9",
+          product_uom_qty: 1,
+          qty_delivered: 1,
+        },
+      ],
+      invoices: [],
+      pickingName: "ZGROU/OUT/08721",
+    });
+    expect(file.dealKind).toBe("alquiler");
+    expect(file.unitNet).toBe(120);
+    expect(saleMargin(file.unitNet, 1567, file.dealKind)).toBe(120);
+    expect(judgeExitDeal({
+      priceSource: "rule",
+      soldNet: file.unitNet,
+      kind: file.dealKind,
+      ruleMin: 1685,
+      ruleList: 1741,
+      inventoryList: null,
+    }).verdict).toBe("alquiler");
+  });
+
   it("ordena a los comerciales por ventas de dry de la semana y aparta el alquiler", () => {
     const now = new Date("2026-10-17T20:00:00-05:00");
     const rows = vendorWeek(

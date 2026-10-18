@@ -14,4 +14,6 @@ La salida tomaba la única línea con precio y la trataba como venta. La línea 
 
 La cotización se clasifica al leerla. Es alquiler si tiene plan recurrente, suscripción, leasing o la palabra alquiler en el asunto o en las líneas. En ese caso se guarda la cuota y el comercial, y el resultado es la cuota: no se resta la base. La ficha dice que el equipo vuelve al almacén.
 
+Si la línea de la serie está en precio 0, también es alquiler, aunque la cuota de al lado no diga la palabra. En 10020264094, MSKU0671529 está en USD 0 y el servicio en USD 120. Esos 120 son la cuota. No se restan de la base de USD 1,567 y no salen como pérdida de USD 1,447. Una serie con precio propio, como la venta anterior de USD 2,400, sigue siendo venta.
+
 Los últimos 7 días cuentan las ventas aparte de los alquileres. Los comerciales de esas cotizaciones se ordenan por ventas de dry. El ritmo mensual repite esa semana cuatro veces. La ganancia y la pérdida del resumen son solo de ventas.

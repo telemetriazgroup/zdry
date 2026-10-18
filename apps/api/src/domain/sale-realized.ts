@@ -69,8 +69,32 @@ function lineBlob(line: DryDealLineDraft) {
   return `${line.description} ${line.studioTipo} ${line.productName}`;
 }
 
-/** Suscripción, plan recurrente o asunto/línea de alquiler: el equipo vuelve; no es una venta. */
-export function quotationKind(order: Record<string, unknown>, lines: DryDealLineDraft[]): DealKind {
+function lineHasPrice(line: DryDealLineDraft) {
+  return line.priceSubtotal > 0 || line.priceUnit > 0;
+}
+
+/** La línea que asigna esta serie, aunque el precio sea 0. */
+function equipmentLine(lines: DryDealLineDraft[], iso: string): DryDealLineDraft | null {
+  const key = compactKey(iso);
+  if (!key) return null;
+  const bySerial = lines.find((line) => compactKey(line.studioEquipo).includes(key) || compactKey(line.lotName).includes(key));
+  if (bySerial) return bySerial;
+  return (
+    lines.find((line) =>
+      [line.description, line.productName, line.productCode].some((value) => compactKey(value).includes(key)),
+    ) || null
+  );
+}
+
+/**
+ * La serie en precio 0 es alquiler: el contenedor vuelve.
+ * También lo es una suscripción, un plan recurrente o la palabra alquiler.
+ */
+export function quotationKind(order: Record<string, unknown>, lines: DryDealLineDraft[], iso?: string): DealKind {
+  if (iso) {
+    const unit = equipmentLine(lines, iso);
+    if (unit && !lineHasPrice(unit)) return "alquiler";
+  }
   const plan = order.plan_id;
   const hasPlan = Array.isArray(plan) ? Number(plan[0]) > 0 : Boolean(plan) && plan !== false;
   if (order.is_subscription === true || hasPlan || order.x_studio_leasing === true) return "alquiler";
@@ -79,12 +103,15 @@ export function quotationKind(order: Record<string, unknown>, lines: DryDealLine
   return "venta";
 }
 
-/** Cuota del servicio de alquiler. No es el precio de venta del equipo. */
-export function rentFee(lines: DryDealLineDraft[]): number | null {
-  const fees = lines
-    .filter((line) => !line.displayType && /\balquiler\b/i.test(lineBlob(line)))
-    .map((line) => netFromSaleLine(line))
-    .filter((net): net is number => net != null && net > 0);
+/** Cuota del servicio. No es el precio de venta del equipo. */
+export function rentFee(lines: DryDealLineDraft[], iso?: string): number | null {
+  const named = lines.filter((line) => !line.displayType && /\balquiler\b/i.test(lineBlob(line)) && lineHasPrice(line));
+  const unit = iso ? equipmentLine(lines, iso) : null;
+  const services =
+    named.length || !unit || lineHasPrice(unit)
+      ? named
+      : lines.filter((line) => line !== unit && !line.displayType && lineHasPrice(line) && !compactKey(line.studioEquipo).includes(compactKey(iso || "")));
+  const fees = services.map((line) => netFromSaleLine(line)).filter((net): net is number => net != null && net > 0);
   if (!fees.length) return null;
   return Math.round(fees.reduce((sum, net) => sum + net, 0) * 100) / 100;
 }
@@ -160,9 +187,9 @@ export function saleUnitFromOrder(input: {
   const orderId = Number(input.order.id) || 0;
   const rawLines = (input.lines || []).filter((line) => relId(line.order_id) === orderId);
   const drafts = rawLines.map((row) => lineFromOdoo(row)).filter((line) => !line.displayType);
-  const dealKind = quotationKind(input.order, drafts);
+  const dealKind = quotationKind(input.order, drafts, input.iso);
   const matched = dealKind === "venta" ? saleLineForUnit(rawLines, input.iso) : null;
-  const fee = dealKind === "alquiler" ? rentFee(drafts) : null;
+  const fee = dealKind === "alquiler" ? rentFee(drafts, input.iso) : null;
   const invIds = new Set(
     (Array.isArray(input.order.invoice_ids) ? input.order.invoice_ids : []).map((id) => Number(id)).filter((id) => id > 0),
   );
