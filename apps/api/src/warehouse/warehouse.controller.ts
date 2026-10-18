@@ -20,6 +20,7 @@ import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
 import { hideOdooFor, hideOdooIdsFor, hideRatesFor, WarehouseService } from "./warehouse.service";
 import { ExitEconomicsService } from "./exit-economics.service";
+import { RealizedSalesService } from "./realized-sales.service";
 import { MAX_INSPECTION_VIDEO_BYTES } from "../domain/inspection-media";
 
 @Controller("warehouse")
@@ -28,6 +29,7 @@ export class WarehouseController {
   constructor(
     private readonly warehouse: WarehouseService,
     private readonly exits: ExitEconomicsService,
+    private readonly realized: RealizedSalesService,
   ) {}
 
   @Get("meta")
@@ -55,6 +57,18 @@ export class WarehouseController {
   @Roles("admin")
   exitEconomics() {
     return this.exits.list();
+  }
+
+  @Get("realized-sales")
+  @Roles("admin")
+  realizedSales() {
+    return this.realized.list();
+  }
+
+  @Post("realized-sales/refresh")
+  @Roles("admin")
+  refreshRealizedSales() {
+    return this.realized.refresh();
   }
 
   @Get("pending")

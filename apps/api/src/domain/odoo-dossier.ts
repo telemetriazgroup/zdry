@@ -109,6 +109,16 @@ export function moveDossierDraft(input: {
   locationDest?: string | null;
   amount?: number | null;
   iso: string;
+  saleUnit?: {
+    unitPrice?: number | null;
+    discount?: number | null;
+    unitNet?: number | null;
+    invoiceName?: string | null;
+    invoiceState?: string | null;
+    invoicePayment?: string | null;
+    invoiceDate?: string | null;
+    pickingName?: string | null;
+  } | null;
 }): DocDraft {
   const saleType = input.state === "draft" || input.state === "sent" ? "Cotización" : "Venta";
   const type =
@@ -129,6 +139,14 @@ export function moveDossierDraft(input: {
       locationSrc: input.locationSrc || null,
       locationDest: input.locationDest || null,
       amountTotal: input.amount ?? null,
+      unitPrice: input.saleUnit?.unitPrice ?? null,
+      discount: input.saleUnit?.discount ?? null,
+      unitNet: input.saleUnit?.unitNet ?? null,
+      invoiceName: input.saleUnit?.invoiceName ?? null,
+      invoiceState: input.saleUnit?.invoiceState ?? null,
+      invoicePayment: input.saleUnit?.invoicePayment ?? null,
+      invoiceDate: input.saleUnit?.invoiceDate ?? null,
+      pickingName: input.saleUnit?.pickingName ?? null,
       isos: [input.iso],
     },
   };

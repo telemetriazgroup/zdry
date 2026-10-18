@@ -7,6 +7,7 @@ import { useLightbox } from "../media-lightbox.jsx";
 import { parseIso6346 } from "../iso6346.js";
 import { EvalCorrect } from "../eval-ratings.jsx";
 import { downloadCsv } from "../csv.js";
+import RealizedSales from "./RealizedSales.jsx";
 
 const PAGE_SIZE = 20;
 const EMPTY_VISIT = {
@@ -22,75 +23,6 @@ const EMPTY_VISIT = {
   equipmentCode: "",
 };
 
-function money(value) {
-  if (value == null || value === "") return "—";
-  return `USD ${Number(value).toLocaleString("en-US")}`;
-}
-
-function ExitEvolution({ data, error }) {
-  if (error) return <div className="err">{error}</div>;
-  if (!data) return <p className="section-sub">Leyendo salidas, cotizaciones y costos…</p>;
-  const summary = data.summary || {};
-  const rows = data.rows || [];
-  return (
-    <div className="panel" style={{ marginTop: 12 }}>
-      <h3>Evolución de salidas</h3>
-      <p className="section-sub">
-        {summary.units || 0} salida(s). {summary.withQuote || 0} con cotización ZDRY
-        {" "}({summary.sales || 0} venta, {summary.rents || 0} alquiler).
-        Ganancia de ventas {money(summary.salesGain)}. Ingreso de alquileres {money(summary.rentIncome)}.
-        {" "}{summary.below || 0} por debajo, {summary.inside || 0} en rango, {summary.above || 0} por encima.
-        El costo junta la OC o el ajuste, los extras de almacén y el margen de seguridad.
-        Si el precio de inventario se fijó a mano, se compara contra ese precio. Si no, contra el rango calculado.
-        El alquiler no resta el costo del equipo: el contenedor sigue siendo activo.
-      </p>
-      <div className="tablewrap">
-        <table className="data">
-          <thead>
-            <tr>
-              <th>ISO</th>
-              <th>Origen</th>
-              <th>Costo</th>
-              <th>Cierre</th>
-              <th>Responsable</th>
-              <th>Resultado</th>
-              <th>Odoo</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.iso}>
-                <td><b>{row.iso}</b><br />{row.type} · {row.cat}</td>
-                <td>{row.origin}{row.warehouse ? ` · ${row.warehouse}` : ""}</td>
-                <td>
-                  {money(row.rawBase)}
-                  {row.overlayTotal ? ` + extras ${money(row.overlayTotal)}` : ""}
-                  {row.safetyAdd ? ` + margen ${money(row.safetyAdd)}` : ""}
-                  <br />base {money(row.costBase)}
-                </td>
-                <td>
-                  {row.quoteNumber ? `${row.quoteNumber} · ${row.quoteKind}` : "Sin cotización ZDRY"}
-                  <br />{row.soldNet != null ? money(row.soldNet) : "—"}
-                  <br />{row.verdictLabel}
-                  {row.referenceMin != null ? ` · ref ${money(row.referenceMin)}${row.referenceList !== row.referenceMin ? `–${money(row.referenceList)}` : ""}` : ""}
-                </td>
-                <td>{row.responsible || "—"}<br />{row.customer || ""}</td>
-                <td>{row.result == null ? "—" : money(row.result)}</td>
-                <td>
-                  {row.odooSaleName || "Sin pedido"}
-                  <br />{row.odooInvoiceName || "Sin factura"}
-                  {row.odooInvoiceStatus ? ` · ${row.odooInvoiceStatus}` : ""}
-                </td>
-              </tr>
-            ))}
-            {!rows.length ? <tr><td colSpan={7}>No hay salidas asimiladas desde Odoo.</td></tr> : null}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
 const TRACE_LABEL = {
   picking_in: "Entrada",
   transfer: "Traslado",
@@ -105,7 +37,7 @@ function traceStamp(raw) {
   return Number.isFinite(t) ? t : Number.MAX_SAFE_INTEGER;
 }
 
-function DispatchExpediente({ iso, open }) {
+function DispatchExpediente({ iso, open, showSalesLink = false }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
 
@@ -138,7 +70,16 @@ function DispatchExpediente({ iso, open }) {
       {data.sale?.length ? (
         <div>
           <b>Venta</b>
-          <p className="section-sub">Referencia, sin precio.</p>
+          <p className="section-sub">
+            {showSalesLink ? (
+              <>
+                Referencia de la salida. El precio de esta unidad, la factura y si dejó ganancia están en{" "}
+                <Link to="/app/ventas-realizadas">Ventas realizadas</Link>.
+              </>
+            ) : (
+              "Referencia, sin precio."
+            )}
+          </p>
           {byDate(data.sale).map((d) => (
             <div key={d.id} className="odoo-doc-card">
               <div className="odoo-doc-head"><b>{d.title}</b></div>
@@ -402,8 +343,6 @@ export default function Recepcion() {
   const [validated, setValidated] = useState([]);
   const [listTab, setListTab] = useState("pendientes");
   const [clienteView, setClienteView] = useState("lista");
-  const [exits, setExits] = useState(null);
-  const [exitsError, setExitsError] = useState("");
   const [mode, setMode] = useState("bandeja");
   const [inspectIso, setInspectIso] = useState(null);
   const [expOpen, setExpOpen] = useState(false);
@@ -1390,7 +1329,7 @@ export default function Recepcion() {
                 </div>
               </div>
             ) : null}
-            {canSeeExpediente ? <DispatchExpediente iso={unit.iso} open={expOpen} /> : null}
+            {canSeeExpediente ? <DispatchExpediente iso={unit.iso} open={expOpen} showSalesLink={canSeeOdoo} /> : null}
             <p className="section-sub">
               {unit.campoEnabledAt
                 ? `En campo desde ${formatWhen(unit.campoEnabledAt)}${unit.campoEnabledByName ? ` · ${unit.campoEnabledByName}` : ""}.`
@@ -2188,25 +2127,12 @@ export default function Recepcion() {
       {listTab === "cliente" && canSeeOdoo ? (
         <div className="recv-tabs">
           <button type="button" className={clienteView === "lista" ? "on" : ""} onClick={() => setClienteView("lista")}>Equipos</button>
-          <button
-            type="button"
-            className={clienteView === "evolucion" ? "on" : ""}
-            onClick={() => {
-              setClienteView("evolucion");
-              if (!exits) {
-                api("/warehouse/exit-economics")
-                  .then(setExits)
-                  .catch((e) => setExitsError(e.message));
-              }
-            }}
-          >
-            Evolución de salidas
+          <button type="button" className={clienteView === "evolucion" ? "on" : ""} onClick={() => setClienteView("evolucion")}>
+            Ventas realizadas
           </button>
         </div>
       ) : null}
-      {listTab === "cliente" && clienteView === "evolucion" && canSeeOdoo ? (
-        <ExitEvolution data={exits} error={exitsError} />
-      ) : null}
+      {listTab === "cliente" && clienteView === "evolucion" && canSeeOdoo ? <RealizedSales embedded /> : null}
       {listTab === "cliente" && clienteView === "evolucion" && canSeeOdoo ? null : board.length ? (
         <>
           <h3 style={{ marginTop: 0 }}>

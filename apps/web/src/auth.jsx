@@ -56,6 +56,7 @@ export const ROLE_NAV = {
     { to: "/app/configuracion", label: "Configuración" },
     { to: "/app/auditoria", label: "Auditoría" },
     { to: "/app/comerciales", label: "Comerciales" },
+    { to: "/app/ventas-realizadas", label: "Ventas realizadas" },
     { to: "/app/compras/facturas", label: "Compras" },
     { to: "/app/almacen/recepcion", label: "Recepción" },
     { to: "/app/almacen/odoo", label: "Odoo — regularizar" },

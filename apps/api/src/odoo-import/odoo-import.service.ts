@@ -65,6 +65,8 @@ import {
 } from "../domain/odoo-assimilate-progress";
 import { applyZdryLineCosts, buildMoOverhead, inferMoOverheadPlan, moCostBreakdown, moLineKey, penToUsd, pickComponentUnitCost, type MoOverheadPlan } from "../domain/odoo-mo-cost";
 import { billDossierDraft, moDossierDraft, moveDossierDraft, pickingDossierDraft, purchaseDossierDraft } from "../domain/odoo-dossier";
+import { DRY_DOSSIER_LINE_FIELDS } from "../domain/odoo-dry-dossier";
+import { saleUnitFromOrder } from "../domain/sale-realized";
 
 const DRY_DOMAIN = [["name", "ilike", "contenedor dry"]];
 const ODOO_LOT_SELECTS_KEY = "odoo_lot_selects";
@@ -3023,11 +3025,36 @@ export class OdooImportService {
           .searchRead(
             "sale.order",
             [["name", "in", saleNames]],
-            ["id", "name", "partner_id", "state", "amount_total", "date_order", "client_order_ref"],
+            ["id", "name", "partner_id", "state", "amount_total", "date_order", "client_order_ref", "invoice_ids", "invoice_status"],
             { limit: saleNames.length },
           )
           .catch(() => [])
       : [];
+    const saleIds = sales.map((row) => Number(row.id)).filter((id) => id > 0);
+    const invoiceIds = [
+      ...new Set(
+        sales
+          .flatMap((row) => (Array.isArray(row.invoice_ids) ? row.invoice_ids.map((id: unknown) => Number(id)) : []))
+          .filter((id) => id > 0),
+      ),
+    ];
+    const [saleLines, invoiceRows] = await Promise.all([
+      saleIds.length
+        ? this.odoo
+            .searchRead("sale.order.line", [["order_id", "in", saleIds]], [...DRY_DOSSIER_LINE_FIELDS], { limit: 800 })
+            .catch(() => [])
+        : [],
+      invoiceIds.length
+        ? this.odoo
+            .searchRead(
+              "account.move",
+              [["id", "in", invoiceIds]],
+              ["id", "name", "state", "payment_state", "invoice_date", "move_type"],
+              { limit: 400 },
+            )
+            .catch(() => [])
+        : [],
+    ]);
     const saleByName = new Map(sales.map((s) => [String(s.name || ""), s]));
     const cands = await this.prisma.odooLotCandidate.findMany({ where: { odooLotId: { in: ids } } });
     const candByLot = new Map(cands.map((c) => [c.odooLotId, c]));
@@ -3093,6 +3120,13 @@ export class OdooImportService {
         if (seen.has(name)) continue;
         seen.add(name);
         names.push(name);
+        const saleUnit = saleUnitFromOrder({
+          iso,
+          order: sale,
+          lines: saleLines,
+          invoices: invoiceRows,
+          pickingName: m.pickingName || null,
+        });
         await this.expediente.upsertShared(
           [iso],
           moveDossierDraft({
@@ -3105,6 +3139,7 @@ export class OdooImportService {
             origin: sale.client_order_ref ? String(sale.client_order_ref) : m.pickingName || null,
             amount: Number(sale.amount_total) || null,
             iso,
+            saleUnit,
           }),
           { candidateId: cand?.id, containerIso: cand?.containerIso },
         );
@@ -3116,6 +3151,18 @@ export class OdooImportService {
       n += 1;
     }
     return { checked: n, left };
+  }
+
+  /** Completa precio de línea y factura de las series que ya salieron. No crea lotes nuevos. */
+  async refreshDepartedSaleFiles() {
+    const rows = await this.prisma.container.findMany({
+      where: { status: "Vendido", intakeOrigin: "odoo", demo: false, archivedAt: null, odooLotId: { not: null } },
+      select: { odooLotId: true },
+      take: 400,
+    });
+    const ids = rows.map((row) => row.odooLotId).filter((id): id is number => !!id);
+    const result = await this.refreshLotCases(ids);
+    return { ok: true, lots: ids.length, ...result };
   }
 
   private async applyLotAvailability(
