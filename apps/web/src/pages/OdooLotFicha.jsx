@@ -357,7 +357,7 @@ function ExpedientePanel({ id }) {
             <div className="odoo-note-meta">
               <b>{n.source === "odoo" ? "Odoo" : "ZDRY"}</b>
               {n.author ? ` · ${n.author}` : ""}
-              {n.occurredAt || n.createdAt ? ` · ${new Date(n.occurredAt || n.createdAt).toLocaleString("es-PE")}` : ""}
+              {n.occurredAt || n.createdAt ? ` · ${new Date(n.occurredAt || n.createdAt).toLocaleString("es-PE", { timeZone: "America/Lima" })}` : ""}
             </div>
             <div className="odoo-note-body">{n.body}</div>
           </li>
@@ -382,7 +382,7 @@ function ExpedientePanel({ id }) {
                     {i ? <span className="evo-arrow" aria-hidden>→</span> : null}
                     <span className={`evo-chip src-${s.source === "odoo" ? "odoo" : s.source === "zdry" ? "zdry" : "prev"}${s.applied === false ? " not-applied" : ""}`}>
                       <em>{s.value || "—"}</em>
-                      <small>{s.source === "odoo" ? "Odoo" : s.source === "zdry" ? "ZDRY" : "antes"}{s.event ? ` · ${eventLabel(s.event)}` : ""}{s.applied === false ? " · no aplicado" : ""} · {new Date(s.at).toLocaleString("es-PE")}</small>
+                      <small>{s.source === "odoo" ? "Odoo" : s.source === "zdry" ? "ZDRY" : "antes"}{s.event ? ` · ${eventLabel(s.event)}` : ""}{s.applied === false ? " · no aplicado" : ""} · {new Date(s.at).toLocaleString("es-PE", { timeZone: "America/Lima" })}</small>
                     </span>
                   </span>
                 ))}
@@ -758,7 +758,7 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
               <li key={n.id} className="odoo-note">
                 <div className="odoo-note-meta">
                   {n.author || "Odoo"}
-                  {n.date ? ` · ${new Date(n.date.includes("T") ? n.date : `${n.date.replace(" ", "T")}Z`).toLocaleString("es-PE")}` : ""}
+                  {n.date ? ` · ${new Date(n.date.includes("T") ? n.date : `${n.date.replace(" ", "T")}Z`).toLocaleString("es-PE", { timeZone: "America/Lima" })}` : ""}
                 </div>
                 <div className="odoo-note-body">{n.body}</div>
               </li>

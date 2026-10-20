@@ -1974,7 +1974,7 @@ export default function Recepcion() {
                   <li key={n.id} className="odoo-note">
                     <div className="odoo-note-meta">
                       {n.author || "Odoo"}
-                      {n.date ? ` · ${new Date(n.date.includes("T") ? n.date : `${n.date.replace(" ", "T")}Z`).toLocaleString("es-PE")}` : ""}
+                      {n.date ? ` · ${new Date(n.date.includes("T") ? n.date : `${n.date.replace(" ", "T")}Z`).toLocaleString("es-PE", { timeZone: "America/Lima" })}` : ""}
                     </div>
                     <div className="odoo-note-body">{n.body}</div>
                   </li>

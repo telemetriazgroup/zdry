@@ -1,3 +1,5 @@
+import { odooInstantToLima } from "./odoo-time";
+
 export type OdooDocAccess = "ok" | "name_only" | "pending";
 
 export type OdooDocView = {
@@ -59,7 +61,7 @@ export function presentOdooDocument(input: {
   const pickings = (Array.isArray(data.pickings) ? data.pickings : [])
     .map((p) => {
       const row = p && typeof p === "object" ? (p as Record<string, unknown>) : {};
-      return { name: text(row.name), isos: list(row.isos), date: text(row.date) || null };
+      return { name: text(row.name), isos: list(row.isos), date: odooInstantToLima(row.date) || null };
     })
     .filter((p) => p.name);
   const lines = (Array.isArray(data.lines) ? data.lines : [])
@@ -113,7 +115,7 @@ export function presentOdooDocument(input: {
     add("Proveedor", data.partner);
     add("Estado", data.state);
     add("Moneda", data.currency);
-    add("Fecha", data.date);
+    add("Fecha", odooInstantToLima(data.date));
     add("Total", data.amountTotal ?? data.amount_total);
     add("Precio unitario DRY", data.unitPrice ?? data.price_unit);
     add("Cant. recibida", data.qtyReceived ?? data.qty_received, false);
@@ -122,21 +124,21 @@ export function presentOdooDocument(input: {
     add("Cliente / destino", data.partner);
     add("Estado", data.state);
     add("Origen (OC/MO)", data.origin);
-    add("Fecha", data.date);
+    add("Fecha", odooInstantToLima(data.date));
     add("Desde", data.locationSrc);
     add("Hacia", data.locationDest);
     add("Total", data.amountTotal ?? data.amount_total);
   } else if (kind === "bill") {
     add("Proveedor", data.partner);
     add("Estado", data.state);
-    add("Fecha", data.date);
+    add("Fecha", odooInstantToLima(data.date));
     add("Total", data.amountTotal ?? data.amount_total);
     add("OC", Array.isArray(data.poNames) ? data.poNames.join(", ") : data.poNames);
   } else if (kind === "mo") {
     add("Producto terminado", data.productFinished || data.product);
     add("Código", data.productCode);
     add("Precursor", data.sourceProduct);
-    add("Fecha", data.date);
+    add("Fecha", odooInstantToLima(data.date));
     add("Costo materiales", data.componentsTotal);
     add("Costos adicionales", data.overheadTotal);
     add("Costo unidad (USD)", data.unitCost ?? data.total);

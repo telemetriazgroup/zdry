@@ -116,9 +116,18 @@ function VendorCompare({ a, b }) {
 
 function fmtWhen(v) {
   if (!v) return "—";
-  const d = new Date(v);
+  const raw = String(v).trim();
+  const naive = /[T ]\d{2}:\d{2}/.test(raw) && !/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(raw);
+  const d = new Date(naive ? `${raw.includes("T") ? raw : raw.replace(" ", "T")}Z` : raw);
   if (Number.isNaN(d.getTime())) return String(v);
-  return d.toLocaleString("es-PE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleString("es-PE", {
+    timeZone: "America/Lima",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export default function DryStats() {
