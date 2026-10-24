@@ -45,6 +45,33 @@ function resultWord(value, kind) {
   return "En equilibrio";
 }
 
+function saleStamp(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return 0;
+  const t = Date.parse(value.includes("T") ? value : value.replace(" ", "T"));
+  return Number.isFinite(t) ? t : 0;
+}
+
+function compareSales(a, b, key, dir) {
+  const sign = dir === "asc" ? 1 : -1;
+  if (key === "gain") {
+    const missing = (row) => row.dealKind === "transformacion" || row.result == null;
+    if (missing(a) && missing(b)) return 0;
+    if (missing(a)) return 1;
+    if (missing(b)) return -1;
+    return (a.result - b.result) * sign;
+  }
+  if (key === "type") {
+    return `${a.type || ""} ${a.cat || ""}`.localeCompare(`${b.type || ""} ${b.cat || ""}`, "es") * sign;
+  }
+  const aDay = saleStamp(a.date);
+  const bDay = saleStamp(b.date);
+  if (!aDay && !bDay) return 0;
+  if (!aDay) return 1;
+  if (!bDay) return -1;
+  return (aDay - bDay) * sign;
+}
+
 function traceStamp(raw) {
   const value = String(raw || "").trim();
   if (!value) return Number.MAX_SAFE_INTEGER;
@@ -117,7 +144,7 @@ function Calculation({ row, deal }) {
       <div>
         <h3 style={{ marginBottom: 4 }}>{row.iso}</h3>
         <p className="section-sub" style={{ marginTop: 0 }}>
-          Transformación · {row.type} · {row.cat}
+          Transformación · {row.typeLabel || row.type} · {row.catLabel || row.cat}
           {deal?.customer || row.customer ? ` · ${deal?.customer || row.customer}` : ""}
           {" · "}{day(deal?.date || row.date)}
         </p>
@@ -149,7 +176,7 @@ function Calculation({ row, deal }) {
       <div>
         <h3 style={{ marginBottom: 4 }}>{row.iso}</h3>
         <p className="section-sub" style={{ marginTop: 0 }}>
-          Alquiler · {row.type} · {row.cat}
+          Alquiler · {row.typeLabel || row.type} · {row.catLabel || row.cat}
           {deal?.customer || row.customer ? ` · ${deal?.customer || row.customer}` : ""}
           {" · "}{day(deal?.date || row.date)}
         </p>
@@ -181,7 +208,7 @@ function Calculation({ row, deal }) {
     <div>
       <h3 style={{ marginBottom: 4 }}>{row.iso}</h3>
       <p className="section-sub" style={{ marginTop: 0 }}>
-        {row.type} · {row.cat}
+        {row.typeLabel || row.type} · {row.catLabel || row.cat}
         {deal?.customer ? ` · ${deal.customer}` : row.customer ? ` · ${row.customer}` : ""}
         {" · "}{day(deal?.date || row.date)}
       </p>
@@ -190,7 +217,18 @@ function Calculation({ row, deal }) {
       </p>
       <div className="sale-math">
         <div><span>Origen {row.origin || "sin OC"}</span><b>{money(row.rawBase)}</b></div>
-        <div><span>Extras de almacén</span><b>{money(row.overlayTotal || 0)}</b></div>
+        {(row.overlayLines || []).length ? (
+          <>
+            {(row.overlayLines || []).map((line) => (
+              <div key={line.key || line.label}><span>{line.label}</span><b>{money(line.amount)}</b></div>
+            ))}
+            {(row.overlayLines || []).length > 1 ? (
+              <div><span>Total extras de almacén</span><b>{money(row.overlayTotal || 0)}</b></div>
+            ) : null}
+          </>
+        ) : (
+          <div><span>Extras de almacén</span><b>{money(0)}</b></div>
+        )}
         <div><span>Margen de seguridad</span><b>{money(row.safetyAdd || 0)}</b></div>
         <div><span>Base de hoy</span><b>{money(row.costBase)}</b></div>
         <div><span>Comercial</span><b>{vendor || "Sin comercial en la cotización"}</b></div>
@@ -256,6 +294,7 @@ export default function RealizedSales({ embedded = false }) {
   const [page, setPage] = useState(1);
   const [openIso, setOpenIso] = useState("");
   const [dealName, setDealName] = useState("");
+  const [sort, setSort] = useState({ key: "date", dir: "desc" });
 
   function load() {
     return api("/warehouse/realized-sales")
@@ -287,14 +326,16 @@ export default function RealizedSales({ embedded = false }) {
   const rows = data?.rows || [];
   const visible = useMemo(() => {
     const needle = q.trim().toUpperCase();
-    if (!needle) return rows;
-    return rows.filter((row) =>
-      [row.iso, row.saleName, row.customer, row.origin, row.outName, ...(row.history || []).map((item) => item.saleName)]
-        .join(" ")
-        .toUpperCase()
-        .includes(needle),
-    );
-  }, [rows, q]);
+    const filtered = !needle
+      ? rows
+      : rows.filter((row) =>
+        [row.iso, row.type, row.typeLabel, row.cat, row.catLabel, row.saleName, row.customer, row.origin, row.outName, ...(row.history || []).map((item) => item.saleName)]
+          .join(" ")
+          .toUpperCase()
+          .includes(needle),
+      );
+    return [...filtered].sort((a, b) => compareSales(a, b, sort.key, sort.dir) || a.iso.localeCompare(b.iso));
+  }, [rows, q, sort]);
 
   const pages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const safePage = Math.min(page, pages);
@@ -304,7 +345,14 @@ export default function RealizedSales({ embedded = false }) {
 
   useEffect(() => {
     setPage(1);
-  }, [q]);
+  }, [q, sort]);
+
+  function toggleSort(key) {
+    setSort((current) => {
+      if (current.key !== key) return { key, dir: key === "type" ? "asc" : "desc" };
+      return { key, dir: current.dir === "desc" ? "asc" : "desc" };
+    });
+  }
 
   useEffect(() => {
     if (!visible.length) {
@@ -382,9 +430,10 @@ export default function RealizedSales({ embedded = false }) {
                   <thead>
                     <tr>
                       <th>Equipo</th>
-                      <th>Día</th>
+                      <th><button type="button" className={sort.key === "type" ? "sale-sort on" : "sale-sort"} onClick={() => toggleSort("type")}>Tipo {sort.key === "type" ? (sort.dir === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={sort.key === "date" ? "sale-sort on" : "sale-sort"} onClick={() => toggleSort("date")}>Día {sort.key === "date" ? (sort.dir === "desc" ? "↓" : "↑") : ""}</button></th>
                       <th>Vendido</th>
-                      <th>Resultado</th>
+                      <th><button type="button" className={sort.key === "gain" ? "sale-sort on" : "sale-sort"} onClick={() => toggleSort("gain")}>Resultado {sort.key === "gain" ? (sort.dir === "desc" ? "↓" : "↑") : ""}</button></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -400,6 +449,11 @@ export default function RealizedSales({ embedded = false }) {
                           <br />
                           <span className="section-sub">{row.saleName || "Sin pedido"}</span>
                         </td>
+                        <td>
+                          {row.type || "—"}
+                          <br />
+                          <span className="section-sub">{row.catLabel || row.cat || "—"}</span>
+                        </td>
                         <td>{day(row.date)}</td>
                         <td>{row.soldNet != null ? money(row.soldNet) : "—"}</td>
                         <td className={row.dealKind === "alquiler" || row.dealKind === "transformacion" ? "" : row.result > 0 ? "sale-result gain" : row.result < 0 ? "sale-result loss" : ""}>
@@ -410,7 +464,7 @@ export default function RealizedSales({ embedded = false }) {
                       </tr>
                     ))}
                     {!pageRows.length ? (
-                      <tr><td colSpan={4}>No hay ventas con ese filtro.</td></tr>
+                      <tr><td colSpan={5}>No hay ventas con ese filtro.</td></tr>
                     ) : null}
                   </tbody>
                 </table>

@@ -354,7 +354,16 @@ export class WarehouseService {
     ]);
     const typeMap = Object.fromEntries(types.map((t) => [t.code, t]));
     const catMap = Object.fromEntries(categories.map((c) => [c.code, c]));
-    return rows
+    const lotIds = rows.map((c) => c.odooLotId).filter((id): id is number => typeof id === "number" && id > 0);
+    const photoGroups = lotIds.length
+      ? await this.prisma.odooCachedPhoto.groupBy({
+          by: ["odooLotId"],
+          where: { odooLotId: { in: lotIds }, kind: { not: "zdry_ref" } },
+          _count: { _all: true },
+        })
+      : [];
+    const photosByLot = new Map(photoGroups.map((g) => [g.odooLotId, g._count._all]));
+    const list = rows
       .map((c) => {
         const missing = inspectMissing({
           ...c,
@@ -387,6 +396,7 @@ export class WarehouseService {
           campoEnabledAt: c.campoEnabledAt,
           campoEnabledByName: c.campoEnabledByName || "",
           waitingCampo,
+          odooPhotoCount: c.odooLotId ? photosByLot.get(c.odooLotId) || 0 : 0,
           archived: !!c.archivedAt,
           archiveReason: c.archiveReason || "",
           archivedByName: c.archivedByName || "",
@@ -399,6 +409,12 @@ export class WarehouseService {
         };
       })
       .filter((x): x is NonNullable<typeof x> => !!x);
+    if (sent) return list;
+    return list.sort(
+      (a, b) =>
+        (b.odooPhotoCount || 0) - (a.odooPhotoCount || 0) ||
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
   }
 
   async dispatchExpediente(iso: string) {

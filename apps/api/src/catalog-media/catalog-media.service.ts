@@ -70,8 +70,14 @@ export class CatalogMediaService {
       where: {
         ...(await this.prisma.liveContainers()),
         intakeType: { in: ["compra", "pendiente_factura", "ajuste_odoo", "fabricacion_odoo"] },
-        status: { in: ["Disponible", "Reservado", "Pendiente de ingreso"] },
-        OR: [{ physicallyReceived: true }, { lado: { not: null } }],
+        OR: [
+          {
+            status: { in: ["Disponible", "Reservado", "Pendiente de ingreso"] },
+            OR: [{ physicallyReceived: true }, { lado: { not: null } }],
+          },
+          { status: "Vendido" },
+          { commercialStatus: "vendido" },
+        ],
       },
       include: { depot: true, photos: { select: { slot: true, status: true } } },
       orderBy: { iso: "asc" },

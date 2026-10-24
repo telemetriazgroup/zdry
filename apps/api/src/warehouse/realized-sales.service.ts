@@ -63,7 +63,7 @@ export class RealizedSalesService {
       take: 400,
     });
     const isos = units.map((row) => row.iso);
-    const [rules, refsRow, dry, overlays, safety, snaps, lots] = await Promise.all([
+    const [rules, refsRow, dry, overlays, safety, snaps, lots, types, cats] = await Promise.all([
       this.prisma.pricingRule.findMany(),
       this.prisma.appSetting.findUnique({ where: { key: ACQUISITION_REFS_KEY } }),
       presentDryReferential(this.prisma),
@@ -79,6 +79,8 @@ export class RealizedSalesService {
         where: { odooLotId: { in: [...new Set(units.map((row) => row.odooLotId).filter((id): id is number => !!id))] } },
         select: { odooLotId: true, productCode: true },
       }),
+      this.prisma.containerType.findMany({ select: { code: true, label: true } }),
+      this.prisma.category.findMany({ select: { code: true, label: true } }),
     ]);
     const pricing = rules.map((rule) => ({
       id: rule.id,
@@ -89,6 +91,8 @@ export class RealizedSalesService {
     }));
     const refs = normalizeAcquisitionRefs(refsRow?.value);
     const sku = new Map(lots.map((lot) => [lot.odooLotId, lot.productCode || ""]));
+    const typeLabel = new Map(types.map((row) => [row.code, row.label]));
+    const catLabel = new Map(cats.map((row) => [row.code, row.label]));
     const byIso = new Map<string, Snap[]>();
     for (const snap of snaps) {
       const list = byIso.get(snap.isoNormalized) || [];
@@ -175,11 +179,14 @@ export class RealizedSalesService {
       return {
         iso: unit.iso,
         type: unit.type,
+        typeLabel: typeLabel.get(unit.type) || unit.type,
         cat: unit.cat,
+        catLabel: catLabel.get(unit.cat) || unit.cat,
         origin: exitOriginLabel(unit),
         warehouse: unit.odooWarehouse || "",
         rawBase: priced.rawBase,
         overlayTotal: priced.overlayTotal,
+        overlayLines: priced.overlayLines.map((line) => ({ key: line.key, label: line.label, amount: line.amount })),
         safetyAdd: priced.safetyAdd,
         costBase: priced.securedBase,
         priceSource: unit.priceSource || "rule",
@@ -208,6 +215,7 @@ export class RealizedSalesService {
       };
     });
 
+    rows.sort((a, b) => stamp(b.date) - stamp(a.date) || a.iso.localeCompare(b.iso));
     const salesOnly = rows.filter((row) => row.dealKind === "venta" && row.result != null);
     const vendors = vendorWeek(events, now);
     const last7Sales = events.filter((event) => event.kind === "venta" && withinLastDays(event.date, now, 7)).length;

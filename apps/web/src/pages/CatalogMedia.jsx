@@ -49,7 +49,7 @@ const GROUPS = [
 function hardBlock(row) {
   if (!row) return "";
   if (row.publishBlock) return row.publishBlock;
-  if (row.leftCustomer || row.status === "Vendido") return "En el cliente o con salida: no se publica.";
+  if (row.leftCustomer || row.status === "Vendido") return "Ya vendida o con salida: no se publica. Abre la fila para ver sus datos.";
   if (row.awaitingReconcile) return "Reentrega sin conciliar: no se publica hasta el match con la OC.";
   return "";
 }

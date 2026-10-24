@@ -324,6 +324,11 @@ function OriginBadges({ u }) {
   return (
     <>
       {u.intakeOrigin === "odoo" ? <span className="badge-scope" style={{ background: "#12203a" }}>Origen Odoo</span> : null}
+      {u.odooPhotoCount > 0 ? (
+        <span className="badge-scope" style={{ background: "#0b7a32" }}>
+          {u.odooPhotoCount} foto{u.odooPhotoCount === 1 ? "" : "s"} Odoo
+        </span>
+      ) : null}
       {u.isoException ? <span className="badge-scope" style={{ background: "#c92a2a" }}>ISO a revisar</span> : null}
     </>
   );
@@ -545,7 +550,7 @@ export default function Recepcion() {
   const filteredPending = useMemo(() => {
     const raw = pendingQ.trim().toUpperCase();
     const compact = raw.replace(/[\s-]/g, "");
-    return board.filter((u) => {
+    const list = board.filter((u) => {
       if (filterType && u.type !== filterType) return false;
       if (filterDepot && u.depotId !== filterDepot) return false;
       if (filterCat && u.cat !== filterCat) return false;
@@ -553,7 +558,10 @@ export default function Recepcion() {
       const hay = pendingSearchText(u);
       return hay.includes(raw) || hay.replace(/[\s-]/g, "").includes(compact);
     });
-  }, [board, pendingQ, filterType, filterDepot, filterCat]);
+    if (listTab !== "pendientes") return list;
+    return [...list].sort((a, b) => (b.odooPhotoCount || 0) - (a.odooPhotoCount || 0));
+  }, [board, pendingQ, filterType, filterDepot, filterCat, listTab]);
+  const odooPhotoReady = listTab === "pendientes" ? filteredPending.filter((u) => u.odooPhotoCount > 0).length : 0;
 
   const pendingPages = Math.max(1, Math.ceil(filteredPending.length / PAGE_SIZE));
   const safePendingPage = Math.min(pendingPage, pendingPages);
@@ -2146,6 +2154,12 @@ export default function Recepcion() {
               : "Toca una unidad para continuar la inspección. Al enviarla a campo pasa a la otra pestaña."}
             {isSuperadmin(user) ? " Las archivadas se ven en rojo y se pueden desarchivar." : ""}
           </p>
+          {odooPhotoReady > 0 ? (
+            <p className="ok-msg">
+              Despacho: {odooPhotoReady} pendiente{odooPhotoReady === 1 ? "" : "s"} con fotos de Odoo.
+              Van primero, de más fotos a menos. Procésalos para enviarlos a patio y publicarlos.
+            </p>
+          ) : null}
           <div className="odoo-toolbar">
             <input
               className="odoo-search"
@@ -2180,7 +2194,7 @@ export default function Recepcion() {
               </thead>
               <tbody>
                 {pagePending.map((u) => (
-                  <tr key={u.iso} className={`expandable ${u.archived ? "archived-row" : ""} ${u.isoException ? "iso-review-row" : ""}`} onClick={() => { setInspectIso(u.iso); setMode("inspect"); setError(""); }}>
+                  <tr key={u.iso} className={`expandable ${u.archived ? "archived-row" : ""} ${u.isoException ? "iso-review-row" : ""} ${listTab === "pendientes" && u.odooPhotoCount > 0 ? "recv-photo-ready" : ""}`} onClick={() => { setInspectIso(u.iso); setMode("inspect"); setError(""); }}>
                     <td>
                       <div className="recv-iso-cell">
                         <div className="recv-iso-row">
@@ -2208,7 +2222,7 @@ export default function Recepcion() {
           </div>
           <div className="recv-cards">
             {pagePending.map((u) => (
-              <div key={u.iso} className={`recv-card ${u.archived ? "archived-row" : ""} ${u.isoException ? "iso-review-row" : ""}`}>
+              <div key={u.iso} className={`recv-card ${u.archived ? "archived-row" : ""} ${u.isoException ? "iso-review-row" : ""} ${listTab === "pendientes" && u.odooPhotoCount > 0 ? "recv-photo-ready" : ""}`}>
                 <div className="recv-card-top">
                   <span className="recv-iso-row">
                     <button

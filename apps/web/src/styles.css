@@ -428,6 +428,11 @@ table.data th {
   border-bottom: 2px solid var(--line); font-size: 10.5px; text-transform: uppercase;
   color: var(--text-2); white-space: nowrap;
 }
+button.sale-sort {
+  background: none; border: 0; padding: 0; font: inherit; font-weight: 700;
+  letter-spacing: inherit; text-transform: inherit; color: inherit; cursor: pointer;
+}
+button.sale-sort.on { color: var(--orange); }
 table.data td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .form-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -1331,6 +1336,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 }
 .archive-actions { display: flex; gap: 10px; margin-top: 22px; }
 .archive-actions .btn-primary, .archive-actions .btn-ghost { min-width: 128px; padding: 12px 18px; }
+tr.recv-photo-ready, .recv-card.recv-photo-ready { background: #f3fbf5; }
 tr.archived-row, .recv-card.archived-row { background: #ffe3e3; }
 tr.archived-row td, tr.archived-row b, .recv-card.archived-row, .recv-card.archived-row .card-iso { color: #c92a2a; }
 .odoo-assign-thumb .thumb-arch { color: #c92a2a; }

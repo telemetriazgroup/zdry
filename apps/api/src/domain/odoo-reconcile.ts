@@ -59,7 +59,7 @@ export const UNRECONCILED_PUBLISH_MESSAGE =
   "Reentrega sin conciliar: no se publica en el catálogo hasta el match con una orden de compra. Sin OC no hay precio.";
 
 export const LEFT_PUBLISH_MESSAGE =
-  "En el cliente o con salida: no se publica en el catálogo.";
+  "Ya vendida o con salida: no se publica. Abre la fila para ver sus datos.";
 
 export function catalogPublishBlock(c: {
   odooPoId?: number | null;
