@@ -39,7 +39,7 @@ export default function EnvioFicha() {
       <div className="view active catalog-wrap">
         <div className="panel handoff-card">
           <h2>{unit.typeLabel} · {unit.iso}</h2>
-          <p className="section-sub">{unit.catLabel} · {unit.depotName}{unit.year ? ` · ${unit.year}` : ""}</p>
+          <p className="section-sub">{unit.catLabel} · {unit.depotName}</p>
           <div className="share-brief-main">
             {slot === "video" && unit.hasVideo ? (
               <video src={`${apiUrl(`/catalog/envio/${token}/video`)}${version ? `?v=${encodeURIComponent(version)}` : ""}`} controls />
@@ -58,7 +58,6 @@ export default function EnvioFicha() {
           <table className="spec-table">
             <tbody>
               <tr><td>Fabricante</td><td>{unit.manufacturer}</td></tr>
-              <tr><td>Año</td><td>{unit.year || "—"}</td></tr>
               <tr><td>Tara / MGW</td><td>{kg(unit.tareKg)} / {kg(unit.mgwKg)} kg</td></tr>
               <tr><td>Color</td><td>{unit.color || "—"}</td></tr>
               {unit.includePrice && unit.priceList ? <tr><td>Precio de lista</td><td>USD {Math.round(Number(unit.priceList)).toLocaleString("en-US")}</td></tr> : null}

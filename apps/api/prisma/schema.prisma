@@ -90,6 +90,8 @@ model Container {
   iso                String              @id
   type               String
   cat                String
+  catDocument        String?
+  catLocked          Boolean             @default(false)
   status             String              @default("Pendiente de ingreso")
   year               Int?
   manufacturer       String              @default("—")

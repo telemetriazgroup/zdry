@@ -152,6 +152,17 @@ export class CatalogMediaController {
     return this.media.get(iso, user);
   }
 
+  @Patch(":iso/condition")
+  @Roles("admin", "gerente")
+  setCondition(
+    @Param("iso") iso: string,
+    @Body() body: { cat?: string; followEvaluation?: boolean },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.media.setOfferCondition(iso, body, user, req.ip);
+  }
+
   @Patch(":iso")
   patch(
     @Param("iso") iso: string,

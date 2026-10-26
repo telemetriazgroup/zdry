@@ -14,6 +14,7 @@ import {
 import { Prisma, Role } from "@prisma/client";
 import { randomBytes, randomUUID } from "crypto";
 import { PrismaService } from "../prisma/prisma.service";
+import { clientCondition } from "../domain/condition-offer";
 import { AuditService } from "../audit/audit.service";
 import { StorageService } from "../storage/storage.service";
 import { YardLockService } from "../redis/yard-lock.service";
@@ -149,6 +150,18 @@ function publicCatalogNotes(notes: string | null | undefined): string {
     .map((part) => part.replace(/\.$/, "").trim())
     .filter((part) => part && !/^producto odoo\s*:/i.test(part))
     .join(". ");
+}
+
+function clientNuevoWhere(): Prisma.ContainerWhereInput {
+  return {
+    OR: [
+      { cat: { in: ["1TRIP", "NUEVO", "NEW"] } },
+      { cat: { contains: "nuevo", mode: "insensitive" } },
+      { cat: { contains: "1trip", mode: "insensitive" } },
+      { cat: { contains: "1-trip", mode: "insensitive" } },
+      { cat: { contains: "1 trip", mode: "insensitive" } },
+    ],
+  };
 }
 
 @Injectable()
@@ -304,15 +317,19 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     sort?: string;
     page?: string;
     pageSize?: string;
+    audience?: string;
   }, commercial = false) {
+    const client = !commercial && query.audience === "cliente";
     const page = Math.max(1, parseInt(query.page || "1", 10) || 1);
     const pageSize = catalogPageSize(query.pageSize);
     const where: Prisma.ContainerWhereInput = { ...(await this.catalogWhere()) };
     if (query.type) where.type = query.type;
-    if (query.cat) where.cat = query.cat;
+    if (client && query.cat === "nuevo") where.AND = [clientNuevoWhere()];
+    else if (client && query.cat === "segundo") where.AND = [{ NOT: clientNuevoWhere() }];
+    else if (query.cat) where.cat = query.cat;
     if (query.depot) where.depotId = query.depot;
     if (query.manufacturer) where.manufacturer = query.manufacturer;
-    if (query.year) where.year = parseInt(query.year, 10);
+    if (!client && query.year) where.year = parseInt(query.year, 10);
     if (query.q) {
       const q = query.q.trim();
       where.OR = [
@@ -324,7 +341,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     const orderBy: Prisma.ContainerOrderByWithRelationInput =
       query.sort === "price"
         ? { priceList: "asc" }
-        : query.sort === "year"
+        : !client && query.sort === "year"
           ? { year: "desc" }
           : { iso: "asc" };
 
@@ -359,13 +376,14 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         },
         vis,
       );
+      const shown = client ? clientCondition(c.cat) : null;
       items.push({
         iso: c.iso,
         type: c.type,
         typeLabel: types.find((t) => t.code === c.type)?.label || c.type,
-        cat: c.cat,
-        catLabel: cats.find((x) => x.code === c.cat)?.label || c.cat,
-        year: c.year,
+        cat: shown?.code || c.cat,
+        catLabel: shown?.label || cats.find((x) => x.code === c.cat)?.label || c.cat,
+        year: client ? null : c.year,
         manufacturer: c.manufacturer,
         depotId: c.depotId,
         depotName: c.depot.name,
@@ -386,7 +404,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     return { items, total, page, pageSize, pages: Math.max(1, Math.ceil(total / pageSize)) };
   }
 
-  async catalogUnit(iso: string) {
+  async catalogUnit(iso: string, client = false) {
     const c = await this.prisma.container.findUnique({
       where: { iso },
       include: { depot: true, photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { slot: true } } },
@@ -413,14 +431,15 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       vis,
     );
     const published = isMediaApproved(c.mediaStatus);
+    const shown = client ? clientCondition(c.cat) : null;
     return {
       iso: c.iso,
       type: c.type,
       typeLabel: typeRow?.label || c.type,
       dims: typeRow?.dims,
-      cat: c.cat,
-      catLabel: catRow?.label || c.cat,
-      year: c.year,
+      cat: shown?.code || c.cat,
+      catLabel: shown?.label || catRow?.label || c.cat,
+      year: client ? null : c.year,
       manufacturer: c.manufacturer,
       color: c.color,
       tareKg: c.tareKg,
@@ -521,8 +540,8 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         contactName: share.contactName || share.clientName,
         typeLabel: unit.typeLabel,
         iso: unit.iso,
-        catLabel: unit.catLabel,
-        year: unit.year,
+        catLabel: clientCondition(unit.cat).label,
+        year: null,
         depotName: unit.depotName,
         manufacturer: unit.manufacturer,
         includePrice,
@@ -538,8 +557,8 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     return {
       iso: unit.iso,
       typeLabel: unit.typeLabel,
-      catLabel: unit.catLabel,
-      year: unit.year,
+      catLabel: clientCondition(unit.cat).label,
+      year: null,
       manufacturer: unit.manufacturer,
       color: unit.color,
       tareKg: unit.tareKg,

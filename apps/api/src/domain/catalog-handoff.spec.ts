@@ -17,7 +17,9 @@ describe("handoffMessage", () => {
     const hidden = handoffMessage({ ...base, includePrice: false, priceList: 1680 });
     expect(withPrice).toContain("USD 1680");
     expect(withPrice).toContain("https://zdry.local/zdry/e/abc");
+    expect(withPrice).not.toContain("2010");
     expect(hidden).not.toContain("1680");
+    expect(hidden).not.toContain("2010");
     expect(hidden).not.toMatch(/mínimo/i);
   });
 });

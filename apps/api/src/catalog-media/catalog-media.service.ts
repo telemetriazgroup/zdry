@@ -34,7 +34,7 @@ import {
 import { EvaluationService } from "../evaluation/evaluation.service";
 import { OdooLinkService } from "../odoo/odoo-link.service";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
-import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
+import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom, refreshRulePrices } from "../odoo-import/acquisition-overlay.store";
 import { DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
 import { catalogPublishBlock, isPendingValuation } from "../domain/odoo-reconcile";
 
@@ -53,11 +53,16 @@ export class CatalogMediaService {
   ) {}
 
   async meta() {
-    const [custom, evalCatalog] = await Promise.all([this.customWatermarkKey(), this.evaluation.presentCatalog()]);
+    const [custom, evalCatalog, categories] = await Promise.all([
+      this.customWatermarkKey(),
+      this.evaluation.presentCatalog(),
+      this.prisma.category.findMany({ where: { archivedAt: null }, orderBy: { label: "asc" }, select: { code: true, label: true } }),
+    ]);
     return {
       photoLabels: PHOTO_LABELS,
       approverRoles: MEDIA_APPROVER_ROLES,
       conditionGrades: CONDITION_GRADES,
+      categories,
       watermarkReady: true,
       watermarkSource: custom ? "custom" : "default",
       watermarkName: custom ? custom.name : "zg_marca.png",
@@ -82,6 +87,24 @@ export class CatalogMediaService {
       include: { depot: true, photos: { select: { slot: true, status: true } } },
       orderBy: { iso: "asc" },
     });
+    const beforeCat = new Map(rows.map((c) => [c.iso, c.cat]));
+    const changed = await this.evaluation.applyOfferConditions(rows.map((c) => c.iso));
+    const touched = [...changed.entries()].filter(([iso, next]) => next.cat !== beforeCat.get(iso)).map(([iso]) => iso);
+    if (touched.length) {
+      const fresh = await this.prisma.container.findMany({
+        where: { iso: { in: touched } },
+        select: { iso: true, cat: true, priceList: true, priceMin: true, priceSource: true },
+      });
+      const byIso = new Map(fresh.map((row) => [row.iso, row]));
+      for (const row of rows) {
+        const next = byIso.get(row.iso);
+        if (!next) continue;
+        row.cat = next.cat;
+        row.priceList = next.priceList;
+        row.priceMin = next.priceMin;
+        row.priceSource = next.priceSource;
+      }
+    }
     const isos = rows.map((c) => c.iso);
     const lotIds = [...new Set(rows.map((c) => c.odooLotId).filter((id): id is number => id != null))];
     const [pricing, vis, refs, dry, overlays, safety, candidates] = await Promise.all([
@@ -198,6 +221,7 @@ export class CatalogMediaService {
     if (!c) throw new NotFoundException("Unidad no encontrada.");
     if (c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
     await this.evaluation.importLegacyForUnit(c.iso, c);
+    const offerCat = await this.evaluation.applyOfferCondition(c.iso);
     const evalData = await this.evaluation.forUnit(c.iso);
     const cand = await this.findCandidate(c.iso, c.odooLotId);
     const active = c.photos.filter((p) => p.status === PHOTO_STATUS_ACTIVE);
@@ -207,7 +231,11 @@ export class CatalogMediaService {
     return {
       iso: c.iso,
       type: c.type,
-      cat: c.cat,
+      cat: offerCat?.cat || c.cat,
+      catDocument: offerCat?.catDocument || c.catDocument || c.cat,
+      catLocked: offerCat?.catLocked ?? c.catLocked,
+      evalAverage: offerCat?.average ?? null,
+      suggestedCat: offerCat?.suggested || c.cat,
       status: c.status,
       depotName: c.depot.name,
       manufacturer: c.manufacturer,
@@ -329,6 +357,51 @@ export class CatalogMediaService {
     const c = await this.prisma.container.findUnique({ where: { iso } });
     if (!c || c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
     await this.evaluation.setRating(iso, { ...body, source: "catalogo" }, user, ip);
+    return this.get(iso, user);
+  }
+
+  async setOfferCondition(
+    iso: string,
+    body: { cat?: string; followEvaluation?: boolean },
+    user: AuthUser,
+    ip?: string,
+  ) {
+    this.assertApprover(user);
+    const c = await this.prisma.container.findUnique({ where: { iso } });
+    if (!c || c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
+    if (body.followEvaluation) {
+      await this.prisma.container.update({ where: { iso }, data: { catLocked: false } });
+      await this.evaluation.applyOfferCondition(iso);
+      await this.audit.log({
+        user,
+        action: "update",
+        entity: "CatalogMedia",
+        entityId: iso,
+        after: { catLocked: false },
+        ip,
+      });
+      return this.get(iso, user);
+    }
+    const code = String(body.cat || "").trim().toUpperCase();
+    const cat = await this.prisma.category.findFirst({ where: { code, archivedAt: null } });
+    if (!cat) throw new BadRequestException("Condición no válida.");
+    await this.prisma.container.update({
+      where: { iso },
+      data: {
+        catDocument: c.catDocument || c.cat,
+        cat: code,
+        catLocked: true,
+      },
+    });
+    if (c.priceSource !== "manual" && code !== c.cat) await refreshRulePrices(this.prisma, { isos: [iso] });
+    await this.audit.log({
+      user,
+      action: "update",
+      entity: "CatalogMedia",
+      entityId: iso,
+      after: { cat: code, catLocked: true, catDocument: c.catDocument || c.cat },
+      ip,
+    });
     return this.get(iso, user);
   }
 

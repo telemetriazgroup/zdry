@@ -472,6 +472,7 @@ export default function CatalogShares() {
           <div className="odoo-toolbar">
             <h3 style={{ margin: 0 }}>Enlaces</h3>
             <Link className="btn-ghost" to={{ pathname: "/", search: "?vista=comercial" }}>Ver catálogo comercial</Link>
+            <Link className="btn-ghost" to={{ pathname: "/", search: "?vista=cliente" }}>Ver como cliente</Link>
             <button className="btn-ghost" type="button" onClick={() => setArchivedView((v) => !v)}>
               {archivedView ? "Ver vigentes" : "Ver archivados"}
             </button>

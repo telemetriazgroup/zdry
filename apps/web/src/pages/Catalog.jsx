@@ -287,7 +287,9 @@ export default function Catalog() {
   const { iso: routeIso, shareToken } = useParams();
   const [searchParams] = useSearchParams();
   const { user, ready, logout, login, register } = useAuth();
-  const commercial = !shareToken && searchParams.get("vista") === "comercial" && ["superadmin", "admin", "vendedor"].includes(user?.role);
+  const staffCatalog = !shareToken && ["superadmin", "admin", "vendedor", "gerente"].includes(user?.role);
+  const clientView = Boolean(shareToken) || searchParams.get("vista") === "cliente" || (Boolean(user) && !staffCatalog);
+  const commercial = staffCatalog && !clientView && searchParams.get("vista") === "comercial";
   const nav = useNavigate();
   const [meta, setMeta] = useState(null);
   const [data, setData] = useState({ items: [], total: 0, page: 1, pages: 1 });
@@ -325,8 +327,19 @@ export default function Catalog() {
     Object.entries(filters).forEach(([k, v]) => { if (v) p.set(k, v); });
     p.set("page", String(page));
     p.set("pageSize", String(pageSize));
+    if (clientView) p.set("audience", "cliente");
     return p.toString();
-  }, [filters, page, pageSize]);
+  }, [filters, page, pageSize, clientView]);
+
+  useEffect(() => {
+    if (!clientView) return;
+    setFilters((f) => {
+      const cat = f.cat === "nuevo" || f.cat === "segundo" ? f.cat : "";
+      const sort = f.sort === "year" ? "" : f.sort;
+      if (cat === f.cat && sort === f.sort) return f;
+      return { ...f, cat, sort };
+    });
+  }, [clientView]);
 
   const load = useCallback(() => {
     const showList = !routeIso && !listSplashDone.current;
@@ -421,7 +434,7 @@ export default function Catalog() {
     setSplash("detail");
     const started = Date.now();
     let cancelled = false;
-    api(commercial ? `/catalog/commercial/${routeIso}` : `/catalog/${routeIso}`)
+    api(commercial ? `/catalog/commercial/${routeIso}` : `/catalog/${routeIso}${clientView ? "?audience=cliente" : ""}`)
       .then((u) => {
         if (cancelled) return;
         const slots = publishedSlots(u);
@@ -448,7 +461,7 @@ export default function Catalog() {
     return () => {
       cancelled = true;
     };
-  }, [routeIso, ready, catalogOpen, commercial]);
+  }, [routeIso, ready, catalogOpen, commercial, clientView]);
 
   const loadAccount = useCallback(() => {
     if (!user || user.role !== "cliente") {
@@ -558,13 +571,14 @@ export default function Catalog() {
   }, [filters.type, filters.cat, filters.depot, filters.manufacturer, filters.sort, shareToken]);
 
   function openUnit(iso) {
-    const search = commercial ? "?vista=comercial" : "";
+    const search = commercial ? "?vista=comercial" : clientView && !shareToken ? "?vista=cliente" : "";
     nav(`${shareToken ? `/c/${shareToken}/u/${iso}` : `/u/${iso}`}${search}`);
   }
 
   function closeUnit() {
     if (shareToken) nav(`/c/${shareToken}`);
     else if (commercial) nav({ pathname: "/", search: "?vista=comercial" });
+    else if (clientView) nav({ pathname: "/", search: "?vista=cliente" });
     else goCatalogHome(nav);
   }
 
@@ -725,8 +739,18 @@ export default function Catalog() {
               <div className="qf-field">
                 <label>{copy.conditionLabel}</label>
                 <select value={filters.cat} onChange={(e) => { setPage(1); setFilters({ ...filters, cat: e.target.value }); }}>
-                  <option value="">{copy.conditionAll}</option>
-                  {(meta?.categories || []).map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+                  {clientView ? (
+                    <>
+                      <option value="">{copy.conditionAll}</option>
+                      <option value="nuevo">Nuevo & 1 trip</option>
+                      <option value="segundo">Segundo uso</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="">{copy.conditionAll}</option>
+                      {(meta?.categories || []).map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+                    </>
+                  )}
                 </select>
               </div>
               <div className="qf-field">
@@ -751,6 +775,15 @@ export default function Catalog() {
               <p>{share.vendorName} te comparte el stock disponible.</p>
             </div>
             <ShareClock expiresAt={share.expiresAt} />
+          </aside>
+        ) : null}
+        {searchParams.get("vista") === "cliente" ? (
+          <aside className="share-banner">
+            <div>
+              <span>Vista de cliente</span>
+              <b>Así ve el enlace el cliente</b>
+              <p>Sin año de fabricación. Las condiciones son Nuevo &amp; 1 trip y Segundo uso.</p>
+            </div>
           </aside>
         ) : null}
         {commercial ? (
@@ -778,7 +811,7 @@ export default function Catalog() {
             <select value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}>
               <option value="">{copy.sortIso}</option>
               <option value="price">{copy.sortPrice}</option>
-              <option value="year">{copy.sortYear}</option>
+              {clientView ? null : <option value="year">{copy.sortYear}</option>}
             </select>
           </label>
         </div>
@@ -812,7 +845,7 @@ export default function Catalog() {
                 <div className="card-iso">{u.iso}</div>
                 <div className="card-meta">
                   <span><b>{u.catLabel}</b></span>
-                  <span>{u.manufacturer} · {u.year || "—"}</span>
+                  <span>{clientView ? u.manufacturer : `${u.manufacturer} · ${u.year || "—"}`}</span>
                   <span>{u.depotName}</span>
                 </div>
                 <div className="card-footer">
@@ -924,7 +957,7 @@ export default function Catalog() {
                 <table className="spec-table">
                   <tbody>
                     <tr><td>Fabricante</td><td>{pdp.manufacturer}</td></tr>
-                    <tr><td>Año</td><td>{pdp.year || "—"}</td></tr>
+                    {clientView ? null : <tr><td>Año</td><td>{pdp.year || "—"}</td></tr>}
                     <tr><td>Tara / MGW</td><td>{tareMgwLabel(pdp.tareKg, pdp.mgwKg)}</td></tr>
                     <tr><td>Color</td><td>{pdp.color}</td></tr>
                   </tbody>

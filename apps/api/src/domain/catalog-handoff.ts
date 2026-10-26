@@ -14,7 +14,7 @@ export function handoffMessage(input: {
   const lines = [
     `Hola ${who}, te comparto un equipo que puede interesarte:`,
     `${input.typeLabel} · ${input.iso}`,
-    [input.catLabel, input.year ? String(input.year) : "", input.depotName].filter(Boolean).join(" · "),
+    [input.catLabel, input.depotName].filter(Boolean).join(" · "),
   ];
   if (input.manufacturer && input.manufacturer !== "—") lines.push(`Fabricante: ${input.manufacturer}`);
   if (input.includePrice && input.priceList && input.priceList > 0) {

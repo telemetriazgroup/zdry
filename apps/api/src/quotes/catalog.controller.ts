@@ -29,8 +29,9 @@ export class CatalogController {
     @Query("sort") sort?: string,
     @Query("page") page?: string,
     @Query("pageSize") pageSize?: string,
+    @Query("audience") audience?: string,
   ) {
-    return this.quotes.catalogList({ q, type, cat, depot, manufacturer, year, sort, page, pageSize });
+    return this.quotes.catalogList({ q, type, cat, depot, manufacturer, year, sort, page, pageSize, audience });
   }
 
   @Public()
@@ -191,7 +192,7 @@ export class CatalogController {
   @Public()
   @UseGuards(CatalogAccessGuard)
   @Get(":iso")
-  unit(@Param("iso") iso: string) {
-    return this.quotes.catalogUnit(iso);
+  unit(@Param("iso") iso: string, @Query("audience") audience?: string) {
+    return this.quotes.catalogUnit(iso, audience === "cliente");
   }
 }

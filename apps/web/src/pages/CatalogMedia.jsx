@@ -92,6 +92,7 @@ export default function CatalogMedia() {
   rowsRef.current = rows;
   isoRef.current = iso;
   const [unit, setUnit] = useState(null);
+  const [offerCat, setOfferCat] = useState("");
   const [notes, setNotes] = useState("");
   const [conds, setConds] = useState({ conditionFloor: "", conditionRoof: "", conditionDoors: "", conditionPaint: "" });
   const [rejectNote, setRejectNote] = useState("");
@@ -516,6 +517,34 @@ export default function CatalogMedia() {
     }
   }
 
+  useEffect(() => {
+    setOfferCat(unit?.cat || "");
+  }, [unit?.iso, unit?.cat]);
+
+  async function saveOfferCat() {
+    if (!unit?.iso || !canApprove) return;
+    setError("");
+    try {
+      const u = await api(`/catalog-media/${unit.iso}/condition`, { method: "PATCH", body: { cat: offerCat } });
+      await applyUnit(u, "Condición de precio guardada. Vale lo que elegiste, por encima de la evaluación.");
+      await loadOffer(unit.iso);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    }
+  }
+
+  async function followEvaluation() {
+    if (!unit?.iso || !canApprove) return;
+    setError("");
+    try {
+      const u = await api(`/catalog-media/${unit.iso}/condition`, { method: "PATCH", body: { followEvaluation: true } });
+      await applyUnit(u, "La condición de precio vuelve a seguir la evaluación.");
+      await loadOffer(unit.iso);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    }
+  }
+
   async function saveNotes() {
     try {
       const u = await api(`/catalog-media/${iso}`, {
@@ -539,6 +568,7 @@ export default function CatalogMedia() {
     try {
       const u = await api(`/catalog-media/${iso}/ratings`, { method: "POST", body: { conceptId, levelId } });
       await applyUnit(u, "Evaluación actualizada.");
+      await loadOffer(iso);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : e.message);
     }
@@ -801,6 +831,11 @@ export default function CatalogMedia() {
             {canApprove ? (
               <button className="btn-ghost" type="button" onClick={() => window.open(APP_ROOT, "_blank", "noopener")}>
                 Ver catálogo
+              </button>
+            ) : null}
+            {canApprove ? (
+              <button className="btn-ghost" type="button" onClick={() => window.open(`${APP_ROOT}?vista=cliente`, "_blank", "noopener")}>
+                Ver como cliente
               </button>
             ) : null}
             {canApprove ? (
@@ -1388,6 +1423,30 @@ export default function CatalogMedia() {
                 })() : null}
               </div>
             ) : null}
+
+            <div className="offer-box" style={{ marginTop: 16 }}>
+              <h4>Condición para el precio</h4>
+              <p className="section-sub">
+                Documental: {unit.catDocument || unit.cat}.
+                {unit.evalAverage != null ? ` Evaluación ${unit.evalAverage} puntos.` : " Sin evaluación."}
+                {" "}Sugerida por evaluación: {unit.suggestedCat || unit.cat}.
+                {unit.catLocked
+                  ? " El administrador fijó la condición y esa es la que usa el precio."
+                  : " Si el promedio sube, el precio usa la condición superior. La documental se conserva."}
+              </p>
+              <p className="section-sub">Malo 1 · Regular 2 · Bueno 4 · Excelente 5. Desde 2, As Is / Damaged pasa a Wind &amp; Water Tight. Desde 4, pasa a Cargo Worthy.</p>
+              {canApprove ? (
+                <div className="action-row">
+                  <select value={offerCat} onChange={(e) => setOfferCat(e.target.value)} aria-label="Condición de precio">
+                    {(meta.categories || []).map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+                  </select>
+                  <button className="btn-primary" type="button" onClick={saveOfferCat}>Usar esta condición</button>
+                  {unit.catLocked ? (
+                    <button className="btn-ghost" type="button" onClick={followEvaluation}>Seguir la evaluación</button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
 
             <h4 style={{ fontSize: 14, margin: "16px 0 8px" }}>Evaluación interna</h4>
             <p className="section-sub">Conceptos que arma el admin. Solo staff; el cliente no lo ve.</p>

@@ -12,6 +12,8 @@ import {
   slugEvalKey,
   type EvalSource,
 } from "../domain/evaluation";
+import { evaluationAverage, promotedCondition } from "../domain/condition-offer";
+import { refreshRulePrices } from "../odoo-import/acquisition-overlay.store";
 
 const LEGACY_KEYS = ["conditionFloor", "conditionRoof", "conditionDoors", "conditionPaint", "conditionWalls"] as const;
 
@@ -278,7 +280,57 @@ export class EvaluationService {
       after: { concept: concept.key, level: level.key, source, reason },
       ip,
     });
+    await this.applyOfferCondition(iso);
     return row;
+  }
+
+  async applyOfferCondition(iso: string) {
+    const applied = await this.applyOfferConditions([iso]);
+    return applied.get(iso) || null;
+  }
+
+  async applyOfferConditions(isos: string[]) {
+    const out = new Map<string, { cat: string; catDocument: string; catLocked: boolean; average: number | null; suggested: string }>();
+    if (!isos.length) return out;
+    const units = await this.prisma.container.findMany({
+      where: { iso: { in: isos } },
+      select: { iso: true, cat: true, catDocument: true, catLocked: true, priceSource: true },
+    });
+    const ratings = await this.prisma.containerRating.findMany({
+      where: { iso: { in: isos } },
+      select: { iso: true, levelKey: true },
+    });
+    const byIso = new Map<string, string[]>();
+    for (const row of ratings) {
+      const list = byIso.get(row.iso) || [];
+      list.push(row.levelKey);
+      byIso.set(row.iso, list);
+    }
+    const priceIsos: string[] = [];
+    for (const unit of units) {
+      const document = unit.catDocument || unit.cat;
+      const average = evaluationAverage(byIso.get(unit.iso) || []);
+      const suggested = promotedCondition(document, average);
+      const next = unit.catLocked ? unit.cat : suggested;
+      const data: { catDocument?: string; cat?: string } = {};
+      if (!unit.catDocument) data.catDocument = unit.cat;
+      if (!unit.catLocked && next !== unit.cat) {
+        data.cat = next;
+        if (unit.priceSource !== "manual") priceIsos.push(unit.iso);
+      }
+      if (Object.keys(data).length) {
+        await this.prisma.container.update({ where: { iso: unit.iso }, data });
+      }
+      out.set(unit.iso, {
+        cat: data.cat || unit.cat,
+        catDocument: data.catDocument || document,
+        catLocked: unit.catLocked,
+        average,
+        suggested,
+      });
+    }
+    if (priceIsos.length) await refreshRulePrices(this.prisma, { isos: priceIsos });
+    return out;
   }
 
   async syncLegacyFields(
