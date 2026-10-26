@@ -12,7 +12,13 @@ import {
   slugEvalKey,
   type EvalSource,
 } from "../domain/evaluation";
-import { evaluationAverage, promotedCondition } from "../domain/condition-offer";
+import {
+  OFFER_CONDITION_KEY,
+  evaluationAverage,
+  normalizeOfferConditionConfig,
+  promotedCondition,
+  type OfferConditionConfig,
+} from "../domain/condition-offer";
 import { refreshRulePrices } from "../odoo-import/acquisition-overlay.store";
 
 const LEGACY_KEYS = ["conditionFloor", "conditionRoof", "conditionDoors", "conditionPaint", "conditionWalls"] as const;
@@ -306,11 +312,12 @@ export class EvaluationService {
       list.push(row.levelKey);
       byIso.set(row.iso, list);
     }
+    const config = await this.offerConditionConfig();
     const priceIsos: string[] = [];
     for (const unit of units) {
       const document = unit.catDocument || unit.cat;
-      const average = evaluationAverage(byIso.get(unit.iso) || []);
-      const suggested = promotedCondition(document, average);
+      const average = evaluationAverage(byIso.get(unit.iso) || [], config.points);
+      const suggested = promotedCondition(document, average, config);
       const next = unit.catLocked ? unit.cat : suggested;
       const data: { catDocument?: string; cat?: string } = {};
       if (!unit.catDocument) data.catDocument = unit.cat;
@@ -331,6 +338,34 @@ export class EvaluationService {
     }
     if (priceIsos.length) await refreshRulePrices(this.prisma, { isos: priceIsos });
     return out;
+  }
+
+  async offerConditionConfig(): Promise<OfferConditionConfig> {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: OFFER_CONDITION_KEY } });
+    return normalizeOfferConditionConfig(row?.value);
+  }
+
+  async saveOfferConditionConfig(raw: unknown, user: AuthUser, ip?: string) {
+    const config = normalizeOfferConditionConfig(raw);
+    await this.prisma.appSetting.upsert({
+      where: { key: OFFER_CONDITION_KEY },
+      update: { value: config as Prisma.InputJsonValue },
+      create: { key: OFFER_CONDITION_KEY, value: config as Prisma.InputJsonValue },
+    });
+    const units = await this.prisma.container.findMany({
+      where: { archivedAt: null },
+      select: { iso: true },
+    });
+    await this.applyOfferConditions(units.map((unit) => unit.iso));
+    await this.audit.log({
+      user,
+      action: "update",
+      entity: "AppSetting",
+      entityId: OFFER_CONDITION_KEY,
+      after: { rules: config.rules.length, points: config.points },
+      ip,
+    });
+    return config;
   }
 
   async syncLegacyFields(

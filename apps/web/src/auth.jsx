@@ -44,6 +44,7 @@ export const ROLE_NAV = {
     { to: "/app/almacen/odoo", label: "Odoo — regularizar" },
     { to: "/app/tipos-odoo", label: "Tipos según Odoo" },
     { to: "/app/catalogo-textos", label: "Textos del catálogo" },
+    { to: "/app/evaluaciones", label: "Evaluaciones" },
     { to: "/app/configuracion", label: "Configuración" },
     { to: "/app/auditoria", label: "Auditoría" },
     { to: "/app/respaldo", label: "Respaldo y recuperación" },
@@ -63,6 +64,7 @@ export const ROLE_NAV = {
     { to: "/app/almacen/campo", label: "Patio — campo" },
     { to: "/app/almacen/patio", label: "Patio" },
     { to: "/app/catalogo-media", label: "Ficha catálogo" },
+    { to: "/app/evaluaciones", label: "Evaluaciones" },
     { to: "/app/enlaces-catalogo", label: "Enlaces catálogo" },
   ],
   gerente: [
@@ -71,6 +73,7 @@ export const ROLE_NAV = {
     { to: "/app/equipo", label: "Equipo" },
     { to: "/app/configuracion", label: "Configuración" },
     { to: "/app/catalogo-media", label: "Ficha catálogo" },
+    { to: "/app/evaluaciones", label: "Evaluaciones" },
   ],
   vendedor: [
     { to: "/app", label: "Inicio", end: true },

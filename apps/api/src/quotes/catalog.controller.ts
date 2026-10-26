@@ -37,8 +37,8 @@ export class CatalogController {
   @Public()
   @UseGuards(CatalogAccessGuard)
   @Get("meta")
-  meta() {
-    return this.quotes.catalogMeta();
+  meta(@Query("audience") audience?: string) {
+    return this.quotes.catalogMeta(audience === "cliente");
   }
 
   @Public()

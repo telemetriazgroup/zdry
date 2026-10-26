@@ -50,6 +50,7 @@ export function iconFor(path) {
   if (path.includes("integraciones")) return "gear";
   if (path.includes("respaldo")) return "file";
   if (path.includes("catalogo-textos")) return "tag";
+  if (path.includes("evaluaciones")) return "clipboard";
   if (path.includes("catalogo-media")) return "camera";
   if (path.includes("perfil")) return "user";
   if (path.includes("bandeja")) return "inbox";

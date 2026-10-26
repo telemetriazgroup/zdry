@@ -829,8 +829,8 @@ export default function CatalogMedia() {
               </button>
             ) : null}
             {canApprove ? (
-              <button className="btn-ghost" type="button" onClick={() => window.open(APP_ROOT, "_blank", "noopener")}>
-                Ver catálogo
+              <button className="btn-ghost" type="button" onClick={() => window.open(`${APP_ROOT}?vista=comercial`, "_blank", "noopener")}>
+                Ver catálogo comercial
               </button>
             ) : null}
             {canApprove ? (
@@ -923,7 +923,11 @@ export default function CatalogMedia() {
                       </td>
                     ) : null}
                     <td className="card-iso">{r.iso}{r.demo ? <span className="demo-chip">DEMO</span> : null}</td>
-                    <td>{r.type}{r.cat ? ` · ${r.cat}` : ""}</td>
+                    <td>
+                      {r.type}{r.cat ? ` · ${r.cat}` : ""}
+                      {r.evalAverage != null ? <div className="muted">Promedio {r.evalAverage}</div> : null}
+                      {r.catDocument && r.catDocument !== r.cat ? <div className="muted">Antes {r.catDocument}</div> : null}
+                    </td>
                     <td title={`Origen ${usd(r.rawBase)}${r.safetyPct ? ` + margen de seguridad ${r.safetyPct}%` : ""}`}>
                       {usd(r.securedBase ?? r.base ?? r.rawBase)}
                     </td>
@@ -1427,14 +1431,15 @@ export default function CatalogMedia() {
             <div className="offer-box" style={{ marginTop: 16 }}>
               <h4>Condición para el precio</h4>
               <p className="section-sub">
-                Documental: {unit.catDocument || unit.cat}.
-                {unit.evalAverage != null ? ` Evaluación ${unit.evalAverage} puntos.` : " Sin evaluación."}
-                {" "}Sugerida por evaluación: {unit.suggestedCat || unit.cat}.
-                {unit.catLocked
-                  ? " El administrador fijó la condición y esa es la que usa el precio."
-                  : " Si el promedio sube, el precio usa la condición superior. La documental se conserva."}
+                {unit.evalAverage != null
+                  ? `Promedio de evaluación: ${unit.evalAverage}.`
+                  : "Sin evaluación: se mantiene la condición en la que está."}
+                {unit.catDocument && unit.catDocument !== unit.cat
+                  ? ` Antes estaba en ${(meta.categories || []).find((c) => c.code === unit.catDocument)?.label || unit.catDocument}. Ahora el precio usa ${(meta.categories || []).find((c) => c.code === unit.cat)?.label || unit.cat}.`
+                  : ` Condición de precio: ${(meta.categories || []).find((c) => c.code === unit.cat)?.label || unit.cat}.`}
+                {unit.catLocked ? " El administrador fijó esta condición y tiene preferencia." : ""}
               </p>
-              <p className="section-sub">Malo 1 · Regular 2 · Bueno 4 · Excelente 5. Desde 2, As Is / Damaged pasa a Wind &amp; Water Tight. Desde 4, pasa a Cargo Worthy.</p>
+              <p className="section-sub">Los puntos de cada nivel y el salto de una condición a otra se ajustan en <Link to="/app/evaluaciones">Evaluaciones</Link>.</p>
               {canApprove ? (
                 <div className="action-row">
                   <select value={offerCat} onChange={(e) => setOfferCat(e.target.value)} aria-label="Condición de precio">

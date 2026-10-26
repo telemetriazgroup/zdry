@@ -1,4 +1,4 @@
-import { clientCondition, evaluationAverage, promotedCondition } from "./condition-offer";
+import { clientCondition, defaultOfferConditionConfig, evaluationAverage, promotedCondition } from "./condition-offer";
 
 describe("clientCondition", () => {
   it("agrupa todo lo que no es nuevo como segundo uso", () => {
@@ -27,5 +27,13 @@ describe("promotedCondition", () => {
     expect(evaluationAverage(["excelente", "malo"])).toBe(3);
     expect(evaluationAverage([])).toBeNull();
     expect(promotedCondition("ASIS", null)).toBe("ASIS");
+  });
+
+  it("usa las reglas guardadas y no cambia la condición si no hay promedio", () => {
+    const config = defaultOfferConditionConfig();
+    config.rules = [{ id: "custom", fromCat: "WWT", minAverage: 3, toCat: "CW" }];
+    expect(promotedCondition("WWT", 3, config)).toBe("CW");
+    expect(promotedCondition("WWT", 2.9, config)).toBe("WWT");
+    expect(promotedCondition("ASIS", 5, { ...config, rules: [] })).toBe("ASIS");
   });
 });

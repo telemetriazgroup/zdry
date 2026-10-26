@@ -163,6 +163,8 @@ export class CatalogMediaService {
         iso: c.iso,
         type: c.type,
         cat: c.cat,
+        catDocument: changed.get(c.iso)?.catDocument || c.cat,
+        evalAverage: changed.get(c.iso)?.average ?? null,
         status: c.status,
         depotName: c.depot.name,
         manufacturer: c.manufacturer,

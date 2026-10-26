@@ -285,22 +285,35 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async catalogMeta() {
-    const [types, cats, depots, manufacturers] = await Promise.all([
+  async catalogMeta(client = false) {
+    const where = await this.catalogWhere();
+    const [types, cats, depots, manufacturers, stock] = await Promise.all([
       this.prisma.containerType.findMany({ where: ACTIVE_MASTER, orderBy: { code: "asc" } }),
       this.prisma.category.findMany({ where: ACTIVE_MASTER, orderBy: { code: "asc" } }),
       this.prisma.depot.findMany({ where: ACTIVE_MASTER, orderBy: { name: "asc" } }),
       this.prisma.container.findMany({
-        where: await this.catalogWhere(),
+        where,
         select: { manufacturer: true },
         distinct: ["manufacturer"],
       }),
+      client
+        ? this.prisma.container.findMany({ where, select: { type: true, depotId: true } })
+        : Promise.resolve([] as { type: string; depotId: string }[]),
     ]);
+    const typeCodes = new Set(stock.map((row) => row.type));
+    const depotIds = new Set(stock.map((row) => row.depotId));
+    const visibleTypes = client
+      ? [
+          ...types.filter((row) => typeCodes.has(row.code)),
+          ...[...typeCodes].filter((code) => !types.some((row) => row.code === code)).map((code) => ({ code, label: code, dims: "", color: "#5c6370" })),
+        ]
+      : types;
+    const visibleDepots = client ? depots.filter((row) => depotIds.has(row.id)) : depots;
     return {
-      types,
+      types: visibleTypes,
       categories: cats,
-      depots: depots.map((d) => ({ id: d.id, name: d.name, city: d.city })),
-      manufacturers: manufacturers.map((m) => m.manufacturer).filter((x) => x && x !== "—"),
+      depots: visibleDepots.map((d) => ({ id: d.id, name: d.name, city: d.city })),
+      manufacturers: manufacturers.map((m) => m.manufacturer).filter((x) => x && x !== "—" && !/^no\s*defin/i.test(x)),
       freightZones: FREIGHT_ZONES,
       freightVehicles: FREIGHT_VEHICLE_LABELS,
       pageSize: DEFAULT_PAGE_SIZE,

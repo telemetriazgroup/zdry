@@ -18,6 +18,18 @@ import VideoMarks, { videoSilenceProps } from "../video-marks.jsx";
 const CART_KEY = "zdry_cart";
 const money = (n) => (n == null ? null : "$" + Math.round(Number(n)).toLocaleString("en-US"));
 
+function manufacturerMissing(value) {
+  const text = String(value || "").trim().toLowerCase();
+  return !text || text === "—" || text === "-" || text === "no define" || text === "no definido" || text === "n/a" || text === "sin fabricante";
+}
+
+function makerLine(unit, clientView) {
+  const missing = manufacturerMissing(unit.manufacturer);
+  if (clientView) return missing ? "" : unit.manufacturer;
+  if (missing) return unit.year ? String(unit.year) : "";
+  return `${unit.manufacturer} · ${unit.year || "—"}`;
+}
+
 function kgOrDash(n) {
   const v = Number(n);
   if (!Number.isFinite(v) || v <= 0) return null;
@@ -335,11 +347,20 @@ export default function Catalog() {
     if (!clientView) return;
     setFilters((f) => {
       const cat = f.cat === "nuevo" || f.cat === "segundo" ? f.cat : "";
-      const sort = f.sort === "year" ? "" : f.sort;
-      if (cat === f.cat && sort === f.sort) return f;
-      return { ...f, cat, sort };
+      if (cat === f.cat && f.sort === "") return f;
+      return { ...f, cat, sort: "" };
     });
   }, [clientView]);
+
+  useEffect(() => {
+    if (!clientView || !meta) return;
+    setFilters((f) => {
+      const typeOk = !f.type || (meta.types || []).some((t) => t.code === f.type);
+      const depotOk = !f.depot || (meta.depots || []).some((d) => d.id === f.depot);
+      if (typeOk && depotOk) return f;
+      return { ...f, type: typeOk ? f.type : "", depot: depotOk ? f.depot : "" };
+    });
+  }, [clientView, meta]);
 
   const load = useCallback(() => {
     const showList = !routeIso && !listSplashDone.current;
@@ -408,8 +429,8 @@ export default function Catalog() {
 
   useEffect(() => {
     if (!ready || !catalogOpen) return;
-    api("/catalog/meta").then(setMeta).catch(() => {});
-  }, [ready, catalogOpen]);
+    api(`/catalog/meta${clientView ? "?audience=cliente" : ""}`).then(setMeta).catch(() => {});
+  }, [ready, catalogOpen, clientView]);
 
   useEffect(() => {
     const lock = Boolean(pdp || quoteOpen || splash);
@@ -806,14 +827,16 @@ export default function Catalog() {
               <small>{copy.stockHint}</small>
             </span>
           </div>
-          <label className="stock-sort">
-            {copy.sortLabel}
-            <select value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}>
-              <option value="">{copy.sortIso}</option>
-              <option value="price">{copy.sortPrice}</option>
-              {clientView ? null : <option value="year">{copy.sortYear}</option>}
-            </select>
-          </label>
+          {clientView ? null : (
+            <label className="stock-sort">
+              {copy.sortLabel}
+              <select value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}>
+                <option value="">{copy.sortIso}</option>
+                <option value="price">{copy.sortPrice}</option>
+                <option value="year">{copy.sortYear}</option>
+              </select>
+            </label>
+          )}
         </div>
         <CatalogPager page={page} pages={data.pages} onPage={goPage} label="Páginas del catálogo, arriba" />
         <div className="steps-block">
@@ -845,7 +868,7 @@ export default function Catalog() {
                 <div className="card-iso">{u.iso}</div>
                 <div className="card-meta">
                   <span><b>{u.catLabel}</b></span>
-                  <span>{clientView ? u.manufacturer : `${u.manufacturer} · ${u.year || "—"}`}</span>
+                  {makerLine(u, clientView) ? <span>{makerLine(u, clientView)}</span> : null}
                   <span>{u.depotName}</span>
                 </div>
                 <div className="card-footer">
@@ -956,7 +979,7 @@ export default function Catalog() {
               <div>
                 <table className="spec-table">
                   <tbody>
-                    <tr><td>Fabricante</td><td>{pdp.manufacturer}</td></tr>
+                    <tr><td>Fabricante</td><td>{manufacturerMissing(pdp.manufacturer) ? "No definido" : pdp.manufacturer}</td></tr>
                     {clientView ? null : <tr><td>Año</td><td>{pdp.year || "—"}</td></tr>}
                     <tr><td>Tara / MGW</td><td>{tareMgwLabel(pdp.tareKg, pdp.mgwKg)}</td></tr>
                     <tr><td>Color</td><td>{pdp.color}</td></tr>

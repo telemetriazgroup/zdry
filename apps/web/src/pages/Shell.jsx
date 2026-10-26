@@ -28,6 +28,7 @@ import TypeAudit from "./TypeAudit.jsx";
 import DryStats from "./DryStats.jsx";
 import Alquileres from "./Alquileres.jsx";
 import CatalogShares from "./CatalogShares.jsx";
+import Evaluaciones from "./Evaluaciones.jsx";
 import { OdooLinkModal, OdooNavStatus, useOdooLink } from "../odoo-link.jsx";
 
 const SIDEBAR_KEY = "zdry.sidebarCollapsed";
@@ -228,6 +229,7 @@ export default function Shell() {
             <Route path="almacen/despachos" element={<Gate nav={nav} role={user.role} path="/app/almacen/despachos"><Restricted title="Despachos" /></Gate>} />
             <Route path="catalogo-textos" element={<Gate nav={nav} role={user.role} path="/app/catalogo-textos"><CatalogCopy /></Gate>} />
             <Route path="catalogo-media" element={<Gate nav={nav} role={user.role} path="/app/catalogo-media"><CatalogMedia /></Gate>} />
+            <Route path="evaluaciones" element={<Gate nav={nav} role={user.role} path="/app/evaluaciones"><Evaluaciones /></Gate>} />
             <Route path="integraciones" element={<Gate nav={nav} role={user.role} path="/app/integraciones"><OdooIntegrations /></Gate>} />
             <Route path="estadistica-dry" element={<Gate nav={nav} role={user.role} path="/app/estadistica-dry"><DryStats /></Gate>} />
             <Route path="respaldo" element={<Gate nav={nav} role={user.role} path="/app/respaldo"><SystemBackup /></Gate>} />
