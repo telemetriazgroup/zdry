@@ -95,6 +95,109 @@ export function salidaQueued(state: string) {
   return state === "en_cola" || state === "en_espera";
 }
 
+/** El segundo WhatsApp espera a que el primero deje de estar en la cola del bot. */
+export const SALIDA_GAP_MS = 5000;
+
+export function shareAvisoText(client: SalidaResult, vendor: SalidaResult): { ok: boolean; text: string } {
+  const channel = client.channel;
+  if (channel === "ninguno") {
+    return { ok: false, text: "No se enviaron WhatsApp ni correos: el canal de salida está apagado." };
+  }
+  const wantWa = channel === "whatsapp" || channel === "ambos";
+  const wantMail = channel === "correo" || channel === "ambos";
+  const failed: string[] = [];
+  const check = (label: string, state: SalidaItemState, wanted: boolean) => {
+    if (!wanted || state === "apagado") return;
+    if (state !== "en_cola") failed.push(label);
+  };
+  check("WhatsApp del cliente", client.whatsapp, wantWa);
+  check("correo del cliente", client.correo, wantMail);
+  check("WhatsApp del comercial", vendor.whatsapp, wantWa);
+  check("correo del comercial", vendor.correo, wantMail);
+  if (failed.length) return { ok: false, text: `No salió: ${failed.join(", ")}.` };
+  if (wantWa && wantMail) return { ok: true, text: "Se enviaron los WhatsApp y los correos al cliente y al comercial." };
+  if (wantWa) return { ok: true, text: "Se enviaron los WhatsApp al cliente y al comercial." };
+  return { ok: true, text: "Se enviaron los correos al cliente y al comercial." };
+}
+
+/** Aviso al comercial cuando se abre un seguimiento. No incluye la clave del catálogo. */
+export function vendorFollowNotice(input: {
+  vendorName: string;
+  clientName: string;
+  company: string;
+  ruc: string;
+  dni: string;
+  phone: string;
+  email: string;
+  byClient: boolean;
+}) {
+  const vendor = input.vendorName.trim() || "comercial";
+  const company = input.company.trim();
+  const client = input.clientName.trim();
+  const who = company && client && company.toLowerCase() !== client.toLowerCase()
+    ? `${company}, contacto ${client}`
+    : company || client || "Un cliente";
+  const doc = input.ruc.trim() ? `RUC ${input.ruc.trim()}` : input.dni.trim() ? `DNI ${input.dni.trim()}` : "";
+  const phone = showPhone(input.phone);
+  const email = input.email.trim();
+  const headline = input.byClient ? "Un cliente abrió un seguimiento." : "Se abrió un seguimiento de catálogo.";
+  const lead = input.byClient
+    ? "Un cliente se registró y quedó a tu cargo."
+    : "Quedó un seguimiento de catálogo a tu cargo.";
+  const lines = ["*ZGROUP*", headline, "", `Hola ${vendor}.`, lead, "", "*Cliente*", who];
+  if (doc) lines.push(doc);
+  if (phone) lines.push(`Celular: ${phone}`);
+  if (email) lines.push(`Correo: ${email}`);
+  lines.push("", "Atiéndelo. El sistema ya le dijo que lo vas a contactar.");
+  const rows: Array<[string, string]> = [
+    ["Cliente", who],
+    ["Documento", doc],
+    ["Celular", phone],
+    ["Correo", email],
+  ];
+  return {
+    subject: input.byClient ? "Un cliente abrió un seguimiento" : "Se abrió un seguimiento de catálogo",
+    message: lines.join("\n").slice(0, 4000),
+    html: executiveLetter({
+      kicker: "SEGUIMIENTO",
+      title: `Hola, ${vendor}`,
+      lead,
+      rows,
+      note: "Atiéndelo. El sistema ya le dijo que lo vas a contactar.",
+    }),
+  };
+}
+
+/** Aviso al comercial cuando el cliente pide información de un equipo. No incluye la clave. */
+export function unitInterestNotice(input: {
+  vendorName: string;
+  clientName: string;
+  company: string;
+  iso: string;
+  type: string;
+  phone: string;
+  email: string;
+}) {
+  const vendor = input.vendorName.trim() || "comercial";
+  const company = input.company.trim();
+  const client = input.clientName.trim();
+  const who = company && client && company.toLowerCase() !== client.toLowerCase()
+    ? `${client} de ${company}`
+    : client || company || "Un cliente";
+  const unit = [input.iso.trim(), input.type.trim()].filter(Boolean).join(" ");
+  const phone = showPhone(input.phone);
+  const email = input.email.trim();
+  const message = [
+    `Hola ${vendor}.`,
+    `${who} pidió información del equipo ${unit}.`,
+    "Su cotización fue solicitada.",
+    phone ? `Celular: ${phone}.` : "",
+    email ? `Correo: ${email}.` : "",
+    "Atiéndelo. El sistema ya le dijo que lo vas a contactar.",
+  ].filter(Boolean).join(" ");
+  return { subject: `Te pidieron información de ${input.iso.trim() || "un equipo"}`, message };
+}
+
 /** Aviso al comercial cuando el cliente vuelve y el enlace ya había vencido. No incluye la clave. */
 export function vendorReturnNotice(input: { vendorName: string; clientName: string; company: string; ruc: string; dni: string }) {
   const vendor = input.vendorName.trim() || "comercial";
@@ -127,6 +230,45 @@ function spanLabel(hours: number, minutes?: number) {
   const extra = Number(minutes);
   if (Number.isFinite(extra) && extra > 0) return extra === 1 ? "1 minuto" : `${Math.round(extra)} minutos`;
   return hoursLabel(hours);
+}
+
+function executiveLetter(input: {
+  kicker: string;
+  title: string;
+  lead: string;
+  rows: Array<[string, string]>;
+  note: string;
+}) {
+  const font = "Arial,Helvetica,sans-serif";
+  const rows = input.rows.filter((pair) => pair[1]).map(([label, value]) => (
+    `<tr><td style="padding:11px 0;border-bottom:1px solid #e2e4ea;color:#5c6370;font-size:13px;width:120px;font-family:${font};">${esc(label)}</td><td style="padding:11px 0;border-bottom:1px solid #e2e4ea;color:#1a1d29;font-size:14px;font-weight:700;font-family:${font};">${esc(value)}</td></tr>`
+  )).join("");
+  return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"></head><body style="margin:0;padding:0;background:#f4f5f7;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:28px 12px;">
+<tr><td align="center">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border:1px solid #e2e4ea;border-radius:12px;overflow:hidden;font-family:${font};">
+<tr><td style="background:#d9622f;height:6px;font-size:0;line-height:0;">&nbsp;</td></tr>
+<tr><td style="background:#12203a;padding:28px 36px 24px;">
+<div style="color:#ffffff;font-size:13px;font-weight:700;letter-spacing:0.22em;font-family:${font};">ZGROUP</div>
+<div style="color:#d7deea;font-size:13px;margin-top:8px;font-family:${font};">Venta y alquiler de contenedores</div>
+</td></tr>
+<tr><td style="padding:32px 36px 8px;">
+<div style="color:#d9622f;font-size:13px;font-weight:700;letter-spacing:0.14em;font-family:${font};">${esc(input.kicker)}</div>
+<h1 style="margin:12px 0 0;font-size:26px;line-height:1.25;color:#12203a;font-weight:700;font-family:${font};">${esc(input.title)}</h1>
+<p style="margin:14px 0 0;color:#1a1d29;font-size:15px;line-height:1.55;font-family:${font};">${esc(input.lead)}</p>
+</td></tr>
+<tr><td style="padding:22px 36px 8px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #e2e4ea;">${rows}</table>
+</td></tr>
+<tr><td style="padding:8px 36px 28px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e4ea;border-radius:12px;">
+<tr><td style="padding:16px 18px;border-left:4px solid #d9622f;color:#12203a;font-size:14px;line-height:1.5;font-family:${font};">${esc(input.note)}</td></tr>
+</table>
+</td></tr>
+<tr><td style="background:#12203a;padding:16px 36px;color:#d7deea;font-size:12px;line-height:1.5;font-family:${font};">ZGROUP · Aviso interno de seguimiento.</td></tr>
+</table>
+</td></tr></table>
+</body></html>`;
 }
 
 function esc(value: string) {

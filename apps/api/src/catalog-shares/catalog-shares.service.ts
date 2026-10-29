@@ -6,7 +6,7 @@ import { AuditService } from "../audit/audit.service";
 import { AuthUser, COMMERCIAL_ROLES } from "../auth/auth.types";
 import { OdooClient } from "../odoo/odoo.client";
 import { SalidaService } from "../salida/salida.service";
-import { salidaQueued, shareNoticePack, vendorReturnNotice } from "../domain/salida";
+import { SALIDA_GAP_MS, SalidaResult, salidaQueued, shareAvisoText, shareNoticePack, unitInterestNotice, vendorFollowNotice, vendorReturnNotice } from "../domain/salida";
 import { CATALOG_COMMERCE_KEY, normalizeCatalogCommerce, whatsappDigits } from "../domain/catalog-commerce";
 import {
   clientFromAgent,
@@ -36,6 +36,7 @@ import { isValidPeruRuc, mapSunatRuc, normalizeRuc } from "../domain/ruc-sunat";
 export class CatalogSharesService {
   private readonly pinFails = new Map<string, { n: number; until: number }>();
   private readonly walkInHits = new Map<string, number[]>();
+  private readonly avisos = new Map<string, { done: boolean; ok: boolean; text: string }>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -258,8 +259,8 @@ export class CatalogSharesService {
         ruc: draft.ruc,
         dni: draft.dni,
         rucPending: draft.rucPending,
-        odooPartnerId: linked.partnerId,
-        odooContactId: linked.contactId,
+        odooPartnerId: linked.partnerId || null,
+        odooContactId: linked.contactId || null,
         clientName: draft.clientName,
         clientCompany: draft.clientCompany,
         clientPhone: draft.clientPhone,
@@ -281,17 +282,18 @@ export class CatalogSharesService {
     if (vendorWhatsapp && vendorWhatsapp !== whatsappDigits(assignee.whatsapp)) {
       await this.prisma.user.update({ where: { id: assignee.id }, data: { whatsapp: vendorWhatsapp } });
     }
+    const emailEvent = linked.emailTaken ? await this.noteEmailTaken(row.id, row.clientEmail, ip) : null;
     const card = this.noticeCard(row, Boolean(draft.odooPartnerId || draft.customerId), origin);
-    const notice = await this.salida.notifyShare(card);
+    this.queueShareAvisos(row, card, false, user, ip);
     await this.audit.log({
       user,
       action: "create",
       entity: "CatalogShare",
       entityId: row.id,
-      after: { clientName: row.clientName, hours: row.hours, salida: { channel: notice.channel, whatsapp: notice.whatsapp, correo: notice.correo } },
+      after: { clientName: row.clientName, hours: row.hours, salida: "en_segundo_plano" },
       ip,
     });
-    return { ...this.present({ ...row, events: [] }), salida: notice, invite: shareNoticePack(card).whatsapp };
+    return { ...this.present({ ...row, events: emailEvent ? [emailEvent] : [] }), avisoPending: true, invite: shareNoticePack(card).whatsapp };
   }
 
   private noticeCard(row: {
@@ -419,6 +421,229 @@ export class CatalogSharesService {
     return { ok: true };
   }
 
+  async requestUnit(token: string, rawIso: unknown, meta?: { ip?: string; cookie?: string }) {
+    const row = await this.prisma.catalogShare.findUnique({ where: { token: String(token || "").trim() } });
+    if (!row || row.archivedAt || row.suspendedAt || !shareIsLive(row.expiresAt)) {
+      throw new BadRequestException("Este enlace del catálogo no está disponible.");
+    }
+    if (grantMatchesSession(meta?.cookie, row.activeSession) !== "ok") {
+      throw new BadRequestException("Entra al catálogo con tu clave para pedir información.");
+    }
+    const iso = String(rawIso || "").trim().toUpperCase();
+    if (!iso) throw new BadRequestException("Elige un equipo.");
+    const unit = await this.prisma.container.findUnique({ where: { iso }, select: { iso: true, type: true, archivedAt: true } });
+    if (!unit || unit.archivedAt) throw new BadRequestException("Esa unidad no está en el catálogo.");
+    const vendorName = row.vendorName || "tu comercial";
+    const message = `Tu cotización ha sido solicitada. En un momento te atenderá ${vendorName}.`;
+    const since = new Date(Date.now() - 10 * 60 * 1000);
+    const recent = await this.prisma.catalogShareEvent.findFirst({
+      where: { shareId: row.id, kind: "interest", iso, createdAt: { gt: since } },
+      select: { id: true },
+    });
+    if (!recent) {
+      const vendor = await this.prisma.user.findUnique({
+        where: { id: row.vendorId },
+        select: { email: true, name: true, whatsapp: true },
+      });
+      const vendorPhone = whatsappDigits(row.vendorWhatsapp || vendor?.whatsapp || "");
+      const clientPhone = whatsappDigits(row.clientPhone);
+      const alert = unitInterestNotice({
+        vendorName: vendor?.name || row.vendorName,
+        clientName: row.contactName || row.clientName,
+        company: row.clientCompany,
+        iso: unit.iso,
+        type: unit.type,
+        phone: row.clientPhone,
+        email: row.clientEmail,
+      });
+      await this.salida.notifyText({
+        phone: vendorPhone,
+        email: vendor?.email || "",
+        contact: clientPhone.length >= 8 ? clientPhone : vendorPhone,
+        subject: alert.subject,
+        message: alert.message,
+      });
+      await this.prisma.catalogShareEvent.create({
+        data: {
+          shareId: row.id,
+          kind: "interest",
+          iso: unit.iso,
+          detail: { note: "Pidió información. Se avisó al comercial." },
+          ip: String(meta?.ip || "").slice(0, 64),
+        },
+      });
+    }
+    return { ok: true, iso: unit.iso, vendorName, message };
+  }
+
+  shareAviso(id: string, user: AuthUser) {
+    return this.readAviso(id, user);
+  }
+
+  publicAviso(token: string) {
+    return this.avisos.get(String(token || "").trim()) || { done: true, ok: true, text: "" };
+  }
+
+  private async readAviso(id: string, user: AuthUser) {
+    const row = await this.prisma.catalogShare.findUnique({ where: { id }, select: { id: true, vendorId: true } });
+    if (!row) return { done: true, ok: true, text: "" };
+    if (!this.canSeeAll(user) && row.vendorId !== user.id) throw new ForbiddenException("Ese enlace no es tuyo.");
+    return this.avisos.get(row.id) || { done: true, ok: true, text: "" };
+  }
+
+  private queueShareAvisos(row: {
+    id: string;
+    token: string;
+    vendorId: string;
+    vendorName: string;
+    vendorWhatsapp: string;
+    contactName: string;
+    clientName: string;
+    clientCompany: string;
+    ruc: string;
+    dni: string;
+    clientPhone: string;
+    clientEmail: string;
+  }, card: ReturnType<CatalogSharesService["noticeCard"]>, byClient: boolean, user?: AuthUser, ip?: string) {
+    const job = { done: false, ok: true, text: "" };
+    this.avisos.set(row.id, job);
+    this.avisos.set(row.token, job);
+    void this.dispatchShareAvisos(row, card, byClient, job, user, ip);
+  }
+
+  private async dispatchShareAvisos(
+    row: {
+      id: string;
+      token: string;
+      vendorId: string;
+      vendorName: string;
+      vendorWhatsapp: string;
+      contactName: string;
+      clientName: string;
+      clientCompany: string;
+      ruc: string;
+      dni: string;
+      clientPhone: string;
+      clientEmail: string;
+    },
+    card: ReturnType<CatalogSharesService["noticeCard"]>,
+    byClient: boolean,
+    job: { done: boolean; ok: boolean; text: string },
+    user?: AuthUser,
+    ip?: string,
+  ) {
+    try {
+      const client = await this.salida.notifyShare(card);
+      if (client.whatsapp === "en_cola" || client.whatsapp === "en_espera") await this.pause(SALIDA_GAP_MS);
+      const vendor = await this.notifyVendorFollow(row, byClient);
+      const summary = shareAvisoText(client, vendor);
+      job.done = true;
+      job.ok = summary.ok;
+      job.text = summary.text;
+      await this.audit.log({
+        user,
+        action: "salida_share",
+        entity: "CatalogShare",
+        entityId: row.id,
+        after: {
+          client: { whatsapp: client.whatsapp, correo: client.correo },
+          vendor: { whatsapp: vendor.whatsapp, correo: vendor.correo },
+        },
+        ip,
+      });
+    } catch {
+      job.done = true;
+      job.ok = false;
+      job.text = "No se pudieron enviar los WhatsApp y los correos.";
+    } finally {
+      setTimeout(() => {
+        this.avisos.delete(row.id);
+        this.avisos.delete(row.token);
+      }, 3 * 60 * 1000);
+    }
+  }
+
+  private pause(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async notifyVendorReturn(share: {
+    vendorId: string;
+    vendorName: string;
+    vendorWhatsapp: string;
+    contactName: string;
+    clientName: string;
+    clientCompany: string;
+    ruc: string;
+    dni: string;
+    clientPhone: string;
+  }, clientNotice: SalidaResult) {
+    if (clientNotice.whatsapp === "en_cola" || clientNotice.whatsapp === "en_espera") await this.pause(SALIDA_GAP_MS);
+    const vendor = await this.prisma.user.findUnique({
+      where: { id: share.vendorId },
+      select: { email: true, name: true, whatsapp: true },
+    });
+    const vendorPhone = whatsappDigits(share.vendorWhatsapp || vendor?.whatsapp || "");
+    const clientPhone = whatsappDigits(share.clientPhone);
+    const alert = vendorReturnNotice({
+      vendorName: vendor?.name || share.vendorName,
+      clientName: share.contactName || share.clientName,
+      company: share.clientCompany,
+      ruc: share.ruc,
+      dni: share.dni,
+    });
+    await this.salida.notifyText({
+      phone: vendorPhone,
+      email: vendor?.email || "",
+      contact: clientPhone.length >= 8 ? clientPhone : vendorPhone,
+      subject: alert.subject,
+      message: alert.message,
+    });
+  }
+
+  private async notifyVendorFollow(row: {
+    vendorId: string;
+    vendorName: string;
+    vendorWhatsapp: string;
+    contactName: string;
+    clientName: string;
+    clientCompany: string;
+    ruc: string;
+    dni: string;
+    clientPhone: string;
+    clientEmail: string;
+  }, byClient: boolean): Promise<SalidaResult> {
+    const vendor = await this.prisma.user.findUnique({
+      where: { id: row.vendorId },
+      select: { email: true, name: true, whatsapp: true },
+    });
+    const alert = vendorFollowNotice({
+      vendorName: vendor?.name || row.vendorName,
+      clientName: row.contactName || row.clientName,
+      company: row.clientCompany,
+      ruc: row.ruc,
+      dni: row.dni,
+      phone: row.clientPhone,
+      email: row.clientEmail,
+      byClient,
+    });
+    const vendorPhone = whatsappDigits(row.vendorWhatsapp || vendor?.whatsapp || "");
+    const clientPhone = whatsappDigits(row.clientPhone);
+    const contact = clientPhone.length >= 8 ? clientPhone : vendorPhone;
+    const sent = await this.salida.notifyText({
+      phone: vendorPhone,
+      email: vendor?.email || "",
+      contact,
+      subject: alert.subject,
+      message: alert.message,
+      html: alert.html,
+    });
+    if (sent.whatsapp !== "en_espera") return sent;
+    await this.pause(SALIDA_GAP_MS);
+    const again = await this.salida.notifyWhatsapp({ phone: vendorPhone, contact, message: alert.message });
+    return { ...sent, whatsapp: again.whatsapp, motivo: [sent.motivo, again.motivo].filter(Boolean).join(" ") };
+  }
+
   private guardWalkIn(ip?: string) {
     const key = String(ip || "local").slice(0, 64);
     const now = Date.now();
@@ -538,8 +763,8 @@ export class CatalogSharesService {
         ruc: draft.ruc,
         dni: draft.dni,
         rucPending: draft.docKind === "dni",
-        odooPartnerId: linked.partnerId,
-        odooContactId: linked.contactId,
+        odooPartnerId: linked.partnerId || null,
+        odooContactId: linked.contactId || null,
         clientName: draft.contactName,
         clientCompany: company?.companyName || draft.contactName,
         clientPhone: draft.clientPhone,
@@ -558,13 +783,15 @@ export class CatalogSharesService {
         expiresAt: shareExpiresAtExact(now, draft.hours),
       },
     });
+    if (linked.emailTaken) await this.noteEmailTaken(row.id, row.clientEmail, ip);
     const known = Boolean(company?.inOdoo);
-    const notice = await this.salida.notifyShare(this.noticeCard(row, known, origin));
+    const card = this.noticeCard(row, known, origin);
+    this.queueShareAvisos(row, card, true, undefined, ip);
     await this.audit.log({
       action: "create",
       entity: "CatalogShare",
       entityId: row.id,
-      after: { source: "cliente", hours: row.hours, docKind: row.docKind, vendorId: vendor.id, salida: { channel: notice.channel, whatsapp: notice.whatsapp, correo: notice.correo } },
+      after: { source: "cliente", hours: row.hours, docKind: row.docKind, vendorId: vendor.id, salida: "en_segundo_plano" },
       ip,
     });
     return {
@@ -577,7 +804,7 @@ export class CatalogSharesService {
       contactName: row.contactName,
       vendorName: row.vendorName,
       greeting: company ? (company.inOdoo ? "Zgroup te saluda nuevamente." : "Zgroup te da la bienvenida.") : "Zgroup te da la bienvenida.",
-      salida: notice,
+      avisoPending: true,
     };
   }
 
@@ -830,26 +1057,7 @@ export class CatalogSharesService {
       },
     });
     const notice = await this.salida.notifyShare({ ...this.noticeCard({ ...share, hours: share.hours }, true, origin), minutes: 30 });
-    const vendor = await this.prisma.user.findUnique({
-      where: { id: share.vendorId },
-      select: { email: true, name: true, whatsapp: true },
-    });
-    const vendorPhone = whatsappDigits(share.vendorWhatsapp || vendor?.whatsapp || "");
-    const clientPhone = whatsappDigits(share.clientPhone);
-    const alert = vendorReturnNotice({
-      vendorName: vendor?.name || share.vendorName,
-      clientName: share.contactName || share.clientName,
-      company: share.clientCompany,
-      ruc: share.ruc,
-      dni: share.dni,
-    });
-    await this.salida.notifyText({
-      phone: vendorPhone,
-      email: vendor?.email || "",
-      contact: clientPhone.length >= 8 ? clientPhone : vendorPhone,
-      subject: alert.subject,
-      message: alert.message,
-    });
+    void this.notifyVendorReturn(share, notice);
     await this.audit.log({
       action: "reopen",
       entity: "CatalogShare",
@@ -938,7 +1146,7 @@ export class CatalogSharesService {
         "res.partner",
         [["parent_id", "=", companyId], ["is_company", "=", false]],
         ["id", "name", "email", "phone", "mobile", "function"],
-        { limit: 12 },
+        { limit: 80, order: "name" },
       );
       return children.map((row) => this.mapContact(row)).filter((row) => row.name || row.phone || row.email);
     } catch {
@@ -962,6 +1170,39 @@ export class CatalogSharesService {
       dniTypeId: Number(byCode("1", "DNI")?.id) || null,
       countryId: Number(countries[0]?.id) || null,
     };
+  }
+
+  private emailConflict(error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error || "");
+    return /same email already exist/i.test(msg) || /email.*already exist/i.test(msg);
+  }
+
+  /** True si ese correo ya pertenece a un contacto de Odoo. */
+  private async emailAlreadyInOdoo(email: string) {
+    const needle = email.trim().toLowerCase();
+    if (!needle.includes("@")) return false;
+    try {
+      const rows = await this.odoo.searchRead(
+        "res.partner",
+        [["email", "=ilike", needle]],
+        ["id", "email"],
+        { limit: 5 },
+      );
+      return rows.some((row) => String(row.email || "").trim().toLowerCase() === needle);
+    } catch {
+      return false;
+    }
+  }
+
+  private noteEmailTaken(shareId: string, email: string, ip?: string) {
+    return this.prisma.catalogShareEvent.create({
+      data: {
+        shareId,
+        kind: "email_taken",
+        detail: { email, note: "El correo ya está registrado en Odoo. El contacto quedó solo en ZDRY." },
+        ip: String(ip || "").slice(0, 64),
+      },
+    });
   }
 
   /** El correo va solo al contacto. Si la empresa ya lo tiene, Odoo rechaza el alta del contacto. */
@@ -1050,9 +1291,12 @@ export class CatalogSharesService {
     const chosen = draft.odooContactId
       ? contacts.find((row) => row.id === draft.odooContactId)
       : null;
-    if (chosen) return { partnerId, contactId: chosen.id };
+    if (chosen) return { partnerId, contactId: chosen.id, emailTaken: false };
     const byDni = draft.contactDni ? await this.childByDni(partnerId, draft.contactDni) : null;
-    if (byDni) return { partnerId, contactId: byDni };
+    if (byDni) return { partnerId, contactId: byDni, emailTaken: false };
+    if (await this.emailAlreadyInOdoo(draft.clientEmail)) {
+      return { partnerId, contactId: null, emailTaken: true };
+    }
     await this.releaseCompanyEmail(partnerId, company, draft.clientEmail);
     const child: Record<string, unknown> = {
       name: draft.contactName,
@@ -1068,8 +1312,13 @@ export class CatalogSharesService {
       child.vat = draft.contactDni;
       if (ids.dniTypeId) child.l10n_latam_identification_type_id = ids.dniTypeId;
     }
-    const contactId = await this.createPartner(child);
-    return { partnerId, contactId: contactId || null };
+    try {
+      const contactId = await this.createPartner(child);
+      return { partnerId, contactId: contactId || null, emailTaken: false };
+    } catch (e) {
+      if (!this.emailConflict(e)) throw e;
+      return { partnerId, contactId: null, emailTaken: true };
+    }
   }
 
   private async ensureDniPartner(draft: {
@@ -1084,7 +1333,10 @@ export class CatalogSharesService {
     const existing = people.find((row) => Number(row.id) === draft.odooPartnerId) || people[0];
     if (existing?.id) {
       const id = Number(existing.id);
-      return { partnerId: id, contactId: id };
+      return { partnerId: id, contactId: id, emailTaken: false };
+    }
+    if (await this.emailAlreadyInOdoo(draft.clientEmail)) {
+      return { partnerId: null, contactId: null, emailTaken: true };
     }
     const values: Record<string, unknown> = {
       name: draft.contactName,
@@ -1098,9 +1350,14 @@ export class CatalogSharesService {
     };
     if (ids.dniTypeId) values.l10n_latam_identification_type_id = ids.dniTypeId;
     if (ids.countryId) values.country_id = ids.countryId;
-    const partnerId = await this.createPartner(values);
-    if (!partnerId) throw new BadRequestException("Odoo no creó el contacto con DNI.");
-    return { partnerId, contactId: partnerId };
+    try {
+      const partnerId = await this.createPartner(values);
+      if (!partnerId) throw new BadRequestException("Odoo no creó el contacto con DNI.");
+      return { partnerId, contactId: partnerId, emailTaken: false };
+    } catch (e) {
+      if (!this.emailConflict(e)) throw e;
+      return { partnerId: null, contactId: null, emailTaken: true };
+    }
   }
 
   private async attachRucCompany(

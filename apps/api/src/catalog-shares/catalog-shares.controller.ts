@@ -47,6 +47,12 @@ export class CatalogSharesController {
   }
 
   @Public()
+  @Get("public/aviso/:token")
+  publicAviso(@Param("token") token: string) {
+    return this.shares.publicAviso(token);
+  }
+
+  @Public()
   @Post("public/register")
   publicRegister(@Body() body: Record<string, unknown>, @Req() req: Request) {
     return this.shares.publicRegister(body, req.ip, requestOrigin(req));
@@ -98,6 +104,12 @@ export class CatalogSharesController {
   @Roles("superadmin")
   archive(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.shares.archive(id, user, req.ip);
+  }
+
+  @Get(":id/aviso")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
+  aviso(@Param("id") id: string, @CurrentUser() user: AuthUser) {
+    return this.shares.shareAviso(id, user);
   }
 
   @Get("mine/:id")

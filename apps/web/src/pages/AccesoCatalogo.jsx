@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, publicUrl } from "../api.js";
 import { whatsappDigits } from "../catalog-copy.js";
 import { salidaNotice } from "../salida-notice.js";
+import { useNotice } from "../notice.jsx";
 
 const emptyPerson = {
   dni: "",
@@ -46,6 +47,31 @@ export default function AccesoCatalogo() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [created, setCreated] = useState(null);
+  const { notify, toastNode } = useNotice();
+  const avisoTold = useRef("");
+
+  useEffect(() => {
+    const token = created?.token;
+    if (!token || !created?.avisoPending || created?.aviso) return undefined;
+    let stop = false;
+    const tick = async () => {
+      if (stop) return;
+      try {
+        const aviso = await api(`/catalog-shares/public/aviso/${token}`);
+        if (stop || !aviso?.done || avisoTold.current === token) return;
+        avisoTold.current = token;
+        stop = true;
+        if (aviso.text) notify(aviso.text, aviso.ok ? "ok" : "err");
+        setCreated((cur) => (cur && cur.token === token ? { ...cur, aviso } : cur));
+      } catch {
+        /* el siguiente intento vuelve a preguntar */
+      }
+    };
+    tick();
+    const timer = setInterval(tick, 2000);
+    const giveUp = setTimeout(() => { stop = true; clearInterval(timer); }, 70000);
+    return () => { stop = true; clearInterval(timer); clearTimeout(giveUp); };
+  }, [created?.token, created?.avisoPending, created?.aviso]);
 
   function pick(next) {
     setMode(next);
@@ -82,6 +108,7 @@ export default function AccesoCatalogo() {
           docKind: mode === "ruc" ? "ruc" : "dni",
           ruc: mode === "ruc" ? ruc : "",
           ...person,
+          dni: mode === "ruc" ? "" : person.dni,
         },
       });
       if (row.renewed && !row.accessCode) setCompany(row);
@@ -106,6 +133,8 @@ export default function AccesoCatalogo() {
 
   if (created) {
     return (
+      <>
+      {toastNode}
       <div className="panel visita-public visita-welcome acceso-card">
         <div className="visita-brand"><img src={publicUrl("/brand/zg_marca.png")} alt="ZGROUP" /></div>
         <h2 className="section-title">{created.renewed ? "Tu enlace sigue abierto" : "Tu catálogo está listo"}</h2>
@@ -115,17 +144,21 @@ export default function AccesoCatalogo() {
         <p className="share-created-key">{created.accessCode}</p>
         <p>{created.minutes ? `Vigente ${created.minutes} minutos.` : `Vigente ${created.hours} ${created.hours === 1 ? "hora" : "horas"}.`}</p>
         <p>{created.vendorName ? `Te atiende ${created.vendorName}.` : "Un comercial quedó asignado para hacerte seguimiento."}</p>
+        {created.avisoPending && !created.aviso ? <p>Los WhatsApp y los correos se envían solos. El aviso queda abajo cuando salen.</p> : null}
         {salidaNotice(created.salida) ? <p>{salidaNotice(created.salida)}</p> : null}
         <div className="share-created-actions" style={{ justifyContent: "center" }}>
           <button className="btn-primary" type="button" onClick={() => openCatalog()}>Ver catálogo</button>
         </div>
       </div>
+      </>
     );
   }
 
   const personReady = !taken && !company?.renewed && (mode === "dni" || (company && !company.busy));
 
   return (
+    <>
+    {toastNode}
     <div className="panel visita-public acceso-card">
       <div className="visita-brand"><img src={publicUrl("/brand/zg_marca.png")} alt="ZGROUP" /></div>
       <h2 className="section-title">Acceso al catálogo</h2>
@@ -135,7 +168,7 @@ export default function AccesoCatalogo() {
         <button type="button" className={mode === "ruc" ? "on" : ""} onClick={() => pick("ruc")}>Tengo RUC</button>
         <button type="button" className={mode === "dni" ? "on" : ""} onClick={() => pick("dni")}>Solo tengo DNI</button>
       </div>
-      {!mode ? <p className="field-hint">Con RUC el catálogo dura 3 horas. Solo con DNI, 1 hora. El DNI, el nombre, el celular de WhatsApp y el correo son necesarios.</p> : null}
+      {!mode ? <p className="field-hint">Con RUC el catálogo dura 3 horas. Solo con DNI, 1 hora. El nombre, el celular de WhatsApp y el correo son necesarios.</p> : null}
 
       {mode === "ruc" ? (
         <form className="form-grid" onSubmit={lookupRuc}>
@@ -186,10 +219,12 @@ export default function AccesoCatalogo() {
 
       {personReady ? (
         <form className="form-grid" onSubmit={register}>
-          <div>
-            <label>DNI</label>
-            <input value={person.dni} onChange={(e) => setPerson({ ...person, dni: e.target.value.replace(/\D/g, "").slice(0, 8) })} required placeholder="8 dígitos" inputMode="numeric" />
-          </div>
+          {mode === "dni" ? (
+            <div>
+              <label>DNI</label>
+              <input value={person.dni} onChange={(e) => setPerson({ ...person, dni: e.target.value.replace(/\D/g, "").slice(0, 8) })} required placeholder="8 dígitos" inputMode="numeric" />
+            </div>
+          ) : null}
           <div>
             <label>Nombres</label>
             <input value={person.firstName} onChange={(e) => setPerson({ ...person, firstName: e.target.value })} required />
@@ -217,5 +252,6 @@ export default function AccesoCatalogo() {
         </form>
       ) : null}
     </div>
+    </>
   );
 }

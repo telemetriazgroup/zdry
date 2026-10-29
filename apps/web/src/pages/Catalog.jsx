@@ -333,6 +333,8 @@ export default function Catalog() {
   const [thumb, setThumb] = useState(0);
   const [galleryPaused, setGalleryPaused] = useState(false);
   const [quoteOpen, setQuoteOpen] = useState(false);
+  const [interest, setInterest] = useState(null);
+  const [asking, setAsking] = useState("");
   const [kind, setKind] = useState("venta");
   const [authMode, setAuthMode] = useState("register");
   const [reg, setReg] = useState({ name: "", email: "", phone: "", password: "" });
@@ -453,10 +455,10 @@ export default function Catalog() {
   }, [ready, catalogOpen, clientView]);
 
   useEffect(() => {
-    const lock = Boolean(pdp || quoteOpen || splash);
+    const lock = Boolean(pdp || quoteOpen || interest || splash);
     document.body.classList.toggle("modal-locked", lock);
     return () => document.body.classList.remove("modal-locked");
-  }, [pdp, quoteOpen, splash]);
+  }, [pdp, quoteOpen, interest, splash]);
 
   useEffect(() => {
     if (!ready || !catalogOpen) return;
@@ -634,10 +636,28 @@ export default function Catalog() {
   }
 
   function startFormalQuote(iso) {
+    if (shareToken) {
+      askUnit(iso);
+      return;
+    }
     setError("");
     setMsg("");
     if (iso) addToCart(iso);
     setQuoteOpen(true);
+  }
+
+  async function askUnit(iso) {
+    if (!shareToken || !iso || asking) return;
+    setError("");
+    setAsking(iso);
+    try {
+      const row = await api(`/catalog/share/${shareToken}/interes`, { method: "POST", body: { iso } });
+      setInterest({ iso, vendorName: row.vendorName || share?.vendorName || "", message: row.message });
+    } catch (e) {
+      setError(e.message || "No se pudo avisar al comercial.");
+    } finally {
+      setAsking("");
+    }
   }
 
   const quotesOn = copy.quotesEnabled === true;
@@ -899,7 +919,11 @@ export default function Catalog() {
                   ) : (
                     <span className="price-cta">{copy.requestPrice}</span>
                   )}
-                  {commercial ? null : quotesOn ? (
+                  {commercial ? null : shareToken ? (
+                    <button className="link-btn" type="button" disabled={asking === u.iso} onClick={() => askUnit(u.iso)}>
+                      {asking === u.iso ? "Avisando…" : (u.showPrice ? copy.requestQuote : copy.requestPrice)}
+                    </button>
+                  ) : quotesOn ? (
                     <button className="link-btn" type="button" onClick={() => startFormalQuote(u.iso)}>
                       {u.showPrice ? copy.requestQuote : copy.requestPrice}
                     </button>
@@ -1039,7 +1063,11 @@ export default function Catalog() {
                     <button className="btn-primary" style={{ marginTop: 16, width: "100%" }} type="button" disabled>Reservado</button>
                   ) : (
                     <>
-                      {quotesOn ? (
+                      {shareToken ? (
+                        <button className="btn-primary" style={{ marginTop: 16, width: "100%" }} type="button" disabled={asking === pdp.iso} onClick={() => askUnit(pdp.iso)}>
+                          {asking === pdp.iso ? "Avisando…" : (pdp.showPrice ? copy.requestQuote : copy.requestPrice)}
+                        </button>
+                      ) : quotesOn ? (
                         <button
                           className="btn-primary"
                           style={{ marginTop: 16, width: "100%" }}
@@ -1049,7 +1077,7 @@ export default function Catalog() {
                           {pdp.showPrice ? copy.requestQuote : copy.requestPrice}
                         </button>
                       ) : null}
-                      {commercial ? null : (
+                      {commercial || shareToken ? null : (
                         <WhatsAppLink className={quotesOn ? "link-btn" : "btn-whatsapp"} href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp, dispatchPlace))} onClick={() => trackShare("whatsapp", pdp.iso)}>
                           {copy.whatsappCta}
                         </WhatsAppLink>
@@ -1061,7 +1089,11 @@ export default function Catalog() {
             </div>
             {pdp.reserved || commercial ? null : (
               <div className="pdp-cta-bar">
-                {quotesOn ? (
+                {shareToken ? (
+                  <button className="btn-primary" type="button" disabled={asking === pdp.iso} onClick={() => askUnit(pdp.iso)}>
+                    {asking === pdp.iso ? "Avisando…" : (pdp.showPrice ? copy.requestQuote : copy.requestPrice)}
+                  </button>
+                ) : quotesOn ? (
                   <button
                     className="btn-primary"
                     type="button"
@@ -1070,11 +1102,31 @@ export default function Catalog() {
                     {pdp.showPrice ? copy.requestQuote : copy.requestPrice}
                   </button>
                 ) : null}
-                <WhatsAppLink className={quotesOn ? "link-btn" : "btn-whatsapp"} href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp, dispatchPlace))} onClick={() => trackShare("whatsapp", pdp.iso)}>
-                  {copy.whatsappCta}
-                </WhatsAppLink>
+                {shareToken ? null : (
+                  <WhatsAppLink className={quotesOn ? "link-btn" : "btn-whatsapp"} href={whatsappUrl(copy, unitWhatsAppMessage(copy, pdp, dispatchPlace))} onClick={() => trackShare("whatsapp", pdp.iso)}>
+                    {copy.whatsappCta}
+                  </WhatsAppLink>
+                )}
               </div>
             )}
+          </div>
+        </div>
+      ) : null}
+
+      {interest ? (
+        <div className="overlay open" onClick={(e) => { if (e.target === e.currentTarget) setInterest(null); }}>
+          <div className="modal quote-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h3>Cotización solicitada</h3>
+              <button className="modal-close" type="button" onClick={() => setInterest(null)} aria-label="Cerrar">×</button>
+            </div>
+            <div className="modal-body single">
+              <p>{interest.message || `Tu cotización ha sido solicitada. En un momento te atenderá ${interest.vendorName || "tu comercial"}.`}</p>
+              {interest.iso ? <p>Equipo {interest.iso}.</p> : null}
+              <div className="share-created-actions">
+                <button className="btn-primary" type="button" onClick={() => setInterest(null)}>Entendido</button>
+              </div>
+            </div>
           </div>
         </div>
       ) : null}

@@ -1,4 +1,4 @@
-import { buildSalidaTest, buildShareNotice, normalizeSalidaConfig, presentSalidaConfig, readSalidaStates, shareNoticePack, vendorReturnNotice } from "./salida";
+import { buildSalidaTest, buildShareNotice, normalizeSalidaConfig, presentSalidaConfig, readSalidaStates, shareAvisoText, shareNoticePack, unitInterestNotice, vendorFollowNotice, vendorReturnNotice } from "./salida";
 
 describe("salida SGIT", () => {
   it("por defecto no envía y la clave nueva reemplaza la guardada", () => {
@@ -93,6 +93,35 @@ describe("salida SGIT", () => {
     expect(alert.message).toMatch(/30 minutos/);
     expect(alert.message).not.toMatch(/Clave/);
     expect(alert.message).not.toMatch(/123456/);
+    const opened = vendorFollowNotice({
+      vendorName: "Valeria",
+      clientName: "Ana",
+      company: "Andina SAC",
+      ruc: "20100070970",
+      dni: "",
+      phone: "51999111222",
+      email: "ana@demo.pe",
+      byClient: false,
+    });
+    expect(opened.subject).toMatch(/seguimiento/);
+    expect(opened.message).toMatch(/Andina SAC/);
+    expect(opened.message).toMatch(/\*Cliente\*/);
+    expect(opened.html).toMatch(/#12203a/);
+    expect(opened.html).toMatch(/#d9622f/);
+    expect(opened.html).not.toMatch(/Clave/);
+    expect(opened.message).not.toMatch(/Clave/);
+    const asked = unitInterestNotice({
+      vendorName: "Valeria",
+      clientName: "Ana",
+      company: "Andina SAC",
+      iso: "CIMU2022411",
+      type: "40HC",
+      phone: "51999111222",
+      email: "ana@demo.pe",
+    });
+    expect(asked.message).toMatch(/CIMU2022411/);
+    expect(asked.message).toMatch(/cotización fue solicitada/);
+    expect(asked.message).not.toMatch(/Clave/);
     const both = buildShareNotice({
       channel: "ambos",
       phone: "51999111222",
@@ -146,6 +175,16 @@ describe("salida SGIT", () => {
     });
     expect(broken.body).toBeNull();
     expect(broken.plan.motivo).toMatch(/destino/);
+  });
+
+  it("resume el aviso al cliente y al comercial", () => {
+    const queued = { channel: "ambos" as const, whatsapp: "en_cola" as const, correo: "en_cola" as const, motivo: "" };
+    expect(shareAvisoText(queued, queued).text).toMatch(/WhatsApp y los correos/);
+    expect(shareAvisoText(queued, { ...queued, whatsapp: "en_espera" }).ok).toBe(false);
+    expect(shareAvisoText(
+      { channel: "ninguno", whatsapp: "apagado", correo: "apagado", motivo: "" },
+      { channel: "ninguno", whatsapp: "apagado", correo: "apagado", motivo: "" },
+    ).text).toMatch(/apagado/);
   });
 
   it("lee en_cola y en_espera sin repetir el texto", () => {

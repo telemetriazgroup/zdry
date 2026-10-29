@@ -64,6 +64,16 @@ export class CatalogController {
   }
 
   @Public()
+  @Post("share/:token/interes")
+  shareInterest(@Param("token") token: string, @Body() body: { iso?: string }, @Req() req: Request) {
+    const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+    return this.shares.requestUnit(token, body?.iso, {
+      ip: forwarded || req.ip || "",
+      cookie: req.cookies?.zdry_catalog,
+    });
+  }
+
+  @Public()
   @Post("share/:token/events")
   shareEvent(@Param("token") token: string, @Body() body: Record<string, unknown>, @Req() req: Request) {
     const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();

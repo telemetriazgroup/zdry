@@ -126,14 +126,43 @@ export class SalidaService {
     }));
   }
 
+  /** Solo correo, si el canal guardado incluye correo. */
+  async notifyMail(input: { email: string; subject: string; message: string }): Promise<SalidaResult> {
+    const cfg = await this.read();
+    const channel = cfg.channel === "ambos" || cfg.channel === "correo" ? "correo" : "ninguno";
+    return this.deliver(cfg, buildShareNotice({
+      channel,
+      phone: "",
+      email: input.email,
+      message: input.message,
+      contact: "",
+      subject: input.subject,
+    }));
+  }
+
+  /** Solo el WhatsApp, para reintentar si el anterior todavía está en cola. */
+  async notifyWhatsapp(input: { phone: string; contact: string; message: string }): Promise<SalidaResult> {
+    const cfg = await this.read();
+    const channel = cfg.channel === "ambos" || cfg.channel === "whatsapp" ? "whatsapp" : "ninguno";
+    return this.deliver(cfg, buildShareNotice({
+      channel,
+      phone: input.phone,
+      email: "",
+      message: input.message,
+      contact: input.contact,
+      subject: "Aviso",
+    }));
+  }
+
   /** Aviso corto, con el mismo canal guardado. No arma la carta del catálogo. */
-  async notifyText(input: { phone: string; email: string; contact: string; subject: string; message: string }): Promise<SalidaResult> {
+  async notifyText(input: { phone: string; email: string; contact: string; subject: string; message: string; html?: string }): Promise<SalidaResult> {
     const cfg = await this.read();
     return this.deliver(cfg, buildShareNotice({
       channel: cfg.channel,
       phone: input.phone,
       email: input.email,
       message: input.message,
+      html: input.html,
       contact: input.contact,
       subject: input.subject,
     }));

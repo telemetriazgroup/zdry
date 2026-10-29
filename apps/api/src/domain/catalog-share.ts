@@ -344,8 +344,8 @@ export function normalizeWalkIn(raw: unknown): {
   const src = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const rucDigits = String(src.ruc || "").replace(/\D/g, "");
   const docKind = src.docKind === "dni" || !rucDigits ? "dni" : "ruc";
-  const dni = normalizeDni(src.dni) || "";
-  if (!dni) throw new Error("Ingresa tu DNI de 8 dígitos.");
+  const dni = docKind === "dni" ? (normalizeDni(src.dni) || "") : "";
+  if (docKind === "dni" && !dni) throw new Error("Ingresa tu DNI de 8 dígitos.");
   const firstName = String(src.firstName || "").trim().slice(0, 60);
   const lastName = String(src.lastName || "").trim().slice(0, 80);
   if (firstName.length < 2 || lastName.length < 2) throw new Error("Indica tus nombres y apellidos.");
