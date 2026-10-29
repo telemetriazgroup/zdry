@@ -17,6 +17,7 @@ import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { EvaluationService } from "../evaluation/evaluation.service";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { CatalogSharesService } from "../catalog-shares/catalog-shares.service";
+import { SalidaService } from "../salida/salida.service";
 
 export const CONFIG_SECTIONS = [
   { id: "catalog-copy", title: "Textos del catálogo", blurb: "Editor de la página pública: hero, pasos, pie y legales. Así lo ve el cliente." },
@@ -47,7 +48,32 @@ export class ConfigController {
     private readonly audit: AuditService,
     private readonly evaluation: EvaluationService,
     private readonly shares: CatalogSharesService,
+    private readonly salida: SalidaService,
   ) {}
+
+  @Get("salida")
+  @Roles("superadmin")
+  salidaConfig() {
+    return this.salida.present();
+  }
+
+  @Put("salida")
+  @Roles("superadmin")
+  putSalida(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.salida.save(body, user, req.ip);
+  }
+
+  @Post("salida/probar")
+  @Roles("superadmin")
+  probeSalida() {
+    return this.salida.probe();
+  }
+
+  @Post("salida/prueba")
+  @Roles("superadmin")
+  sendSalidaTest(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.salida.sendTest(body, user, req.ip);
+  }
 
   @Get("catalog-commerce")
   @Roles("superadmin")

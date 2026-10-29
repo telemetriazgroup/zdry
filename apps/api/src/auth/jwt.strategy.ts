@@ -46,6 +46,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       customerId: user.customerId,
       hasAvatar: !!user.avatarKey,
       whatsapp: user.whatsapp || "",
+      mustChangePassword: false,
     };
     if (payload.act && payload.act !== user.id) {
       const actor = await this.prisma.user.findUnique({ where: { id: payload.act } });
@@ -53,6 +54,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         throw new UnauthorizedException("La sesión asistida ya no es válida.");
       }
       auth.impersonator = { id: actor.id, email: actor.email, name: actor.name, role: actor.role };
+    } else {
+      auth.mustChangePassword = user.mustChangePassword;
     }
     return auth;
   }

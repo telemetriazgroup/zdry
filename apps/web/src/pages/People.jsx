@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api.js";
 import { homeFor, isSuperadmin, ROLE_LABELS, useAuth } from "../auth.jsx";
 
+const TEMP_PASSWORD = "123456789";
 const RISK = ["A", "B", "C", "D"];
 const ROLES = [
   { id: "admin", label: "Administrador" },
@@ -27,7 +28,8 @@ export default function People() {
   const [uForm, setUForm] = useState(emptyUserForm);
   const [editId, setEditId] = useState(null);
   const [resetId, setResetId] = useState(null);
-  const [resetPw, setResetPw] = useState("");
+  const [resetPw, setResetPw] = useState(TEMP_PASSWORD);
+  const [note, setNote] = useState("");
 
   async function load() {
     const [c, p, u] = await Promise.all([
@@ -61,7 +63,7 @@ export default function People() {
   function startEdit(u) {
     setError("");
     setResetId(null);
-    setResetPw("");
+    setResetPw(TEMP_PASSWORD);
     setEditId(u.id);
     setUForm({
       email: u.email,
@@ -112,9 +114,13 @@ export default function People() {
     if (!resetId) return;
     setError("");
     try {
-      await api(`/people/collaborators/${resetId}/password`, { method: "POST", body: { password: resetPw } });
+      const out = await api(`/people/collaborators/${resetId}/password`, { method: "POST", body: { password: resetPw } });
+      setNote(out.temporary
+        ? "Clave restablecida a 123456789. Al entrar, el colaborador tiene que cambiarla. Puede usar la de Odoo."
+        : "Clave restablecida.");
       setResetId(null);
-      setResetPw("");
+      setResetPw(TEMP_PASSWORD);
+      await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : err.message);
     }
@@ -128,6 +134,7 @@ export default function People() {
         {isSuperadmin(user) ? " Solo el superusuario puede entrar como otro usuario." : ""}
       </p>
       {error ? <div className="err">{error}</div> : null}
+      {note ? <p className="ok-msg">{note}</p> : null}
       <div className="subtab-row">
         <button type="button" className={`subtab ${tab === "customers" ? "active" : ""}`} onClick={() => setTab("customers")}>Clientes</button>
         <button type="button" className={`subtab ${tab === "providers" ? "active" : ""}`} onClick={() => setTab("providers")}>Proveedores</button>
@@ -203,9 +210,13 @@ export default function People() {
           </form>
           {resetId ? (
             <form className="form-grid" onSubmit={resetPassword} style={{ marginTop: 12 }}>
-              <div><label>Nueva clave</label><input type="password" value={resetPw} onChange={(e) => setResetPw(e.target.value)} required minLength={8} /></div>
+              <div>
+                <label>Nueva clave</label>
+                <input value={resetPw} onChange={(e) => setResetPw(e.target.value)} required minLength={8} autoComplete="off" />
+                <p className="field-hint">Queda 123456789. Al entrar, el sistema le pide cambiarla y le sugiere usar la de Odoo.</p>
+              </div>
               <button className="btn-primary" type="submit">Restablecer</button>
-              <button className="btn-ghost" type="button" onClick={() => { setResetId(null); setResetPw(""); }}>Cancelar</button>
+              <button className="btn-ghost" type="button" onClick={() => { setResetId(null); setResetPw(TEMP_PASSWORD); }}>Cancelar</button>
             </form>
           ) : null}
           <div className="tablewrap">
@@ -218,13 +229,13 @@ export default function People() {
                   <td>{u.email}</td>
                   <td>{u.whatsapp || "—"}</td>
                   <td>{ROLE_LABELS[u.role] || u.role}</td>
-                  <td>{u.active ? "sí" : "no"}</td>
+                  <td>{u.active ? "sí" : "no"}{u.mustChangePassword ? " · debe cambiar la clave" : ""}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button type="button" className="btn-ghost" onClick={() => startEdit(u)}>Editar</button>
                     {isSuperadmin(user) && u.id !== user.id && u.active ? (
                       <button type="button" className="btn-ghost" onClick={() => viewAs(u.id)}>Entrar como</button>
                     ) : null}
-                    <button type="button" className="btn-ghost" onClick={() => { setResetId(u.id); setResetPw(""); cancelEdit(); }}>Clave</button>
+                    <button type="button" className="btn-ghost" onClick={() => { setNote(""); setResetId(u.id); setResetPw(TEMP_PASSWORD); cancelEdit(); }}>Clave</button>
                   </td>
                 </tr>
               ))}

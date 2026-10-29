@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { AuthProvider, homeFor, ROLE_LABELS, useAuth } from "./auth.jsx";
 import Login from "./pages/Login.jsx";
+import ForcePassword from "./pages/ForcePassword.jsx";
 import Shell from "./pages/Shell.jsx";
 import Catalog from "./pages/Catalog.jsx";
 import EnvioFicha from "./pages/EnvioFicha.jsx";
 import VisitaPublica from "./pages/VisitaPublica.jsx";
+import AccesoCatalogo from "./pages/AccesoCatalogo.jsx";
 import Account from "./pages/Account.jsx";
 import Legal from "./pages/Legal.jsx";
 import { apiUrl, ensureAppSlash } from "./api.js";
@@ -60,6 +62,7 @@ function StaffGuard({ children }) {
   const { user, ready } = useAuth();
   if (!ready) return null;
   if (!user) return <Navigate to="/login" replace />;
+  if (user.mustChangePassword) return <ForcePassword />;
   if (user.role === "cliente") return <Navigate to="/mi-cuenta" replace />;
   return children;
 }
@@ -68,6 +71,7 @@ function ClientGuard({ children }) {
   const { user, ready } = useAuth();
   if (!ready) return null;
   if (!user) return <Navigate to="/login" replace />;
+  if (user.mustChangePassword) return <ForcePassword />;
   if (user.role !== "cliente") return <Navigate to="/app" replace />;
   return children;
 }
@@ -90,6 +94,7 @@ export default function App() {
         <Route path="/c/:shareToken" element={<Catalog />} />
         <Route path="/c/:shareToken/u/:iso" element={<Catalog />} />
         <Route path="/e/:token" element={<EnvioFicha />} />
+        <Route path="/acceso" element={<AccesoCatalogo />} />
         <Route path="/visita" element={<VisitaPublica />} />
         <Route path="/visita/:token" element={<VisitaPublica />} />
         <Route path="/u/:iso" element={<Catalog />} />

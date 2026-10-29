@@ -8,6 +8,7 @@ export type AuthUser = {
   customerId?: string | null;
   hasAvatar?: boolean;
   whatsapp?: string;
+  mustChangePassword?: boolean;
   impersonator?: { id: string; email: string; name: string; role: Role } | null;
 };
 

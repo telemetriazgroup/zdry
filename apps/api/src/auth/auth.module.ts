@@ -6,6 +6,7 @@ import { AuthService } from "./auth.service";
 import { JwtStrategy } from "./jwt.strategy";
 import { JwtAuthGuard } from "./jwt-auth.guard";
 import { RolesGuard } from "./roles.guard";
+import { PasswordChangeGuard } from "./password-change.guard";
 import { APP_GUARD } from "@nestjs/core";
 
 @Module({
@@ -22,6 +23,7 @@ import { APP_GUARD } from "@nestjs/core";
     JwtStrategy,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: PasswordChangeGuard },
   ],
   exports: [AuthService],
 })

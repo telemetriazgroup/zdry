@@ -8,6 +8,7 @@ import { StorageService } from "../storage/storage.service";
 import { AuthUser } from "./auth.types";
 import { CATALOG_COMMERCE_KEY, normalizeCatalogCommerce, publicAccountsBlockedMessage, whatsappDigits } from "../domain/catalog-commerce";
 import { extForInspectionMime, sniffInspectionPhotoMime } from "../domain/inspection-media";
+import { isTemporaryPassword } from "../domain/password-policy";
 
 const MAX_AVATAR_BYTES = 4 * 1024 * 1024;
 
@@ -79,12 +80,22 @@ export class AuthService {
       customerId: user.customerId ?? null,
       hasAvatar: !!user.hasAvatar,
       whatsapp: user.whatsapp || "",
+      mustChangePassword: !!user.mustChangePassword && !user.impersonator,
       impersonator: user.impersonator ?? null,
     };
   }
 
   private asAuth(
-    user: { id: string; email: string; name: string; role: AuthUser["role"]; customerId?: string | null; avatarKey?: string | null; whatsapp?: string | null },
+    user: {
+      id: string;
+      email: string;
+      name: string;
+      role: AuthUser["role"];
+      customerId?: string | null;
+      avatarKey?: string | null;
+      whatsapp?: string | null;
+      mustChangePassword?: boolean;
+    },
     impersonator?: AuthUser["impersonator"],
   ): AuthUser {
     return {
@@ -95,6 +106,7 @@ export class AuthService {
       customerId: user.customerId ?? null,
       hasAvatar: !!user.avatarKey,
       whatsapp: user.whatsapp || "",
+      mustChangePassword: impersonator ? false : !!user.mustChangePassword,
       impersonator: impersonator ?? null,
     };
   }
@@ -108,7 +120,12 @@ export class AuthService {
     if (!ok) {
       throw new UnauthorizedException("Correo o contraseña incorrectos");
     }
-    const authUser = this.asAuth(user);
+    let mustChangePassword = user.mustChangePassword;
+    if (isTemporaryPassword(password) && !mustChangePassword) {
+      await this.prisma.user.update({ where: { id: user.id }, data: { mustChangePassword: true } });
+      mustChangePassword = true;
+    }
+    const authUser = this.asAuth({ ...user, mustChangePassword });
     const access = this.signAccess(authUser);
     const refresh = this.signRefresh(authUser);
     await this.prisma.user.update({
@@ -315,17 +332,22 @@ export class AuthService {
       throw new ForbiddenException("En una sesión asistida no se cambia la clave. Restablécela en Personas o pide al usuario que lo haga.");
     }
     if (!nextPassword || nextPassword.length < 8) throw new BadRequestException("La nueva clave debe tener al menos 8 caracteres.");
-    if (!currentPassword) throw new BadRequestException("Indica tu clave actual.");
+    if (isTemporaryPassword(nextPassword)) {
+      throw new BadRequestException("Elige una clave distinta de la temporal. Puede ser la misma que usas en Odoo.");
+    }
     const row = await this.prisma.user.findUnique({ where: { id: user.id } });
     if (!row) throw new UnauthorizedException("Sesión inválida");
-    const ok = await argon2.verify(row.passwordHash, currentPassword);
-    if (!ok) throw new UnauthorizedException("La clave actual no es correcta.");
-    await this.prisma.user.update({
+    if (!row.mustChangePassword) {
+      if (!currentPassword) throw new BadRequestException("Indica tu clave actual.");
+      const ok = await argon2.verify(row.passwordHash, currentPassword);
+      if (!ok) throw new UnauthorizedException("La clave actual no es correcta.");
+    }
+    const updated = await this.prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash: await argon2.hash(nextPassword) },
+      data: { passwordHash: await argon2.hash(nextPassword), mustChangePassword: false },
     });
     await this.audit.log({ user, action: "change_password", entity: "User", entityId: user.id });
-    return { ok: true };
+    return { ok: true, user: this.toPublic(this.asAuth(updated)) };
   }
 
   async uploadAvatar(user: AuthUser, file: Express.Multer.File | undefined, ip?: string) {

@@ -4,6 +4,7 @@ import { memoryStorage } from "multer";
 import { Request, Response } from "express";
 import { AuthService } from "./auth.service";
 import { Public } from "./public.decorator";
+import { AllowDuringPasswordChange } from "./password-change.decorator";
 import { Roles } from "./roles.decorator";
 import { CurrentUser } from "./current-user.decorator";
 import { AuthUser } from "./auth.types";
@@ -39,6 +40,7 @@ export class AuthController {
   }
 
   @Post("logout")
+  @AllowDuringPasswordChange()
   logout(
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
@@ -55,6 +57,7 @@ export class AuthController {
   }
 
   @Get("me")
+  @AllowDuringPasswordChange()
   me(@CurrentUser() user: AuthUser) {
     return { user: this.auth.toPublic(user) };
   }
@@ -69,6 +72,7 @@ export class AuthController {
   }
 
   @Post("password")
+  @AllowDuringPasswordChange()
   changePassword(
     @Body() body: { currentPassword?: string; newPassword?: string },
     @CurrentUser() user: AuthUser,
@@ -88,6 +92,7 @@ export class AuthController {
   }
 
   @Post("stop-impersonate")
+  @AllowDuringPasswordChange()
   stopImpersonate(
     @CurrentUser() user: AuthUser,
     @Req() req: Request,

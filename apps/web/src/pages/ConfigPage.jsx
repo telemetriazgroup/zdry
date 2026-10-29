@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { api, apiUpload, apiUrl, ApiError } from "../api.js";
+import { salidaNotice } from "../salida-notice.js";
 import { useAuth } from "../auth.jsx";
 import { useNotice } from "../notice.jsx";
 
@@ -23,6 +24,155 @@ function asSafetyRule(r) {
 
 function safetyDepth(r) {
   return [r.type, r.cat, r.supplier, r.origin, r.warehouse].filter((v) => String(v || "").trim()).length;
+}
+
+const SALIDA_MODES = [
+  ["ambos", "Correo y WhatsApp"],
+  ["correo", "Solo correo"],
+  ["whatsapp", "Solo WhatsApp"],
+  ["ninguno", "Ninguno"],
+];
+
+const TEST_MESSAGE = "Mensaje de prueba de ZDRY. Si lo recibes, la conexión de salida está funcionando.";
+
+function SalidaPanel({ onSaved, onError }) {
+  const [st, setSt] = useState(null);
+  const [clave, setClave] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [testMode, setTestMode] = useState("ambos");
+  const [testForm, setTestForm] = useState({ telefono: "", contacto: "", email: "", mensaje: TEST_MESSAGE });
+  const [testNote, setTestNote] = useState("");
+
+  useEffect(() => {
+    api("/config/salida").then(setSt).catch((e) => onError(e.message));
+  }, []);
+
+  async function save() {
+    setBusy(true);
+    onError("");
+    onSaved("");
+    try {
+      const next = await api("/config/salida", { method: "PUT", body: { ...st, clave } });
+      setSt(next);
+      setClave("");
+      onSaved("Salida guardada. Al generar un enlace se usa el canal que elegiste.");
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function probe() {
+    setBusy(true);
+    onError("");
+    onSaved("");
+    setTestNote("");
+    try {
+      const out = await api("/config/salida/probar", { method: "POST", body: {} });
+      if (out.ok) onSaved(out.message);
+      else onError(out.message);
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendTest(e) {
+    e.preventDefault();
+    setBusy(true);
+    onError("");
+    onSaved("");
+    setTestNote("");
+    try {
+      const out = await api("/config/salida/prueba", {
+        method: "POST",
+        body: {
+          whatsapp: testMode === "ambos" || testMode === "whatsapp",
+          correo: testMode === "ambos" || testMode === "correo",
+          ...testForm,
+        },
+      });
+      const note = salidaNotice(out.salida) || (out.ok ? "La prueba quedó en cola." : "La prueba no salió.");
+      if (out.ok) onSaved(note);
+      else onError(note);
+      setTestNote(note);
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!st) return <div className="panel" style={{ marginBottom: 18 }}><h3>Correo y WhatsApp</h3><p className="section-sub">Cargando…</p></div>;
+
+  return (
+    <div className="panel" style={{ marginBottom: 18 }}>
+      <h3>Correo y WhatsApp</h3>
+      <p className="section-sub">
+        Al generar un enlace, ZDRY puede dejar el correo y el WhatsApp en la API de salida. Esa API los envía. Aquí eliges si salen los dos, solo uno, o ninguno.
+      </p>
+      <div className="doc-kind-switch" role="group" aria-label="Canal de salida">
+        {SALIDA_MODES.map(([id, label]) => (
+          <button key={id} type="button" className={st.channel === id ? "on" : ""} onClick={() => setSt({ ...st, channel: id })}>{label}</button>
+        ))}
+      </div>
+      <div className="form-grid" style={{ marginTop: 12 }}>
+        <div>
+          <label>URL de la API</label>
+          <input value={st.url || ""} onChange={(e) => setSt({ ...st, url: e.target.value })} placeholder="https://ztrack.app/servicio/salida" />
+        </div>
+        <div>
+          <label>Clave de salida</label>
+          <input type="password" value={clave} onChange={(e) => setClave(e.target.value)} placeholder={st.claveSet ? "Guardada. Escríbela solo para cambiarla." : "x-salida-clave"} autoComplete="new-password" />
+        </div>
+      </div>
+      <p className="field-hint">Si el cliente ya está registrado, el mensaje lo saluda. Si es nuevo, le da la bienvenida. En los dos casos van sus datos, la clave y el comercial con su WhatsApp.</p>
+      <div className="action-row">
+        <button className="btn-primary" type="button" disabled={busy} onClick={save}>Guardar</button>
+        <button className="btn-ghost" type="button" disabled={busy} onClick={probe}>Probar conexión</button>
+      </div>
+      <form onSubmit={sendTest} style={{ marginTop: 18 }}>
+        <h4>Mensaje de prueba</h4>
+        <p className="section-sub">Esto sí envía un mensaje de test. No depende del canal de los enlaces: eliges aquí si sale por WhatsApp, por correo o por los dos.</p>
+        <div className="doc-kind-switch" role="group" aria-label="Canal de la prueba">
+          <button type="button" className={testMode === "ambos" ? "on" : ""} onClick={() => setTestMode("ambos")}>Los dos</button>
+          <button type="button" className={testMode === "whatsapp" ? "on" : ""} onClick={() => setTestMode("whatsapp")}>WhatsApp</button>
+          <button type="button" className={testMode === "correo" ? "on" : ""} onClick={() => setTestMode("correo")}>Correo</button>
+        </div>
+        <div className="form-grid" style={{ marginTop: 12 }}>
+          {testMode !== "correo" ? (
+            <>
+              <div>
+                <label>Celular de destino</label>
+                <input value={testForm.telefono} onChange={(e) => setTestForm({ ...testForm, telefono: e.target.value })} inputMode="tel" placeholder="51987654321" required />
+              </div>
+              <div>
+                <label>WhatsApp de respuesta</label>
+                <input value={testForm.contacto} onChange={(e) => setTestForm({ ...testForm, contacto: e.target.value })} inputMode="tel" placeholder="51911111111" required />
+              </div>
+            </>
+          ) : null}
+          {testMode !== "whatsapp" ? (
+            <div>
+              <label>Correo de destino</label>
+              <input type="email" value={testForm.email} onChange={(e) => setTestForm({ ...testForm, email: e.target.value })} placeholder="tu-correo@empresa.com" required />
+            </div>
+          ) : null}
+          <div>
+            <label>Mensaje</label>
+            <textarea rows={3} value={testForm.mensaje} onChange={(e) => setTestForm({ ...testForm, mensaje: e.target.value })} required />
+          </div>
+        </div>
+        <p className="field-hint">Si el celular tiene 9 dígitos, la salida le antepone 51. El correo sale desde la casilla de SGIT, con unos segundos de espera.</p>
+        {testNote ? <p className={testNote.includes("falló") || testNote.includes("rechazado") ? "err" : "ok-msg"}>{testNote}</p> : null}
+        <div className="action-row">
+          <button className="btn-primary" type="submit" disabled={busy}>Enviar mensaje de prueba</button>
+        </div>
+      </form>
+    </div>
+  );
 }
 
 function CommercePanel({ onSaved, onError }) {
@@ -570,6 +720,7 @@ function configTabsFor(role) {
   const admin = role === "admin" || superadmin;
   const evalOk = admin || role === "gerente";
   return [
+    superadmin && { id: "salida", label: "Correo y WhatsApp" },
     superadmin && { id: "catalogo", label: "Catálogo público" },
     superadmin && { id: "marca", label: "Marca de agua" },
     superadmin && { id: "textos", label: "Textos" },
@@ -794,6 +945,7 @@ export default function ConfigPage() {
         ))}
       </nav>
 
+      {tab === "salida" && isSuper ? <SalidaPanel onSaved={setSaved} onError={setError} /> : null}
       {tab === "catalogo" && isSuper ? <CommercePanel onSaved={setSaved} onError={setError} /> : null}
       {tab === "marca" && isSuper ? <WatermarkPanel onSaved={setSaved} onError={setError} /> : null}
 

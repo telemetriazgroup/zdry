@@ -7,6 +7,7 @@ import { AuditService } from "../audit/audit.service";
 import { Roles } from "../auth/roles.decorator";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
+import { isTemporaryPassword, TEMP_PASSWORD } from "../domain/password-policy";
 
 const STAFF_ROLES: Role[] = ["admin", "gerente", "vendedor", "compras", "coordinador", "almacen"];
 
@@ -129,6 +130,7 @@ export class PeopleController {
         name: body.name.trim(),
         role: body.role,
         passwordHash: await argon2.hash(password),
+        mustChangePassword: isTemporaryPassword(password),
         whatsapp: String(body.whatsapp || "").replace(/\D/g, ""),
       },
     });
@@ -213,13 +215,28 @@ export class PeopleController {
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
-    const password = body.password || "";
+    const password = (body.password || "").trim() || TEMP_PASSWORD;
     if (password.length < 8) throw new BadRequestException("La clave debe tener al menos 8 caracteres.");
     const row = await this.prisma.user.findUnique({ where: { id } });
     if (!row) throw new BadRequestException("Usuario no encontrado.");
     if (row.role === "superadmin") throw new BadRequestException("No se puede restablecer la clave del superadmin aquí.");
-    await this.prisma.user.update({ where: { id }, data: { passwordHash: await argon2.hash(password) } });
-    await this.audit.log({ user, action: "reset_password", entity: "User", entityId: id, ip: req.ip });
-    return { ok: true };
+    const temporary = isTemporaryPassword(password);
+    await this.prisma.user.update({
+      where: { id },
+      data: {
+        passwordHash: await argon2.hash(password),
+        mustChangePassword: temporary,
+        refreshTokenHash: null,
+      },
+    });
+    await this.audit.log({
+      user,
+      action: "reset_password",
+      entity: "User",
+      entityId: id,
+      after: { temporary },
+      ip: req.ip,
+    });
+    return { ok: true, temporary };
   }
 }

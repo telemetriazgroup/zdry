@@ -1,5 +1,5 @@
 import { normalizeCatalogCommerce } from "./catalog-commerce";
-import { clampShareHours, deviceFromAgent, grantMatchesSession, newShareAccessCode, normalizeShareDraft, planShareRenew, readShareGrant, shareCodeMatches, shareExpiresAt, shareIsLive, shareStatus, signShareGrant, summarizeShareEvents } from "./catalog-share";
+import { clampShareHours, deviceFromAgent, grantMatchesSession, joinPhone, newShareAccessCode, normalizeDni, normalizeShareDraft, normalizeWalkIn, planShareRenew, readShareGrant, shareCodeMatches, shareExpiresAt, shareExpiresAtExact, shareIsLive, shareStatus, signShareGrant, splitPhone, summarizeShareEvents } from "./catalog-share";
 
 describe("catalog commerce mode", () => {
   it("por defecto es modo WhatsApp: sin cotización ni altas públicas", () => {
@@ -55,6 +55,41 @@ describe("catalog share", () => {
     });
   });
 
+  it("el DNI de 8 dígitos deja el RUC pendiente y arma el celular con prefijo", () => {
+    expect(normalizeDni("1234567")).toBeNull();
+    expect(normalizeDni("12345678")).toBe("12345678");
+    expect(joinPhone("51", "999111222")).toBe("51999111222");
+    expect(joinPhone("51", "51999111222")).toBe("51999111222");
+    expect(splitPhone("51999111222")).toEqual({ prefix: "51", local: "999111222" });
+    expect(() => normalizeShareDraft({
+      docKind: "dni",
+      dni: "1234567",
+      firstName: "Ana",
+      lastName: "Perez",
+      clientEmail: "ana@demo.pe",
+      phonePrefix: "51",
+      phoneLocal: "999111222",
+      vendorWhatsapp: "999111333",
+    })).toThrow(/8 dígitos/);
+    expect(normalizeShareDraft({
+      docKind: "dni",
+      dni: "12345678",
+      firstName: "Ana",
+      lastName: "Perez",
+      clientEmail: "ana@demo.pe",
+      phonePrefix: "51",
+      phoneLocal: "999111222",
+      vendorWhatsapp: "999111333",
+    })).toMatchObject({
+      docKind: "dni",
+      dni: "12345678",
+      ruc: "",
+      rucPending: true,
+      contactName: "Ana Perez",
+      clientPhone: "51999111222",
+    });
+  });
+
   it("la clave del enlace tiene 6 dígitos y no viaja en la cookie", () => {
     const code = newShareAccessCode();
     expect(code).toMatch(/^\d{6}$/);
@@ -84,6 +119,32 @@ describe("catalog share", () => {
     expect(summary.searches).toEqual([{ q: "40HC", count: 2 }]);
     expect(summary.images).toEqual([{ iso: "ZCSU1", slot: "0", count: 2 }]);
     expect(summary.units[0]).toMatchObject({ iso: "ZCSU1", views: 0, images: 2, returns: 0 });
+  });
+
+  it("portería dura 3 horas con RUC y 1 hora solo con DNI", () => {
+    const start = new Date("2026-10-29T15:00:00.000Z");
+    expect(shareExpiresAtExact(start, 1).toISOString()).toBe("2026-10-29T16:00:00.000Z");
+    expect(shareExpiresAtExact(start, 3).toISOString()).toBe("2026-10-29T18:00:00.000Z");
+    expect(shareExpiresAt(start, 1).toISOString()).toBe("2026-10-30T15:00:00.000Z");
+    expect(normalizeWalkIn({
+      docKind: "dni",
+      dni: "12345678",
+      firstName: "Ana",
+      lastName: "Perez",
+      clientEmail: "ana@demo.pe",
+      phonePrefix: "51",
+      phoneLocal: "999111222",
+    })).toMatchObject({ docKind: "dni", ruc: "", dni: "12345678", hours: 1, clientPhone: "51999111222" });
+    expect(normalizeWalkIn({
+      ruc: "20100070970",
+      dni: "12345678",
+      firstName: "Ana",
+      lastName: "Perez",
+      clientEmail: "ana@demo.pe",
+      phonePrefix: "51",
+      phoneLocal: "999111222",
+    })).toMatchObject({ docKind: "ruc", ruc: "20100070970", hours: 3 });
+    expect(() => normalizeWalkIn({ docKind: "dni", dni: "1234567", firstName: "Ana", lastName: "Perez", clientEmail: "ana@demo.pe", phoneLocal: "999111222" })).toThrow(/8 dígitos/);
   });
 
   it("vence al cumplir las horas", () => {

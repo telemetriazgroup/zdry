@@ -201,6 +201,26 @@ function ShareLock({ share, error, onUnlock }) {
   const [code, setCode] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const prefilled = useRef(false);
+  const unlockRef = useRef(onUnlock);
+  unlockRef.current = onUnlock;
+
+  useEffect(() => {
+    if (!share?.token || prefilled.current) return;
+    const key = `zdry-share-prefill:${share.token}`;
+    const saved = window.sessionStorage.getItem(key) || "";
+    if (!/^\d{6}$/.test(saved)) return;
+    prefilled.current = true;
+    window.sessionStorage.removeItem(key);
+    setCode(saved);
+    let cancel = false;
+    setBusy(true);
+    api(`/catalog/share/${share.token}/unlock`, { method: "POST", body: { code: saved } })
+      .then(() => { if (!cancel) unlockRef.current(); })
+      .catch((ex) => { if (!cancel) setErr(ex.message || "Clave incorrecta."); })
+      .finally(() => { if (!cancel) setBusy(false); });
+    return () => { cancel = true; };
+  }, [share?.token]);
 
   async function submit(e) {
     e.preventDefault();

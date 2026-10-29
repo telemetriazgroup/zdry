@@ -1,5 +1,17 @@
 .sunat-card { grid-column: 1 / -1; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #f8f9fb; }
 .sunat-card p { margin: 4px 0 0; font-size: 13px; color: var(--text-2); }
+.doc-kind { grid-column: 1 / -1; }
+.doc-kind-switch { display: flex; gap: 6px; }
+.doc-kind-switch button { border: 1px solid var(--line); background: #fff; border-radius: 7px; padding: 8px 12px; font-weight: 700; cursor: pointer; }
+.doc-kind-switch button.on { background: var(--ink, #1c2430); color: #fff; border-color: transparent; }
+.contact-pick { grid-column: 1 / -1; display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.contact-pick > p, .contact-pick .field-hint { margin: 0; }
+.contact-option { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+.contact-option.on { border-color: var(--orange, #d9622f); }
+.contact-option span, .contact-option b { display: block; }
+.contact-option span { color: var(--text-2); font-size: 12px; }
+.phone-pair { display: grid; grid-template-columns: 76px 1fr; gap: 8px; align-items: end; }
+.phone-pair .field-hint { grid-column: 1 / -1; }
 .share-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0 12px; }
 .share-metrics b { display: block; font-size: 12px; margin-bottom: 4px; }
 .share-metrics ul { margin: 0; padding-left: 16px; font-size: 12px; }
@@ -457,6 +469,7 @@ table.data td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-s
 }
 .safety-rule .form-grid { margin-bottom: 8px; }
 .form-grid label { font-size: 11px; font-weight: 700; color: var(--text-2); text-transform: uppercase; display: block; margin-bottom: 4px; }
+.form-grid > .field-hint { grid-column: 1 / -1; }
 .field-hint { margin: 6px 0 0; font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: none; letter-spacing: 0; }
 .form-grid input, .form-grid select {
   width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 13px;
@@ -792,6 +805,21 @@ tr.row-picked { background: #fff4ec; }
   background: #fff9f0;
 }
 .ok-msg { color: var(--green); font-weight: 700; font-size: 12px; margin: 8px 0; }
+.share-created-key { margin: 4px 0 14px; font-size: 32px; letter-spacing: .16em; font-weight: 800; }
+.share-created-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.share-created-actions a.btn-ghost, .share-created-actions a.btn-primary { text-decoration: none; display: inline-block; }
+.gate-link { margin: 0 0 18px; }
+.gate-link h3 { margin-top: 0; }
+.gate-link-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.gate-link-row code { flex: 1; min-width: 220px; background: #f4f6fa; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+.gate-link-row a.btn-ghost { text-decoration: none; }
+.share-origin { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; background: #eef1f6; color: #334; vertical-align: middle; }
+.share-origin.cliente { background: #e7f6ee; color: #1d6b45; }
+.acceso-card { max-width: 640px; }
+.acceso-card .form-grid { grid-template-columns: 1fr; }
+.acceso-card .phone-pair { grid-column: 1 / -1; }
+.acceso-greeting { font-size: 18px; font-weight: 800; margin: 8px 0; }
+.acceso-company { background: #f7f9fc; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 8px 0 16px; }
 .warn-inline { font-size: 11px; color: #c9720b; margin-top: 6px; }
 .iso-cell { white-space: normal !important; max-width: 260px; }
 .extras-pending { border-color: #f0b155; background: #fff9f0; }

@@ -4,6 +4,7 @@ import { api, apiUrl, formatWhen, APP_ROOT } from "../api.js";
 import { whatsappDigits } from "../catalog-copy.js";
 import { useAuth } from "../auth.jsx";
 import { downloadCommercialMedia } from "./CommercialSend.jsx";
+import { salidaNotice, whatsappQueued } from "../salida-notice.js";
 
 const HOURS = Array.from({ length: 10 }, (_, i) => (i + 1) * 24);
 const LINK_PAGE = 4;
@@ -13,6 +14,7 @@ const KIND = {
   view_image: "Vio una imagen",
   filter: "Usó un filtro",
   whatsapp: "WhatsApp",
+  return: "Volvió a pedir el catálogo",
   cart: "Carrito",
   search: "Búsqueda",
 };
@@ -173,9 +175,62 @@ function UnitBrief({ unit, error }) {
   );
 }
 
+function showPhone(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.startsWith("51") && digits.length === 11) return `+51 ${digits.slice(2, 5)} ${digits.slice(5, 8)} ${digits.slice(8)}`;
+  return digits ? `+${digits}` : "";
+}
+
 function shareInvite(row) {
-  const url = shareUrl(row.token);
-  return `Hola ${row.contactName || row.clientName}, tu catálogo ZDRY está listo:\n${url}\nClave: ${row.accessCode}\nVigencia: ${row.hours} horas.`;
+  if (row.invite) return row.invite;
+  const name = row.contactName || row.clientName || "cliente";
+  const vendor = String(row.vendorName || "").trim();
+  const vendorPhone = showPhone(row.vendorWhatsapp);
+  const hours = Number(row.hours) === 1 ? "1 hora" : `${row.hours} horas`;
+  return [
+    "*ZGROUP*",
+    "ZGROUP te saluda.",
+    "",
+    `Hola ${name}, tu catálogo de equipos ya está listo. ${vendor ? `${vendor} queda a cargo de tu atención.` : "Un comercial de ZGROUP queda a cargo de tu atención."}`,
+    "",
+    "*Tu catálogo*",
+    shareUrl(row.token),
+    `Clave de acceso: *${row.accessCode}*`,
+    `Vigencia: ${hours}`,
+    "",
+    "*Tu comercial*",
+    vendor || "Comercial ZGROUP",
+    vendorPhone ? `WhatsApp: ${vendorPhone}` : "Si quieres llamarlo, pide el número en portería.",
+    "Si quieres ver los equipos o resolver una duda, escríbele directo a ese número.",
+  ].join("\n");
+}
+
+function splitPhone(raw) {
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (digits.startsWith("51") && digits.length > 8) return { prefix: "51", local: digits.slice(2) };
+  return { prefix: "51", local: digits };
+}
+
+function PhoneFields({ prefix, local, onPrefix, onLocal, label }) {
+  return (
+    <div className="phone-pair">
+      <div>
+        <label>Prefijo</label>
+        <input
+          value={prefix}
+          onChange={(e) => onPrefix(e.target.value.replace(/\D/g, "").slice(0, 4))}
+          inputMode="numeric"
+          aria-label="Prefijo del celular"
+          required
+        />
+      </div>
+      <div>
+        <label>{label}</label>
+        <input value={local} onChange={(e) => onLocal(e.target.value)} inputMode="tel" aria-label={label} required placeholder="999 111 222" />
+      </div>
+      <p className="field-hint">51 es Perú. Cámbialo si el celular es de otro país.</p>
+    </div>
+  );
 }
 
 function shareWhatsApp(row) {
@@ -195,18 +250,25 @@ export default function CatalogShares() {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
+  const [created, setCreated] = useState(null);
   const [looking, setLooking] = useState(false);
-  const [sunat, setSunat] = useState(null);
+  const [lookup, setLookup] = useState(null);
+  const [contactChoice, setContactChoice] = useState("");
+  const [rucDraft, setRucDraft] = useState(null);
   const waEdited = useRef(false);
   const [archivedView, setArchivedView] = useState(false);
   const [renewHours, setRenewHours] = useState(72);
   const [linkPage, setLinkPage] = useState(1);
+  const [origin, setOrigin] = useState("todos");
   const [editing, setEditing] = useState(null);
   const [pickedIso, setPickedIso] = useState("");
   const [pickedUnit, setPickedUnit] = useState(null);
   const [pickedError, setPickedError] = useState("");
-  const [form, setForm] = useState({
+  const emptyIdentity = {
     ruc: "",
+    dni: "",
+    firstName: "",
+    lastName: "",
     clientCompany: "",
     street: "",
     district: "",
@@ -215,13 +277,20 @@ export default function CatalogShares() {
     sunatState: "",
     sunatCondition: "",
     customerId: "",
+    odooPartnerId: "",
+    odooContactId: "",
     contactName: "",
-    clientPhone: "",
+    phonePrefix: "51",
+    phoneLocal: "",
     clientEmail: "",
     clientNote: "",
+    contacts: [],
+  };
+  const [form, setForm] = useState({
+    docKind: "ruc",
+    ...emptyIdentity,
     vendorWhatsapp: user?.whatsapp || "",
     hours: 72,
-    contacts: [],
   });
 
   async function load(archived = archivedView) {
@@ -253,44 +322,95 @@ export default function CatalogShares() {
     setForm((cur) => (cur.vendorWhatsapp === saved ? cur : { ...cur, vendorWhatsapp: saved }));
   }, [user?.whatsapp]);
 
-  function applyContact(contact) {
-    if (!contact) return;
+  function clearContactFields(extra = {}) {
     setForm((cur) => ({
       ...cur,
-      contactName: contact.name || cur.contactName,
-      clientPhone: contact.phone || cur.clientPhone,
-      clientEmail: contact.email || cur.clientEmail,
+      odooContactId: "",
+      contactName: "",
+      firstName: "",
+      lastName: "",
+      phonePrefix: "51",
+      phoneLocal: "",
+      clientEmail: "",
+      ...extra,
     }));
   }
 
-  async function lookupRuc() {
+  function applyContact(contact) {
+    if (!contact) return;
+    const phone = splitPhone(contact.phone || "");
+    const parts = String(contact.name || "").trim().split(/\s+/);
+    setContactChoice("assimilated");
+    setForm((cur) => ({
+      ...cur,
+      odooContactId: contact.id || "",
+      contactName: contact.name || "",
+      firstName: parts[0] || "",
+      lastName: parts.slice(1).join(" "),
+      phonePrefix: contact.phone ? phone.prefix : "51",
+      phoneLocal: contact.phone ? phone.local : "",
+      clientEmail: contact.email || "",
+    }));
+  }
+
+  function useOtherContact() {
+    setContactChoice("other");
+    clearContactFields();
+  }
+
+  function applyLookup(found) {
+    const contacts = found.contacts || [];
+    setLookup(found);
+    setContactChoice(contacts.length ? "" : "other");
+    setForm((cur) => ({
+      ...cur,
+      ruc: found.ruc || cur.ruc,
+      dni: found.dni || cur.dni,
+      clientCompany: found.companyName || "",
+      street: found.street || "",
+      district: found.district || "",
+      province: found.province || "",
+      department: found.department || "",
+      sunatState: found.sunatState || "",
+      sunatCondition: found.sunatCondition || "",
+      customerId: found.customerId || "",
+      odooPartnerId: found.odooPartnerId || "",
+      odooContactId: "",
+      contactName: "",
+      firstName: "",
+      lastName: "",
+      phonePrefix: "51",
+      phoneLocal: "",
+      clientEmail: "",
+      contacts,
+    }));
+  }
+
+  async function lookupClient() {
     setError("");
     setMsg("");
     setLooking(true);
     try {
-      const found = await api("/catalog-shares/ruc", { method: "POST", body: { ruc: form.ruc } });
-      setSunat(found);
-      setForm((cur) => ({
-        ...cur,
-        ruc: found.ruc,
-        clientCompany: found.companyName || "",
-        street: found.street || "",
-        district: found.district || "",
-        province: found.province || "",
-        department: found.department || "",
-        sunatState: found.sunatState || "",
-        sunatCondition: found.sunatCondition || "",
-        customerId: found.customerId || "",
-        contactName: found.contactName || "",
-        clientPhone: found.contactPhone || "",
-        clientEmail: found.contactEmail || "",
-        contacts: found.contacts || [],
-      }));
-      setMsg(found.activeShare
-        ? `${found.companyName} ya tiene un enlace activo. Suspéndelo para crear otro.`
-        : `SUNAT: ${found.companyName}. Completa el contacto y genera el enlace.`);
+      const found = form.docKind === "dni"
+        ? await api("/catalog-shares/dni", { method: "POST", body: { dni: form.dni } })
+        : await api("/catalog-shares/ruc", { method: "POST", body: { ruc: form.ruc } });
+      applyLookup(found);
+      const who = found.companyName || found.contactName || "El cliente";
+      if (found.activeShare) {
+        setMsg(`${who} ya tiene un enlace activo. Suspéndelo para crear otro.`);
+      } else if (form.docKind === "dni" && found.inOdoo) {
+        setMsg(`${who} ya está en contactos. Confirma si asimilas ese contacto o escribes otro. El RUC queda pendiente.`);
+      } else if (form.docKind === "dni") {
+        setMsg("Ese DNI no está en contactos. Completa nombres, apellidos, correo y celular. Al generar el enlace se crea la persona en Odoo y el RUC queda pendiente.");
+      } else if (found.inOdoo) {
+        setMsg(found.contacts?.length
+          ? `${who} está en contactos de Odoo. Elige qué contacto asimilar para el enlace, o escribe otro.`
+          : `${who} está en Odoo y no tiene un contacto. Indica la persona: se crea al generar el enlace.`);
+      } else {
+        setMsg(`${who} no está en contactos. SUNAT devolvió la razón social. Al generar el enlace se crea la empresa y el contacto en Odoo.`);
+      }
     } catch (err) {
-      setSunat(null);
+      setLookup(null);
       setError(err.message);
     } finally {
       setLooking(false);
@@ -303,25 +423,20 @@ export default function CatalogShares() {
     setMsg("");
     try {
       const row = await api("/catalog-shares", { method: "POST", body: form });
-      await navigator.clipboard?.writeText(shareInvite(row)).catch(() => {});
-      setMsg(`Enlace para ${row.clientCompany || row.clientName}. Clave ${row.accessCode}. Vigente ${row.hours} h. El mensaje ya está copiado para enviarlo.`);
-      setSunat(null);
+      let copied = false;
+      try {
+        await navigator.clipboard?.writeText(shareInvite(row));
+        copied = true;
+      } catch {
+        copied = false;
+      }
+      setCreated({ ...row, copied });
+      setLookup(null);
+      setContactChoice("");
       setForm({
         ...form,
-        ruc: "",
-        clientCompany: "",
-        street: "",
-        district: "",
-        province: "",
-        department: "",
-        sunatState: "",
-        sunatCondition: "",
-        customerId: "",
-        contactName: "",
-        clientPhone: "",
-        clientEmail: "",
-        clientNote: "",
-        contacts: [],
+        ...emptyIdentity,
+        phonePrefix: "51",
       });
       await load();
     } catch (err) {
@@ -380,21 +495,40 @@ export default function CatalogShares() {
   }
 
   function startEdit(row) {
+    const phone = splitPhone(row.clientPhone || "");
     setEditing({
       id: row.id,
       contactName: row.contactName || row.clientName || "",
-      clientPhone: row.clientPhone || "",
+      phonePrefix: phone.prefix,
+      phoneLocal: phone.local,
       clientEmail: row.clientEmail || "",
       clientNote: row.clientNote || "",
       vendorWhatsapp: row.vendorWhatsapp || "",
     });
   }
 
+  async function savePendingRuc(e) {
+    e.preventDefault();
+    setError("");
+    try {
+      const row = await api(`/catalog-shares/${rucDraft.id}/add-ruc`, { method: "POST", body: { ruc: rucDraft.ruc } });
+      setMsg(`RUC ${row.ruc} validado para ${row.clientCompany || row.clientName}.`);
+      setRucDraft(null);
+      if (openId === row.id) setDetail(await api(`/catalog-shares/mine/${row.id}`));
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   async function saveEdit(e) {
     e.preventDefault();
     setError("");
     try {
-      const row = await api(`/catalog-shares/${editing.id}/edit`, { method: "POST", body: editing });
+      const local = String(editing.phoneLocal || "").replace(/\D/g, "");
+      const prefix = String(editing.phonePrefix || "51").replace(/\D/g, "") || "51";
+      const clientPhone = local.startsWith(prefix) && local.length > prefix.length + 5 ? local : `${prefix}${local}`;
+      const row = await api(`/catalog-shares/${editing.id}/edit`, { method: "POST", body: { ...editing, clientPhone } });
       setMsg(`Enlace de ${row.clientCompany || row.clientName} actualizado.`);
       setEditing(null);
       if (openId === row.id) setDetail(await api(`/catalog-shares/mine/${row.id}`));
@@ -404,46 +538,135 @@ export default function CatalogShares() {
     }
   }
 
-  const linkPages = Math.max(1, Math.ceil(rows.length / LINK_PAGE));
+  const originRows = rows.filter((r) => origin === "todos" || (r.source || "comercial") === origin);
+  const linkPages = Math.max(1, Math.ceil(originRows.length / LINK_PAGE));
   const safePage = Math.min(linkPage, linkPages);
-  const pageRows = rows.slice((safePage - 1) * LINK_PAGE, safePage * LINK_PAGE);
+  const pageRows = originRows.slice((safePage - 1) * LINK_PAGE, safePage * LINK_PAGE);
+  const gateUrl = `${window.location.origin}${APP_ROOT === "/" ? "" : APP_ROOT.replace(/\/$/, "")}/acceso`;
 
   return (
     <>
       <h2 className="section-title">Enlaces de catálogo</h2>
       <p className="section-sub">
-        Validas el RUC en SUNAT, indicas a la persona que verá el catálogo y el WhatsApp del comercial. La vigencia va de 24 a 240 horas. Un enlace vigente se puede extender; uno vencido se reactiva con las mismas horas. Archivar lo saca de la lista y lo deja inutilizable. Puedes corregir el contacto de un enlace ya creado. Cada cliente tiene un solo enlace activo, y ese enlace solo permanece abierto en un lugar: si entra en otro, la sesión anterior se cierra.
+        Primero se busca el cliente en los contactos de Odoo. Si ya está, el enlace usa su empresa y su contacto. Si no está, se crea ahí al generar el enlace. Por defecto el cliente se registra con RUC. Si solo mostró DNI, activa esa opción: se valida que tenga 8 dígitos, se pide nombres, apellidos, correo y celular, y el RUC queda pendiente para agregarlo después. La vigencia va de 24 a 240 horas.
       </p>
+      <div className="panel gate-link">
+        <h3>Acceso en portería</h3>
+        <p>El vigilante abre este enlace para el cliente. Con RUC el catálogo dura 3 horas; solo con DNI, 1 hora. El sistema se lo asigna a un comercial.</p>
+        <div className="gate-link-row">
+          <code>{gateUrl}</code>
+          <button className="btn-ghost" type="button" onClick={() => navigator.clipboard?.writeText(gateUrl).then(() => setMsg("Enlace de portería copiado.")).catch(() => setError("No se pudo copiar."))}>Copiar enlace</button>
+          <a className="btn-ghost" href={gateUrl} target="_blank" rel="noreferrer">Abrir</a>
+        </div>
+      </div>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
+      {created ? (
+        <div className="overlay open" role="dialog" aria-modal="true" aria-labelledby="share-created-title">
+          <div className="modal quote-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h3 id="share-created-title">Enlace generado</h3>
+              <button className="modal-close" type="button" onClick={() => setCreated(null)} aria-label="Cerrar">×</button>
+            </div>
+            <div className="modal-body single">
+              <p>El enlace de <b>{created.clientCompany || created.clientName}</b> quedó listo para <b>{created.contactName || created.clientName}</b>.</p>
+              <p>Clave de acceso</p>
+              <p className="share-created-key">{created.accessCode || "—"}</p>
+              <p>Vigente {created.hours} horas.</p>
+              <p><a href={shareUrl(created.token)} target="_blank" rel="noreferrer">{shareUrl(created.token)}</a></p>
+              {created.rucPending ? <p>Quedó pendiente la validación del RUC. Puedes agregarlo después.</p> : null}
+              <p className="field-hint">{whatsappQueued(created.salida)
+                ? (created.copied ? "El mensaje para el cliente ya está copiado." : "Puedes copiar el mensaje si lo necesitas.")
+                : (created.copied ? "El mensaje para el cliente ya está copiado. Puedes pegarlo en WhatsApp." : "Copia el mensaje para enviarlo al cliente.")}</p>
+              {salidaNotice(created.salida) ? <p>{salidaNotice(created.salida)}</p> : null}
+              <div className="share-created-actions">
+                <button
+                  className="btn-primary"
+                  type="button"
+                  onClick={() => navigator.clipboard?.writeText(shareInvite(created)).then(() => setCreated({ ...created, copied: true })).catch(() => setError("No se pudo copiar."))}
+                >
+                  Copiar mensaje
+                </button>
+                {whatsappQueued(created.salida) ? null : <a className="btn-ghost" href={shareWhatsApp(created)} target="_blank" rel="noreferrer">Enviar por WhatsApp</a>}
+                <button className="btn-ghost" type="button" onClick={() => setCreated(null)}>Entendido</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="panel" style={{ marginBottom: 18 }}>
         <h3>Nuevo enlace temporizado</h3>
         <form className="form-grid" onSubmit={create}>
-          <div>
-            <label>RUC</label>
-            <input value={form.ruc} onChange={(e) => setForm({ ...form, ruc: e.target.value })} required placeholder="11 dígitos" inputMode="numeric" />
-          </div>
-          <div className="action-row" style={{ alignItems: "end" }}>
-            <button className="btn-ghost" type="button" disabled={looking} onClick={lookupRuc}>{looking ? "Consultando SUNAT…" : "Validar en SUNAT"}</button>
-          </div>
-          {sunat ? (
-            <div className="sunat-card">
-              <b>{form.clientCompany}</b>
-              <p>{[form.street, form.district, form.province, form.department].filter(Boolean).join(" · ") || "Sin domicilio en la respuesta."}</p>
-              <p>{form.sunatState || "—"} · {form.sunatCondition || "—"}</p>
+          <div className="doc-kind">
+            <label>Documento del cliente</label>
+            <div className="doc-kind-switch" role="group" aria-label="Documento del cliente">
+              <button type="button" className={form.docKind === "ruc" ? "on" : ""} onClick={() => { setLookup(null); setContactChoice(""); setForm({ ...form, ...emptyIdentity, docKind: "ruc" }); }}>RUC</button>
+              <button type="button" className={form.docKind === "dni" ? "on" : ""} onClick={() => { setLookup(null); setContactChoice(""); setForm({ ...form, ...emptyIdentity, docKind: "dni" }); }}>Solo DNI</button>
             </div>
-          ) : null}
-          {form.contacts.length > 1 ? (
+            <p className="field-hint">{form.docKind === "dni" ? "Se registra la persona con DNI. El RUC se puede agregar después." : "Registro con RUC. Es la opción de siempre."}</p>
+          </div>
+          {form.docKind === "dni" ? (
             <div>
-              <label>Contacto en Odoo</label>
-              <select onChange={(e) => applyContact(form.contacts[Number(e.target.value)])}>
-                {form.contacts.map((c, i) => <option key={c.id || i} value={i}>{c.name || c.email || c.phone}</option>)}
-              </select>
+              <label>DNI</label>
+              <input value={form.dni} onChange={(e) => setForm({ ...form, dni: e.target.value.replace(/\D/g, "").slice(0, 8) })} required placeholder="8 dígitos" inputMode="numeric" />
+            </div>
+          ) : (
+            <div>
+              <label>RUC</label>
+              <input value={form.ruc} onChange={(e) => setForm({ ...form, ruc: e.target.value.replace(/\D/g, "").slice(0, 11) })} required placeholder="11 dígitos" inputMode="numeric" />
+            </div>
+          )}
+          <div className="action-row" style={{ alignItems: "end" }}>
+            <button className="btn-ghost" type="button" disabled={looking} onClick={lookupClient}>
+              {looking ? "Buscando…" : form.docKind === "dni" ? "Buscar en contactos" : "Buscar cliente"}
+            </button>
+          </div>
+          {lookup ? (
+            <div className="sunat-card">
+              <b>{form.clientCompany || form.contactName || (form.docKind === "dni" ? "DNI sin contacto en Odoo" : "Sin razón social")}</b>
+              <p>{lookup.inOdoo ? "Encontrado en contactos de Odoo." : form.docKind === "dni" ? "No está en contactos. Se creará al generar el enlace." : "No está en contactos. Los datos salen de SUNAT y se creará en Odoo al generar el enlace."}</p>
+              {form.docKind === "ruc" ? <p>{[form.street, form.district, form.province, form.department].filter(Boolean).join(" · ") || "Sin domicilio en la respuesta."}</p> : null}
+              {form.docKind === "ruc" && (form.sunatState || form.sunatCondition) ? <p>{form.sunatState || "—"} · {form.sunatCondition || "—"}</p> : null}
             </div>
           ) : null}
-          <div><label>Persona que verá el catálogo</label><input value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} required placeholder="Nombre del contacto" /></div>
-          <div><label>Teléfono del contacto</label><input value={form.clientPhone} onChange={(e) => setForm({ ...form, clientPhone: e.target.value })} required /></div>
+          {form.contacts.length ? (
+            <div className="contact-pick">
+              <b>Contactos en Odoo</b>
+              <p>Esta es la información que se asimilaría. El contacto del enlace puede ser otro.</p>
+              {form.contacts.map((c) => (
+                <div key={c.id || c.email || c.name} className={form.odooContactId === c.id && contactChoice === "assimilated" ? "contact-option on" : "contact-option"}>
+                  <div>
+                    <b>{c.name || "Sin nombre"}</b>
+                    {c.role ? <span>{c.role}</span> : null}
+                    <span>{c.phone || "Sin celular"}</span>
+                    <span>{c.email || "Sin correo"}</span>
+                  </div>
+                  <button className="btn-ghost" type="button" onClick={() => applyContact(c)}>
+                    {form.odooContactId === c.id && contactChoice === "assimilated" ? "Asimilado" : "Asimilar este contacto"}
+                  </button>
+                </div>
+              ))}
+              <button className="btn-ghost" type="button" onClick={useOtherContact}>Usar otro contacto</button>
+            </div>
+          ) : null}
+          {contactChoice === "other" ? <p className="field-hint">No se asimila un contacto de Odoo. El que escribas se crea al generar el enlace.</p> : null}
+          {contactChoice === "assimilated" ? <p className="field-hint">Se usará el contacto elegido. Puedes corregir el celular o el correo antes de generar.</p> : null}
+          {form.docKind === "dni" ? (
+            <>
+              <div><label>Nombres</label><input value={form.firstName} onChange={(e) => { setContactChoice("other"); setForm({ ...form, firstName: e.target.value, odooContactId: "" }); }} required /></div>
+              <div><label>Apellidos</label><input value={form.lastName} onChange={(e) => { setContactChoice("other"); setForm({ ...form, lastName: e.target.value, odooContactId: "" }); }} required /></div>
+            </>
+          ) : (
+            <div><label>Persona que verá el catálogo</label><input value={form.contactName} onChange={(e) => { setContactChoice("other"); setForm({ ...form, contactName: e.target.value, odooContactId: "" }); }} required placeholder="Nombre del contacto" /></div>
+          )}
+          <PhoneFields
+            prefix={form.phonePrefix}
+            local={form.phoneLocal}
+            onPrefix={(phonePrefix) => setForm({ ...form, phonePrefix })}
+            onLocal={(phoneLocal) => setForm({ ...form, phoneLocal })}
+            label="Celular del contacto"
+          />
           <div><label>Correo del contacto</label><input type="email" value={form.clientEmail} onChange={(e) => setForm({ ...form, clientEmail: e.target.value })} required /></div>
           <div>
             <label>Vigencia</label>
@@ -462,7 +685,7 @@ export default function CatalogShares() {
             <p className="field-hint">{user?.whatsapp ? "Sale del WhatsApp de tu perfil. Puedes cambiarlo solo para este enlace." : "Regístralo en Mi perfil para que se complete solo. Aquí puedes escribirlo o corregirlo."}</p>
           </div>
           <div><label>Nota</label><input value={form.clientNote} onChange={(e) => setForm({ ...form, clientNote: e.target.value })} placeholder="Opcional" /></div>
-          <button className="btn-primary" type="submit" disabled={Boolean(sunat?.activeShare)}>Generar enlace</button>
+          <button className="btn-primary" type="submit" disabled={Boolean(lookup?.activeShare) || (form.docKind === "ruc" && !lookup) || (form.contacts.length > 0 && !contactChoice)}>Generar enlace</button>
         </form>
       </div>
 
@@ -471,6 +694,11 @@ export default function CatalogShares() {
         <div className="panel">
           <div className="odoo-toolbar">
             <h3 style={{ margin: 0 }}>Enlaces</h3>
+            <div className="doc-kind-switch" role="group" aria-label="Tipo de enlace">
+              <button type="button" className={origin === "todos" ? "on" : ""} onClick={() => { setOrigin("todos"); setLinkPage(1); }}>Todos</button>
+              <button type="button" className={origin === "comercial" ? "on" : ""} onClick={() => { setOrigin("comercial"); setLinkPage(1); }}>Comercial</button>
+              <button type="button" className={origin === "cliente" ? "on" : ""} onClick={() => { setOrigin("cliente"); setLinkPage(1); }}>Cliente</button>
+            </div>
             <Link className="btn-ghost" to={{ pathname: "/", search: "?vista=comercial" }}>Ver catálogo comercial</Link>
             <Link className="btn-ghost" to={{ pathname: "/", search: "?vista=cliente" }}>Ver como cliente</Link>
             <button className="btn-ghost" type="button" onClick={() => setArchivedView((v) => !v)}>
@@ -485,10 +713,28 @@ export default function CatalogShares() {
               </label>
             )}
           </div>
+          {rucDraft ? (
+            <form className="form-grid" onSubmit={savePendingRuc}>
+              <div>
+                <label>RUC pendiente</label>
+                <input value={rucDraft.ruc} onChange={(e) => setRucDraft({ ...rucDraft, ruc: e.target.value.replace(/\D/g, "").slice(0, 11) })} required placeholder="11 dígitos" inputMode="numeric" />
+              </div>
+              <div className="action-row">
+                <button className="btn-primary" type="submit">Validar y agregar RUC</button>
+                <button className="btn-ghost" type="button" onClick={() => setRucDraft(null)}>Cancelar</button>
+              </div>
+            </form>
+          ) : null}
           {editing ? (
             <form className="form-grid" onSubmit={saveEdit}>
               <div><label>Persona que verá el catálogo</label><input value={editing.contactName} onChange={(e) => setEditing({ ...editing, contactName: e.target.value })} required /></div>
-              <div><label>Teléfono del contacto</label><input value={editing.clientPhone} onChange={(e) => setEditing({ ...editing, clientPhone: e.target.value })} required /></div>
+              <PhoneFields
+                prefix={editing.phonePrefix}
+                local={editing.phoneLocal}
+                onPrefix={(phonePrefix) => setEditing({ ...editing, phonePrefix })}
+                onLocal={(phoneLocal) => setEditing({ ...editing, phoneLocal })}
+                label="Celular del contacto"
+              />
               <div><label>Correo del contacto</label><input type="email" value={editing.clientEmail} onChange={(e) => setEditing({ ...editing, clientEmail: e.target.value })} required /></div>
               <div><label>WhatsApp del comercial</label><input value={editing.vendorWhatsapp} onChange={(e) => setEditing({ ...editing, vendorWhatsapp: e.target.value })} required /></div>
               <div><label>Nota</label><input value={editing.clientNote} onChange={(e) => setEditing({ ...editing, clientNote: e.target.value })} /></div>
@@ -506,7 +752,7 @@ export default function CatalogShares() {
                   <tr key={r.id} className={openId === r.id ? "share-row-on" : ""}>
                     <td>
                       <button className="share-client" type="button" onClick={() => open(r.id)}>
-                        <b>{r.clientCompany || r.clientName}</b><br /><span className="muted">{r.ruc ? `RUC ${r.ruc} · ` : ""}{r.contactName || r.clientName}{r.accessCode ? ` · clave ${r.accessCode}` : ""}</span>
+                        <b>{r.clientCompany || r.clientName}</b> <span className={r.source === "cliente" ? "share-origin cliente" : "share-origin"}>{r.source === "cliente" ? "Cliente" : "Comercial"}</span><br /><span className="muted">{r.ruc ? `RUC ${r.ruc} · ` : ""}{r.dni ? `DNI ${r.dni} · ` : ""}{r.rucPending ? "RUC pendiente · " : ""}{r.source === "cliente" ? `${r.hours} h · ` : ""}{r.contactName || r.clientName}{r.accessCode ? ` · clave ${r.accessCode}` : ""}</span>
                       </button>
                     </td>
                     <td>{formatWhen(r.expiresAt)}</td>
@@ -536,6 +782,9 @@ export default function CatalogShares() {
                             {r.status === "vencido" ? "Reactivar" : "Extender"}
                           </button>
                         ) : null}
+                        {r.rucPending && r.status !== "archivado" ? (
+                          <button className="btn-ghost" type="button" onClick={() => setRucDraft({ id: r.id, ruc: "" })}>Agregar RUC</button>
+                        ) : null}
                         {r.status === "archivado" ? null : (
                           <button className="btn-ghost" type="button" onClick={() => startEdit(r)}>Editar</button>
                         )}
@@ -546,11 +795,11 @@ export default function CatalogShares() {
                     </td>
                   </tr>
                 ))}
-                {!rows.length ? <tr><td colSpan={4}>{archivedView ? "No hay enlaces archivados." : "Aún no hay enlaces. Genera el primero para un cliente."}</td></tr> : null}
+                {!originRows.length ? <tr><td colSpan={4}>{archivedView ? "No hay enlaces archivados." : origin === "cliente" ? "Todavía no hay enlaces que haya pedido el cliente." : origin === "comercial" ? "No hay enlaces creados por un comercial." : "Aún no hay enlaces. Genera el primero para un cliente."}</td></tr> : null}
               </tbody>
             </table>
           </div>
-          {rows.length > LINK_PAGE ? (
+          {originRows.length > LINK_PAGE ? (
             <div className="share-pager">
               <button className="btn-ghost" type="button" disabled={safePage <= 1} onClick={() => setLinkPage(safePage - 1)}>Anterior</button>
               <span>Página {safePage} de {linkPages}</span>
