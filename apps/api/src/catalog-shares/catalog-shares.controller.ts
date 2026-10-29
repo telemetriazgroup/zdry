@@ -23,9 +23,21 @@ export class CatalogSharesController {
   }
 
   @Get()
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   list(@CurrentUser() user: AuthUser, @Query("archived") archived?: string) {
     return this.shares.list(user, archived === "1" || archived === "true");
+  }
+
+  @Get("vendors")
+  @Roles("superadmin", "admin", "ejecutivo")
+  vendors() {
+    return this.shares.vendorChoices();
+  }
+
+  @Get("report")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
+  report(@CurrentUser() user: AuthUser, @Query("archived") archived?: string) {
+    return this.shares.report(user, archived === "1" || archived === "true");
   }
 
   @Public()
@@ -41,55 +53,55 @@ export class CatalogSharesController {
   }
 
   @Post("ruc")
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   lookupRuc(@Body() body: { ruc?: string }) {
     return this.shares.lookupRuc(String(body?.ruc || ""));
   }
 
   @Post("dni")
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   lookupDni(@Body() body: { dni?: string }) {
     return this.shares.lookupDni(String(body?.dni || ""));
   }
 
   @Post()
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   create(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.shares.create(body, user, req.ip, requestOrigin(req));
   }
 
   @Post(":id/suspend")
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   suspend(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.shares.suspend(id, user, req.ip);
   }
 
   @Post(":id/renew")
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   renew(@Param("id") id: string, @Body() body: { hours?: number }, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.shares.renew(id, body?.hours, user, req.ip);
   }
 
   @Post(":id/add-ruc")
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   addRuc(@Param("id") id: string, @Body() body: { ruc?: string }, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.shares.addRuc(id, String(body?.ruc || ""), user, req.ip);
   }
 
   @Post(":id/edit")
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   edit(@Param("id") id: string, @Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.shares.edit(id, body, user, req.ip);
   }
 
   @Post(":id/archive")
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin")
   archive(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.shares.archive(id, user, req.ip);
   }
 
   @Get("mine/:id")
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   one(@Param("id") id: string, @CurrentUser() user: AuthUser) {
     return this.shares.getOne(id, user);
   }

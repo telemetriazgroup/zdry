@@ -830,7 +830,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     user: AuthUser | undefined,
     ip?: string,
   ) {
-    const staff = user && ["admin", "gerente", "vendedor", "superadmin"].includes(user.role);
+    const staff = user && ["admin", "gerente", "vendedor", "ejecutivo", "superadmin"].includes(user.role);
     if (!staff) {
       const commerce = await this.catalogCommerce();
       if (!commerce.quotesEnabled) throw new ForbiddenException(publicQuotesBlockedMessage());
@@ -852,7 +852,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       if (c.status !== "Disponible" && c.status !== "Reservado") {
         throw new ConflictException(`${iso} no está disponible.`);
       }
-      if (user?.role === "vendedor" && (!isMediaApproved(c.mediaStatus) || isPendingValuation(c))) {
+      if ((user?.role === "vendedor" || user?.role === "ejecutivo") && (!isMediaApproved(c.mediaStatus) || isPendingValuation(c))) {
         throw new BadRequestException(`${iso} no está publicado. Solo lo publicado está disponible para la venta.`);
       }
       const prices = await this.ensureUnitPrices(iso, pricing, acquisition);

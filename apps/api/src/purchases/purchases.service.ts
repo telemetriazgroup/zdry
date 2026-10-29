@@ -732,7 +732,7 @@ export class PurchasesService {
 
   async listContainersForRole(role: AuthUser["role"], view?: string) {
     const preview = view === "comercial" && (role === "superadmin" || role === "admin" || role === "gerente");
-    const commercial = role === "vendedor" || preview;
+    const commercial = role === "vendedor" || role === "ejecutivo" || preview;
     const where: Prisma.ContainerWhereInput = { ...(await this.prisma.liveContainers()) };
     if (commercial) Object.assign(where, publishedStockWhere());
     const [rows, visRows] = await Promise.all([

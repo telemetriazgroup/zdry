@@ -12,6 +12,7 @@ Clave de todos (salvo que se haya cambiado): **`Zdry123!`**
 | `admin@zdry.pe` | Ana Admin | Administrador Total |
 | `gerente@zdry.pe` | Gabriel Gerente | Gerente de Ventas |
 | `vendedor@zdry.pe` | Valeria Vendedor | Vendedor / Comercial |
+| `ejecutivo@zdry.pe` | Elena Ejecutivo | Ejecutivo comercial |
 | `compras@zdry.pe` | Carlos Compras | Compras / Costos |
 | `coordinador@zdry.pe` | Diego Coordinador | Coordinador de despacho |
 | `almacen@zdry.pe` | Lucía Almacén | Almacén / Operador de campo |

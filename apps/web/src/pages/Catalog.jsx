@@ -319,7 +319,7 @@ export default function Catalog() {
   const { iso: routeIso, shareToken } = useParams();
   const [searchParams] = useSearchParams();
   const { user, ready, logout, login, register } = useAuth();
-  const staffCatalog = !shareToken && ["superadmin", "admin", "vendedor", "gerente"].includes(user?.role);
+  const staffCatalog = !shareToken && ["superadmin", "admin", "vendedor", "ejecutivo", "gerente"].includes(user?.role);
   const clientView = Boolean(shareToken) || searchParams.get("vista") === "cliente" || (Boolean(user) && !staffCatalog);
   const commercial = staffCatalog && !clientView && searchParams.get("vista") === "comercial";
   const nav = useNavigate();

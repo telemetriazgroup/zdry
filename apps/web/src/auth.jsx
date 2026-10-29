@@ -8,6 +8,7 @@ export const ROLE_LABELS = {
   admin: "Administrador Total",
   gerente: "Gerente de Ventas",
   vendedor: "Vendedor / Comercial",
+  ejecutivo: "Ejecutivo comercial",
   compras: "Compras / Costos",
   coordinador: "Coordinador de despacho",
   almacen: "Almacén / Operador de campo",
@@ -30,6 +31,7 @@ export const ROLE_DESC = {
   admin: "Ve inventario con costo real, personas, maestros, configuración, regularización Odoo y publicación del catálogo.",
   gerente: "Define reglas de precio y visibilidad. No ve FOB ni C_T.",
   vendedor: "Cotiza, valida comprobantes y confirma asignación. Nunca ve el costo real.",
+  ejecutivo: "Misma operación que el comercial. Además ve los enlaces y el desempeño de todos los vendedores, y puede registrar un cliente para derivarlo.",
   compras: "Facturas de compra, conciliar reentrega con OC/IN, deuda Odoo, extras y DAM. Ve costos de adquisición.",
   coordinador: "Alta de reentrega, visitas de puerta, ficha, imágenes y conciliación del ingreso de Odoo con la unidad de patio. No publica el catálogo ni ve tarifas.",
   almacen: "Patio de campo: lista de visitas y DRY, fotos, video, diagnóstico y registro de emergencia si el contenedor no está. No ve Odoo ni precios.",
@@ -79,6 +81,12 @@ export const ROLE_NAV = {
     { to: "/app", label: "Inicio", end: true },
     { to: "/app/inventario", label: "Inventario" },
     { to: "/app/enlaces-catalogo", label: "Enlaces catálogo" },
+  ],
+  ejecutivo: [
+    { to: "/app", label: "Inicio", end: true },
+    { to: "/app/inventario", label: "Inventario" },
+    { to: "/app/enlaces-catalogo", label: "Enlaces catálogo" },
+    { to: "/app/comerciales", label: "Comerciales" },
   ],
   compras: [
     { to: "/app", label: "Inicio", end: true },

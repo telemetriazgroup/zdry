@@ -10,7 +10,7 @@ export default function Inventory() {
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
   const asCommercial = params.get("vista") === "comercial" && hasRole(user, "admin", "gerente");
-  const isVendor = user.role === "vendedor";
+  const isVendor = user.role === "vendedor" || user.role === "ejecutivo";
   const [rows, setRows] = useState([]);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");

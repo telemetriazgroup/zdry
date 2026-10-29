@@ -68,7 +68,7 @@ export class CatalogSharesService {
   }
 
   private canSeeAll(user: AuthUser) {
-    return user.role === "superadmin" || user.role === "admin" || user.role === "gerente";
+    return user.role === "superadmin" || user.role === "admin" || user.role === "gerente" || user.role === "ejecutivo";
   }
 
   private present(row: {
@@ -180,13 +180,34 @@ export class CatalogSharesService {
   }
 
   async list(user: AuthUser, archived = false) {
+    if (archived && user.role !== "superadmin") throw new ForbiddenException("Solo el superadmin ve los enlaces archivados.");
     const mine = this.canSeeAll(user) ? {} : { vendorId: user.id };
     const where = { ...mine, archivedAt: archived ? { not: null } : null };
     const rows = await this.prisma.catalogShare.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      take: 80,
+      take: 400,
       include: { events: { orderBy: { createdAt: "desc" }, take: 8 } },
+    });
+    return rows.map((r) => this.present(r));
+  }
+
+  async vendorChoices() {
+    return this.prisma.user.findMany({
+      where: { role: "vendedor", active: true, ...(await this.prisma.hideDemo()) },
+      select: { id: true, name: true, whatsapp: true },
+      orderBy: { name: "asc" },
+    });
+  }
+
+  async report(user: AuthUser, archived = false) {
+    if (archived && user.role !== "superadmin") throw new ForbiddenException("Solo el superadmin ve los enlaces archivados.");
+    const mine = this.canSeeAll(user) ? {} : { vendorId: user.id };
+    const rows = await this.prisma.catalogShare.findMany({
+      where: { ...mine, archivedAt: archived ? { not: null } : null },
+      orderBy: { createdAt: "desc" },
+      take: 400,
+      include: { events: { orderBy: { createdAt: "desc" }, take: 120 } },
     });
     return rows.map((r) => this.present(r));
   }
@@ -209,7 +230,7 @@ export class CatalogSharesService {
     try {
       draft = normalizeShareDraft({
         ...body,
-        vendorWhatsapp: body.vendorWhatsapp || user.whatsapp,
+        vendorWhatsapp: body.vendorWhatsapp || (user.role === "vendedor" ? user.whatsapp : ""),
       });
     } catch (e) {
       throw new BadRequestException((e as Error).message);
@@ -223,13 +244,15 @@ export class CatalogSharesService {
     if (active) {
       throw new BadRequestException("Este cliente ya tiene un enlace activo. Suspéndelo para crear otro.");
     }
+    const assignee = await this.resolveAssignee(user, body.vendorId);
     const linked = await this.ensureSharePartner(draft);
+    const vendorWhatsapp = draft.vendorWhatsapp || whatsappDigits(assignee.whatsapp);
     const row = await this.prisma.catalogShare.create({
       data: {
         token: newShareToken(),
-        vendorId: user.id,
-        vendorName: user.name,
-        vendorWhatsapp: draft.vendorWhatsapp,
+        vendorId: assignee.id,
+        vendorName: assignee.name,
+        vendorWhatsapp,
         docKind: draft.docKind,
         source: "comercial",
         ruc: draft.ruc,
@@ -255,8 +278,8 @@ export class CatalogSharesService {
         expiresAt: shareExpiresAt(now, draft.hours),
       },
     });
-    if (draft.vendorWhatsapp && draft.vendorWhatsapp !== user.whatsapp) {
-      await this.prisma.user.update({ where: { id: user.id }, data: { whatsapp: draft.vendorWhatsapp } });
+    if (vendorWhatsapp && vendorWhatsapp !== whatsappDigits(assignee.whatsapp)) {
+      await this.prisma.user.update({ where: { id: assignee.id }, data: { whatsapp: vendorWhatsapp } });
     }
     const card = this.noticeCard(row, Boolean(draft.odooPartnerId || draft.customerId), origin);
     const notice = await this.salida.notifyShare(card);
@@ -1210,10 +1233,25 @@ export class CatalogSharesService {
     return this.present({ ...updated, events: [] });
   }
 
+  private async resolveAssignee(user: AuthUser, vendorId: unknown) {
+    if (user.role === "vendedor") return { id: user.id, name: user.name, whatsapp: user.whatsapp || "" };
+    if (user.role !== "admin" && user.role !== "superadmin" && user.role !== "ejecutivo") {
+      throw new ForbiddenException("Solo un comercial puede generar el enlace del catálogo.");
+    }
+    const id = String(vendorId || "").trim();
+    if (!id) throw new BadRequestException("Elige el comercial que hará el seguimiento.");
+    const vendor = await this.prisma.user.findFirst({
+      where: { id, role: "vendedor", active: true },
+      select: { id: true, name: true, whatsapp: true },
+    });
+    if (!vendor) throw new BadRequestException("Ese comercial no está disponible.");
+    return vendor;
+  }
+
   async archive(id: string, user: AuthUser, ip?: string) {
     const row = await this.prisma.catalogShare.findUnique({ where: { id } });
     if (!row) throw new NotFoundException("Enlace no encontrado.");
-    if (!this.canSeeAll(user) && row.vendorId !== user.id) throw new ForbiddenException("Ese enlace no es tuyo.");
+    if (user.role !== "superadmin") throw new ForbiddenException("Solo el superadmin puede archivar un enlace.");
     if (row.archivedAt) return this.present({ ...row, events: [] });
     const updated = await this.prisma.catalogShare.update({
       where: { id },

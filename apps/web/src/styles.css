@@ -17,13 +17,34 @@
 .share-metrics ul { margin: 0; padding-left: 16px; font-size: 12px; }
 .share-metrics .muted { font-size: 12px; }
 .share-board {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 16px;
-  align-items: start;
+  width: 100%;
 }
-.share-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-.share-pager { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.share-search {
+  flex: 1 1 220px;
+  min-width: min(220px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+}
+.share-table { width: 100%; }
+.share-table tbody tr { cursor: pointer; }
+.share-pager { display: flex; gap: 6px; align-items: center; margin-top: 12px; }
+.share-pager button {
+  min-width: 36px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+.share-pager button.on { background: var(--navy, #12203a); color: #fff; border-color: transparent; }
+.share-pager button:disabled { opacity: 0.45; cursor: default; }
 .share-client { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: inherit; font: inherit; }
 .share-client:hover b { color: var(--orange, #d9622f); }
 tr.share-row-on td { background: #fff7f2; }
@@ -84,7 +105,7 @@ button.share-unit { display: block; }
 .sale-pick { width: 100%; text-align: left; border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 8px 10px; margin: 0 0 6px; cursor: pointer; font: inherit; color: inherit; }
 .sale-pick.on { border-color: #fc6f18; background: #fff7f2; }
 @media (max-width: 900px) {
-  .share-board { grid-template-columns: 1fr; }
+  .share-board { width: 100%; }
   .share-kpis { grid-template-columns: 1fr 1fr; }
   .share-scroll { max-height: none; }
 }

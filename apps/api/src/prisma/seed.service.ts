@@ -41,6 +41,7 @@ const DEPOTS = [
 
 const SUPERADMIN = { email: "superadmin@zdry.pe", name: "Superadmin ZDRY", role: "superadmin" as const };
 const COORDINADOR = { email: "coordinador@zdry.pe", name: "Diego Coordinador", role: "coordinador" as const };
+const EJECUTIVO = { email: "ejecutivo@zdry.pe", name: "Elena Ejecutivo", role: "ejecutivo" as const };
 const INIT_KEY = "system_initialized";
 
 const USERS: { email: string; name: string; role: Role }[] = [
@@ -73,6 +74,11 @@ export class SeedService implements OnModuleInit {
       where: { email: COORDINADOR.email },
       update: { name: COORDINADOR.name, role: "coordinador", active: true },
       create: { ...COORDINADOR, passwordHash: hash },
+    });
+    await this.prisma.user.upsert({
+      where: { email: EJECUTIVO.email },
+      update: { name: EJECUTIVO.name, role: "ejecutivo", active: true },
+      create: { ...EJECUTIVO, passwordHash: hash },
     });
 
     const initialized = await this.prisma.appSetting.findUnique({ where: { key: INIT_KEY } });

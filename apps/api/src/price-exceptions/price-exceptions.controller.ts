@@ -10,13 +10,13 @@ export class PriceExceptionsController {
   constructor(private readonly exceptions: PriceExceptionsService) {}
 
   @Get()
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   list(@CurrentUser() user: AuthUser) {
     return this.exceptions.list(user);
   }
 
   @Post()
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   create(
     @Body() body: { iso?: string; requestedPrice?: number; clientName?: string; clientCompany?: string; ruc?: string; reason?: string },
     @CurrentUser() user: AuthUser,

@@ -10,6 +10,7 @@ export class AuditController {
   constructor(private readonly audit: AuditService) {}
 
   @Get("comerciales")
+  @Roles("superadmin", "admin", "ejecutivo")
   commercial() {
     return this.audit.commercialActivity();
   }

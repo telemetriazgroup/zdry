@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, apiUrl, formatWhen, APP_ROOT } from "../api.js";
 import { whatsappDigits } from "../catalog-copy.js";
-import { useAuth } from "../auth.jsx";
+import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
 import { downloadCommercialMedia } from "./CommercialSend.jsx";
 import { salidaNotice, whatsappQueued } from "../salida-notice.js";
 
 const HOURS = Array.from({ length: 10 }, (_, i) => (i + 1) * 24);
-const LINK_PAGE = 4;
+const LINK_PAGE = 3;
 const KIND = {
   open: "Abrió el catálogo",
   view_unit: "Vio un DRY",
@@ -19,14 +19,6 @@ const KIND = {
   search: "Búsqueda",
 };
 const STATUS = { activo: "Activo", suspendido: "Suspendido", vencido: "Vencido", archivado: "Archivado" };
-
-function Icon({ children }) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      {children}
-    </svg>
-  );
-}
 
 function usd(value) {
   const n = Number(value);
@@ -243,6 +235,50 @@ function shareUrl(token) {
   return `${base}/c/${token}`;
 }
 
+function xmlEsc(value) {
+  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function workbookSheet(name, headers, lines) {
+  const cells = (vals) => vals.map((v) => `<Cell><Data ss:Type="String">${xmlEsc(v)}</Data></Cell>`).join("");
+  const body = lines.map((line) => `<Row>${cells(line)}</Row>`).join("");
+  return `<Worksheet ss:Name="${xmlEsc(name)}"><Table><Row>${cells(headers)}</Row>${body}</Table></Worksheet>`;
+}
+
+function downloadWorkbook(filename, sheets) {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+${sheets.join("\n")}
+</Workbook>`;
+  const url = URL.createObjectURL(new Blob([xml], { type: "application/vnd.ms-excel" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function shareBlob(row) {
+  return [row.clientCompany, row.clientName, row.contactName, row.ruc, row.dni, row.clientEmail, row.clientPhone, row.vendorName].join(" ").toLowerCase();
+}
+
+function filterShares(list, origin, query) {
+  const q = String(query || "").trim().toLowerCase();
+  return list.filter((row) => {
+    if (origin !== "todos" && (row.source || "comercial") !== origin) return false;
+    if (!q) return true;
+    return shareBlob(row).includes(q);
+  });
+}
+
+function pageWindow(current, total) {
+  const width = 5;
+  const start = Math.max(1, Math.min(current - 2, total - width + 1));
+  const end = Math.min(total, start + width - 1);
+  return Array.from({ length: Math.max(0, end - start + 1) }, (_, i) => start + i);
+}
+
 export default function CatalogShares() {
   const { user } = useAuth();
   const [rows, setRows] = useState([]);
@@ -260,6 +296,12 @@ export default function CatalogShares() {
   const [renewHours, setRenewHours] = useState(72);
   const [linkPage, setLinkPage] = useState(1);
   const [origin, setOrigin] = useState("todos");
+  const [query, setQuery] = useState("");
+  const [vendors, setVendors] = useState([]);
+  const [exporting, setExporting] = useState(false);
+  const canExternal = hasRole(user, "admin");
+  const canAssign = hasRole(user, "admin", "ejecutivo");
+  const canArchive = isSuperadmin(user);
   const [editing, setEditing] = useState(null);
   const [pickedIso, setPickedIso] = useState("");
   const [pickedUnit, setPickedUnit] = useState(null);
@@ -289,7 +331,8 @@ export default function CatalogShares() {
   const [form, setForm] = useState({
     docKind: "ruc",
     ...emptyIdentity,
-    vendorWhatsapp: user?.whatsapp || "",
+    vendorId: "",
+    vendorWhatsapp: canAssign ? "" : (user?.whatsapp || ""),
     hours: 72,
   });
 
@@ -317,10 +360,16 @@ export default function CatalogShares() {
   }, [pickedIso]);
 
   useEffect(() => {
+    if (canAssign) return;
     const saved = String(user?.whatsapp || "").trim();
     if (!saved || waEdited.current) return;
     setForm((cur) => (cur.vendorWhatsapp === saved ? cur : { ...cur, vendorWhatsapp: saved }));
-  }, [user?.whatsapp]);
+  }, [user?.whatsapp, canAssign]);
+
+  useEffect(() => {
+    if (!canAssign) return;
+    api("/catalog-shares/vendors").then((list) => setVendors(Array.isArray(list) ? list : [])).catch(() => setVendors([]));
+  }, [canAssign]);
 
   function clearContactFields(extra = {}) {
     setForm((cur) => ({
@@ -538,11 +587,60 @@ export default function CatalogShares() {
     }
   }
 
-  const originRows = rows.filter((r) => origin === "todos" || (r.source || "comercial") === origin);
+  const originRows = filterShares(rows, origin, query);
   const linkPages = Math.max(1, Math.ceil(originRows.length / LINK_PAGE));
   const safePage = Math.min(linkPage, linkPages);
   const pageRows = originRows.slice((safePage - 1) * LINK_PAGE, safePage * LINK_PAGE);
+  const pages = pageWindow(safePage, linkPages);
   const gateUrl = `${window.location.origin}${APP_ROOT === "/" ? "" : APP_ROOT.replace(/\/$/, "")}/acceso`;
+
+  function chooseVendor(id) {
+    const vendor = vendors.find((item) => item.id === id);
+    waEdited.current = false;
+    setForm((cur) => ({ ...cur, vendorId: id, vendorWhatsapp: vendor?.whatsapp || "" }));
+  }
+
+  async function downloadExcel() {
+    setError("");
+    setExporting(true);
+    try {
+      const list = await api(`/catalog-shares/report${archivedView ? "?archived=1" : ""}`);
+      const picked = filterShares(Array.isArray(list) ? list : [], origin, query);
+      const day = new Date().toISOString().slice(0, 10);
+      const links = picked.map((row) => [
+        row.clientCompany || row.clientName || "",
+        row.ruc || row.dni || "",
+        row.contactName || row.clientName || "",
+        row.clientEmail || "",
+        showPhone(row.clientPhone),
+        row.vendorName || "",
+        showPhone(row.vendorWhatsapp),
+        row.source === "cliente" ? "Cliente" : "Comercial",
+        STATUS[row.status] || "",
+        formatWhen(row.createdAt),
+        formatWhen(row.expiresAt),
+        shareUrl(row.token),
+        row.accessCode || "",
+      ]);
+      const activity = picked.flatMap((row) => (row.events || []).map((event) => [
+        row.clientCompany || row.clientName || "",
+        row.vendorName || "",
+        KIND[event.kind] || event.kind || "",
+        event.iso || "",
+        formatWhen(event.at),
+        event.device || "",
+        event.ip || "",
+      ]));
+      downloadWorkbook(`zdry-enlaces-${day}.xls`, [
+        workbookSheet("Enlaces", ["Cliente", "Documento", "Contacto", "Correo", "Celular", "Comercial", "WhatsApp comercial", "Origen", "Estado", "Creado", "Vence", "Enlace", "Clave"], links),
+        workbookSheet("Actividad", ["Cliente", "Comercial", "Actividad", "Equipo", "Cuándo", "Dispositivo", "IP"], activity),
+      ]);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <>
@@ -550,15 +648,17 @@ export default function CatalogShares() {
       <p className="section-sub">
         Primero se busca el cliente en los contactos de Odoo. Si ya está, el enlace usa su empresa y su contacto. Si no está, se crea ahí al generar el enlace. Por defecto el cliente se registra con RUC. Si solo mostró DNI, activa esa opción: se valida que tenga 8 dígitos, se pide nombres, apellidos, correo y celular, y el RUC queda pendiente para agregarlo después. La vigencia va de 24 a 240 horas.
       </p>
-      <div className="panel gate-link">
-        <h3>Acceso en portería</h3>
-        <p>El vigilante abre este enlace para el cliente. Con RUC el catálogo dura 3 horas; solo con DNI, 1 hora. El sistema se lo asigna a un comercial.</p>
-        <div className="gate-link-row">
-          <code>{gateUrl}</code>
-          <button className="btn-ghost" type="button" onClick={() => navigator.clipboard?.writeText(gateUrl).then(() => setMsg("Enlace de portería copiado.")).catch(() => setError("No se pudo copiar."))}>Copiar enlace</button>
-          <a className="btn-ghost" href={gateUrl} target="_blank" rel="noreferrer">Abrir</a>
+      {canExternal ? (
+        <div className="panel gate-link">
+          <h3>Registro externo</h3>
+          <p>El cliente abre este enlace y se registra. Con RUC el catálogo dura 3 horas; solo con DNI, 1 hora. El sistema se lo asigna a un comercial.</p>
+          <div className="gate-link-row">
+            <code>{gateUrl}</code>
+            <button className="btn-ghost" type="button" onClick={() => navigator.clipboard?.writeText(gateUrl).then(() => setMsg("Enlace de registro externo copiado.")).catch(() => setError("No se pudo copiar."))}>Copiar enlace</button>
+            <a className="btn-ghost" href={gateUrl} target="_blank" rel="noreferrer">Abrir</a>
+          </div>
         </div>
-      </div>
+      ) : null}
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
       {created ? (
@@ -674,6 +774,16 @@ export default function CatalogShares() {
               {HOURS.map((h) => <option key={h} value={h}>{h} horas</option>)}
             </select>
           </div>
+          {canAssign ? (
+            <div>
+              <label>Comercial a cargo</label>
+              <select value={form.vendorId} onChange={(e) => chooseVendor(e.target.value)} required>
+                <option value="">Elige un comercial</option>
+                {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
+              </select>
+              <p className="field-hint">El seguimiento queda con ese comercial. El cliente recibe el WhatsApp y el correo con su nombre y su número.</p>
+            </div>
+          ) : null}
           <div>
             <label>WhatsApp del comercial</label>
             <input
@@ -682,15 +792,14 @@ export default function CatalogShares() {
               required
               placeholder="51 9XX XXX XXX"
             />
-            <p className="field-hint">{user?.whatsapp ? "Sale del WhatsApp de tu perfil. Puedes cambiarlo solo para este enlace." : "Regístralo en Mi perfil para que se complete solo. Aquí puedes escribirlo o corregirlo."}</p>
+            <p className="field-hint">{canAssign ? "Sale del perfil del comercial elegido. Puedes corregirlo para este enlace." : (user?.whatsapp ? "Sale del WhatsApp de tu perfil. Puedes cambiarlo solo para este enlace." : "Regístralo en Mi perfil para que se complete solo. Aquí puedes escribirlo o corregirlo.")}</p>
           </div>
           <div><label>Nota</label><input value={form.clientNote} onChange={(e) => setForm({ ...form, clientNote: e.target.value })} placeholder="Opcional" /></div>
-          <button className="btn-primary" type="submit" disabled={Boolean(lookup?.activeShare) || (form.docKind === "ruc" && !lookup) || (form.contacts.length > 0 && !contactChoice)}>Generar enlace</button>
+          <button className="btn-primary" type="submit" disabled={Boolean(lookup?.activeShare) || (form.docKind === "ruc" && !lookup) || (form.contacts.length > 0 && !contactChoice) || (canAssign && !form.vendorId)}>Generar enlace</button>
         </form>
       </div>
 
       <div className="share-board">
-        <div className="share-stack">
         <div className="panel">
           <div className="odoo-toolbar">
             <h3 style={{ margin: 0 }}>Enlaces</h3>
@@ -699,11 +808,15 @@ export default function CatalogShares() {
               <button type="button" className={origin === "comercial" ? "on" : ""} onClick={() => { setOrigin("comercial"); setLinkPage(1); }}>Comercial</button>
               <button type="button" className={origin === "cliente" ? "on" : ""} onClick={() => { setOrigin("cliente"); setLinkPage(1); }}>Cliente</button>
             </div>
+            <input className="share-search" value={query} onChange={(e) => { setQuery(e.target.value); setLinkPage(1); }} placeholder="Buscar cliente, RUC, DNI o comercial" aria-label="Buscar enlaces" />
+            <button className="btn-ghost" type="button" disabled={exporting} onClick={downloadExcel}>{exporting ? "Preparando Excel…" : "Descargar Excel"}</button>
             <Link className="btn-ghost" to={{ pathname: "/", search: "?vista=comercial" }}>Ver catálogo comercial</Link>
             <Link className="btn-ghost" to={{ pathname: "/", search: "?vista=cliente" }}>Ver como cliente</Link>
-            <button className="btn-ghost" type="button" onClick={() => setArchivedView((v) => !v)}>
-              {archivedView ? "Ver vigentes" : "Ver archivados"}
-            </button>
+            {canArchive ? (
+              <button className="btn-ghost" type="button" onClick={() => setArchivedView((v) => !v)}>
+                {archivedView ? "Ver vigentes" : "Ver archivados"}
+              </button>
+            ) : null}
             {archivedView ? null : (
               <label className="stock-sort" style={{ textTransform: "none", letterSpacing: 0 }}>
                 Horas al extender
@@ -745,74 +858,75 @@ export default function CatalogShares() {
             </form>
           ) : null}
           <div className="tablewrap">
-            <table className="data">
-              <thead><tr><th>Cliente</th><th>Vence</th><th>Estado</th><th></th></tr></thead>
+            <table className="data share-table">
+              <thead><tr><th>Cliente</th><th>Comercial</th><th>Vence</th><th>Estado</th></tr></thead>
               <tbody>
                 {pageRows.map((r) => (
-                  <tr key={r.id} className={openId === r.id ? "share-row-on" : ""}>
+                  <tr key={r.id} className={openId === r.id ? "share-row-on" : ""} onClick={() => open(r.id)}>
                     <td>
                       <button className="share-client" type="button" onClick={() => open(r.id)}>
-                        <b>{r.clientCompany || r.clientName}</b> <span className={r.source === "cliente" ? "share-origin cliente" : "share-origin"}>{r.source === "cliente" ? "Cliente" : "Comercial"}</span><br /><span className="muted">{r.ruc ? `RUC ${r.ruc} · ` : ""}{r.dni ? `DNI ${r.dni} · ` : ""}{r.rucPending ? "RUC pendiente · " : ""}{r.source === "cliente" ? `${r.hours} h · ` : ""}{r.contactName || r.clientName}{r.accessCode ? ` · clave ${r.accessCode}` : ""}</span>
+                        <b>{r.clientCompany || r.clientName}</b> <span className={r.source === "cliente" ? "share-origin cliente" : "share-origin"}>{r.source === "cliente" ? "Cliente" : "Comercial"}</span><br /><span className="muted">{r.ruc ? `RUC ${r.ruc} · ` : ""}{r.dni ? `DNI ${r.dni} · ` : ""}{r.rucPending ? "RUC pendiente · " : ""}{r.contactName || r.clientName}</span>
                       </button>
                     </td>
+                    <td>{r.vendorName || "—"}</td>
                     <td>{formatWhen(r.expiresAt)}</td>
                     <td>{STATUS[r.status] || (r.live ? "Activo" : "Vencido")}</td>
-                    <td>
-                      <div className="share-actions">
-                        <button className={`share-icon ${openId === r.id ? "on" : ""}`} type="button" title="Ver actividad" aria-label="Ver actividad" onClick={() => open(r.id)}>
-                          <Icon><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" fill="none" stroke="currentColor" strokeWidth="1.8" /><circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" strokeWidth="1.8" /></Icon>
-                        </button>
-                        {r.status === "activo" ? (
-                          <button className="share-icon" type="button" title="Copiar" aria-label="Copiar enlace y clave" onClick={() => navigator.clipboard?.writeText(shareInvite(r)).then(() => setMsg("Mensaje copiado.")).catch(() => setError("No se pudo copiar."))}>
-                            <Icon><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="M4 16V6a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" strokeWidth="1.8" /></Icon>
-                          </button>
-                        ) : null}
-                        {r.status === "activo" && r.clientPhone ? (
-                          <a className="share-icon" href={shareWhatsApp(r)} target="_blank" rel="noreferrer" title="Enviar clave" aria-label="Enviar clave por WhatsApp">
-                            <Icon><path d="M5 19l1.2-3.4A8 8 0 1 1 8.4 18L5 19z" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="M9 10c.2 2 1.6 3.4 3.6 3.6" fill="none" stroke="currentColor" strokeWidth="1.8" /></Icon>
-                          </a>
-                        ) : null}
-                        {r.status === "activo" ? (
-                          <button className="share-icon danger" type="button" title="Suspender" aria-label="Suspender enlace" onClick={() => suspend(r.id)}>
-                            <Icon><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="M8 12h8" stroke="currentColor" strokeWidth="1.8" /></Icon>
-                          </button>
-                        ) : null}
-                        {r.status === "activo" || r.status === "vencido" ? (
-                          <button className="btn-ghost" type="button" onClick={() => renew(r.id)}>
-                            {r.status === "vencido" ? "Reactivar" : "Extender"}
-                          </button>
-                        ) : null}
-                        {r.rucPending && r.status !== "archivado" ? (
-                          <button className="btn-ghost" type="button" onClick={() => setRucDraft({ id: r.id, ruc: "" })}>Agregar RUC</button>
-                        ) : null}
-                        {r.status === "archivado" ? null : (
-                          <button className="btn-ghost" type="button" onClick={() => startEdit(r)}>Editar</button>
-                        )}
-                        {r.status === "archivado" ? null : (
-                          <button className="btn-ghost" type="button" onClick={() => archive(r.id)}>Archivar</button>
-                        )}
-                      </div>
-                    </td>
                   </tr>
                 ))}
-                {!originRows.length ? <tr><td colSpan={4}>{archivedView ? "No hay enlaces archivados." : origin === "cliente" ? "Todavía no hay enlaces que haya pedido el cliente." : origin === "comercial" ? "No hay enlaces creados por un comercial." : "Aún no hay enlaces. Genera el primero para un cliente."}</td></tr> : null}
+                {!originRows.length ? <tr><td colSpan={4}>{archivedView ? "No hay enlaces archivados." : query ? "Ningún enlace coincide con la búsqueda." : origin === "cliente" ? "Todavía no hay enlaces que haya pedido el cliente." : origin === "comercial" ? "No hay enlaces creados por un comercial." : "Aún no hay enlaces. Genera el primero para un cliente."}</td></tr> : null}
               </tbody>
             </table>
           </div>
-          {originRows.length > LINK_PAGE ? (
-            <div className="share-pager">
-              <button className="btn-ghost" type="button" disabled={safePage <= 1} onClick={() => setLinkPage(safePage - 1)}>Anterior</button>
-              <span>Página {safePage} de {linkPages}</span>
-              <button className="btn-ghost" type="button" disabled={safePage >= linkPages} onClick={() => setLinkPage(safePage + 1)}>Siguiente</button>
-            </div>
-          ) : null}
+          <div className="share-pager" aria-label="Páginas de enlaces">
+            <button type="button" disabled={safePage <= 1} onClick={() => setLinkPage(safePage - 1)} aria-label="Página anterior">‹</button>
+            {pages.map((n) => (
+              <button key={n} type="button" className={n === safePage ? "on" : ""} onClick={() => setLinkPage(n)} aria-label={`Página ${n}`} aria-current={n === safePage ? "page" : undefined}>{n}</button>
+            ))}
+            <button type="button" disabled={safePage >= linkPages} onClick={() => setLinkPage(safePage + 1)} aria-label="Página siguiente">›</button>
+          </div>
         </div>
         <div className="panel">
-          <UnitBrief unit={pickedUnit} error={pickedError} />
-        </div>
+          <h3>Detalle del enlace</h3>
+          {detail ? (
+            <>
+              <p className="section-sub">
+                <b>{detail.clientCompany || detail.clientName}</b> · {detail.contactName || detail.clientName}
+                {detail.ruc ? ` · RUC ${detail.ruc}` : ""}{detail.dni ? ` · DNI ${detail.dni}` : ""}
+                <br />
+                Comercial asignado: <b>{detail.vendorName || "—"}</b>{detail.vendorWhatsapp ? ` · ${showPhone(detail.vendorWhatsapp)}` : ""}
+                <br />
+                {STATUS[detail.status] || ""} · vence {formatWhen(detail.expiresAt)}{detail.accessCode ? ` · clave ${detail.accessCode}` : ""}
+                <br />
+                <a href={shareUrl(detail.token)} target="_blank" rel="noreferrer">{shareUrl(detail.token)}</a>
+              </p>
+              <div className="share-actions">
+                {detail.status === "activo" ? (
+                  <button className="btn-ghost" type="button" onClick={() => navigator.clipboard?.writeText(shareInvite(detail)).then(() => setMsg("Mensaje copiado.")).catch(() => setError("No se pudo copiar."))}>Copiar mensaje</button>
+                ) : null}
+                {detail.status === "activo" && detail.clientPhone && !whatsappQueued(detail.salida) ? (
+                  <a className="btn-ghost" href={shareWhatsApp(detail)} target="_blank" rel="noreferrer">Enviar por WhatsApp</a>
+                ) : null}
+                {detail.status === "activo" ? (
+                  <button className="btn-ghost" type="button" onClick={() => suspend(detail.id)}>Suspender</button>
+                ) : null}
+                {detail.status === "activo" || detail.status === "vencido" ? (
+                  <button className="btn-ghost" type="button" onClick={() => renew(detail.id)}>{detail.status === "vencido" ? "Reactivar" : "Extender"}</button>
+                ) : null}
+                {detail.rucPending && detail.status !== "archivado" ? (
+                  <button className="btn-ghost" type="button" onClick={() => setRucDraft({ id: detail.id, ruc: "" })}>Agregar RUC</button>
+                ) : null}
+                {detail.status === "archivado" ? null : (
+                  <button className="btn-ghost" type="button" onClick={() => startEdit(detail)}>Editar</button>
+                )}
+                {canArchive && detail.status !== "archivado" ? (
+                  <button className="btn-ghost" type="button" onClick={() => archive(detail.id)}>Archivar</button>
+                ) : null}
+              </div>
+            </>
+          ) : <p className="section-sub">Elige un enlace para ver el cliente, el comercial asignado y las acciones.</p>}
         </div>
         <div className="panel">
-          <h3>{detail ? `Actividad · ${detail.clientName}` : "Actividad del cliente"}</h3>
+          <h3>{detail ? `Actividad · ${detail.clientCompany || detail.clientName}` : "Actividad del cliente"}</h3>
           <div className="share-scroll">
             <ShareActivity detail={detail} picked={pickedIso} onPick={setPickedIso} />
             {detail?.events?.length ? (
@@ -826,6 +940,9 @@ export default function CatalogShares() {
               </ul>
             ) : null}
           </div>
+        </div>
+        <div className="panel">
+          <UnitBrief unit={pickedUnit} error={pickedError} />
         </div>
       </div>
     </>

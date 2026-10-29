@@ -5,7 +5,7 @@ import { AuthUser } from "../auth/auth.types";
 import { DashboardService } from "./dashboard.service";
 
 @Controller("dashboard")
-@Roles("superadmin", "admin", "gerente", "vendedor", "compras", "coordinador", "almacen")
+@Roles("superadmin", "admin", "gerente", "vendedor", "ejecutivo", "compras", "coordinador", "almacen")
 export class DashboardController {
   constructor(private readonly dashboard: DashboardService) {}
 

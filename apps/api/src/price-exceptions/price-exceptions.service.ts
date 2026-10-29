@@ -74,7 +74,7 @@ export class PriceExceptionsService {
     user: AuthUser,
     ip?: string,
   ) {
-    if (user.role !== "vendedor" && user.role !== "superadmin") {
+    if (user.role !== "vendedor" && user.role !== "ejecutivo" && user.role !== "superadmin") {
       throw new ForbiddenException("Solo el comercial registra la solicitud del cliente.");
     }
     const iso = String(body.iso || "").trim().toUpperCase();

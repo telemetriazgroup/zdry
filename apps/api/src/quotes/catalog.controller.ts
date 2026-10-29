@@ -95,7 +95,7 @@ export class CatalogController {
   }
 
   @Post("quotes")
-  @Roles("cliente", "admin", "gerente", "vendedor")
+  @Roles("cliente", "admin", "gerente", "vendedor", "ejecutivo")
   requestQuote(
     @Body()
     body: {
@@ -116,7 +116,7 @@ export class CatalogController {
   }
 
   @Get("commercial")
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   commercialList(
     @Query("q") q?: string,
     @Query("type") type?: string,
@@ -132,7 +132,7 @@ export class CatalogController {
   }
 
   @Get("commercial/:iso/descarga")
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   async commercialDownload(@Param("iso") iso: string, @Res({ passthrough: true }) res: Response) {
     const file = await this.quotes.commercialMediaZip(iso);
     res.setHeader("Content-Type", "application/zip");
@@ -142,13 +142,13 @@ export class CatalogController {
   }
 
   @Get("commercial/:iso")
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   commercialUnit(@Param("iso") iso: string) {
     return this.quotes.catalogCommercialUnit(iso);
   }
 
   @Post("commercial/:iso/envio")
-  @Roles("superadmin", "admin", "vendedor")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   createHandoff(
     @Param("iso") iso: string,
     @Body() body: { shareId?: string; includePrice?: boolean },

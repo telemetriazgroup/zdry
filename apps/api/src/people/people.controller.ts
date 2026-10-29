@@ -9,7 +9,7 @@ import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
 import { isTemporaryPassword, TEMP_PASSWORD } from "../domain/password-policy";
 
-const STAFF_ROLES: Role[] = ["admin", "gerente", "vendedor", "compras", "coordinador", "almacen"];
+const STAFF_ROLES: Role[] = ["admin", "gerente", "vendedor", "ejecutivo", "compras", "coordinador", "almacen"];
 
 function assertStaffRole(role: Role) {
   if (role === "superadmin") throw new BadRequestException("El rol superadmin no se asigna desde Personas.");
