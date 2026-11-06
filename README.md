@@ -19,7 +19,7 @@ docker compose up --build
 | API (vía app) | http://localhost:28080/zdry/api/health |
 | API directa | http://localhost:3003/health |
 | Postgres (host) | localhost:5435 |
-| MinIO | http://localhost:9001 |
+| Archivos (S3) | http://localhost:8333 |
 | Mailhog | http://localhost:8025 |
 
 ## Usuarios Sprint 1 (clave `Zdry123!`)

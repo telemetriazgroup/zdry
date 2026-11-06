@@ -3,8 +3,10 @@ import {
   classifyLotOrigin,
   dossierKindForMove,
   isDryContainerProduct,
+  availabilityAfterStock,
   catalogAfterDispatch,
   lotAvailability,
+  serialSearchForms,
   moNameFromText,
   originBadgeLabel,
   splitOdooProductLabel,
@@ -310,6 +312,21 @@ describe("lotAvailability", () => {
       date: "2026-09-25 09:00:00",
     };
     expect(lotAvailability([...msku, back]).availability).toBe("stock");
+  });
+
+  it("sin existencia interna cierra la serie aunque el único movimiento sea el ajuste", () => {
+    const adjustment = [msku[0]];
+    expect(availabilityAfterStock(adjustment, 0)).toMatchObject({ availability: "left", pickingName: "sin existencia interna" });
+    expect(availabilityAfterStock(adjustment, 1).availability).toBe("stock");
+    expect(availabilityAfterStock(adjustment, null).availability).toBe("stock");
+  });
+
+  it("una OUT hecha sigue cerrando aunque el quant interno siga en 1", () => {
+    expect(availabilityAfterStock(msku, 1)).toMatchObject({ availability: "left", pickingName: "ZGROU/OUT/08515" });
+  });
+
+  it("arma el serial con y sin guion para buscar la venta", () => {
+    expect(serialSearchForms("CLVU1055646")).toEqual(["CLVU1055646", "CLVU105564-6"]);
   });
 
   it("si ya está en el catálogo, el despacho la deja en no publicar", () => {

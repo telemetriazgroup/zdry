@@ -1,4 +1,4 @@
-import { auditEquipment, canonicalTypeFromProduct, explicitEquipmentType, parseProductEquipment } from "./type-from-product";
+import { auditEquipment, canonicalTypeFromProduct, equipmentTypeCode, explicitEquipmentType, OTHER_EQUIPMENT_TYPE, parseProductEquipment } from "./type-from-product";
 import { mergeDimensionError } from "./type-merge";
 
 const masters = [
@@ -66,6 +66,16 @@ describe("explicitEquipmentType", () => {
   it("pide el tipo al despacho si el producto no nombra medida", () => {
     const decision = explicitEquipmentType("CONTENEDOR RECICLADO", "", masters);
     expect(decision.status).toBe("needs_exact");
+  });
+
+  it("sin tipo exacto usa Otros y no bloquea la asimilación", () => {
+    const named = explicitEquipmentType("CONTENEDOR DRY 40 DC SEGUNDO USO", "", [{ code: "40GP", dims: "40'" }]);
+    const plain = explicitEquipmentType("CONTENEDOR DRY 9.76 MT", "CDD0041", masters);
+    const flat = explicitEquipmentType("CONTENEDOR FLAT RACK 20FT - DRY", "CDF20", masters);
+    expect(equipmentTypeCode(named)).toBe(OTHER_EQUIPMENT_TYPE);
+    expect(equipmentTypeCode(plain)).toBe(OTHER_EQUIPMENT_TYPE);
+    expect(equipmentTypeCode(flat)).toBe(OTHER_EQUIPMENT_TYPE);
+    expect(equipmentTypeCode(explicitEquipmentType("CONTENEDOR DRY 20 DC NUEVO", "", masters))).toBe("20DC");
   });
 });
 

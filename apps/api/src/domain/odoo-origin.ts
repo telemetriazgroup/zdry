@@ -197,6 +197,35 @@ export function lotAvailability(moves: LotMoveFact[] | null | undefined): {
   return { availability: "stock", pickingName: null, destName: null };
 }
 
+/**
+ * La salida hecha manda. Si Odoo ya no tiene cantidad en una ubicación interna,
+ * la serie tampoco está a la mano: sale de recepción aunque el movimiento no
+ * haya quedado como OUT. `null` significa que no se pudo leer el stock.
+ */
+export function availabilityAfterStock(
+  moves: LotMoveFact[] | null | undefined,
+  internalQty: number | null,
+): { availability: LotAvailability; pickingName: string | null; destName: string | null } {
+  const base = lotAvailability(moves);
+  if (internalQty == null || internalQty > 0 || base.availability === "left") return base;
+  const doneOut = (Array.isArray(moves) ? moves : [])
+    .filter((m) => dossierKindForMove(m) === "picking_out" && isDone(m))
+    .sort((a, b) => moveStamp(b) - moveStamp(a))[0];
+  return {
+    availability: "left",
+    pickingName: base.pickingName || doneOut?.pickingName || doneOut?.reference || "sin existencia interna",
+    destName: base.destName || doneOut?.destName || null,
+  };
+}
+
+export function serialSearchForms(iso: string): string[] {
+  const raw = String(iso || "").toUpperCase().trim();
+  const compact = raw.replace(/[^A-Z0-9]/g, "");
+  if (compact.length < 10) return compact ? [compact] : [];
+  const hyphen = compact.length === 11 ? `${compact.slice(0, 10)}-${compact.slice(10)}` : "";
+  return [...new Set([compact, hyphen, raw].filter(Boolean))];
+}
+
 /** Si Odoo ya despachó el equipo y sigue publicado, hay que quitarlo del catálogo. */
 export function catalogAfterDispatch(
   row: { status: string; mediaStatus: string; gateOut?: boolean | null },

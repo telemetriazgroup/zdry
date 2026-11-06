@@ -36,18 +36,18 @@ import {
 } from "../domain/odoo-lot-map";
 import { planOdooRelink } from "../domain/odoo-reconcile";
 import { freshOdooLotIds, normalizeOdooWatch, ODOO_WATCH_KEY, type OdooWatchMode } from "../domain/odoo-import-watch";
-import { explicitEquipmentType, type TypeMaster } from "../domain/type-from-product";
+import { equipmentTypeCode, explicitEquipmentType, OTHER_EQUIPMENT_TYPE, type TypeMaster } from "../domain/type-from-product";
 import { warehouseFromLocation } from "../domain/odoo-warehouse";
 import { listOdooLotNotes } from "../odoo/odoo-lot-photos";
 import { cacheOdooLotPhotos, listOrCacheOdooPhotos, openOrCacheOdooPhoto } from "./odoo-photo-cache.store";
 import { applySerialTextRefs, assignRefsBySharedMove, purchaseRefFromOrder, type OdooPurchaseRef } from "../domain/odoo-purchase";
 import {
   assimilateCostPlan,
+  availabilityAfterStock,
   classifyLotOrigin,
   dossierKindForMove,
   catalogAfterDispatch,
-  lotAvailability,
-  isDryContainerProduct,
+  serialSearchForms,
   splitOdooProductLabel,
   type LotMoveFact,
 } from "../domain/odoo-origin";
@@ -68,7 +68,7 @@ import { billDossierDraft, moDossierDraft, moveDossierDraft, pickingDossierDraft
 import { DRY_DOSSIER_LINE_FIELDS } from "../domain/odoo-dry-dossier";
 import { saleUnitFromOrder } from "../domain/sale-realized";
 
-const DRY_DOMAIN = [["name", "ilike", "contenedor dry"]];
+const DRY_CATEGORY_NAME = "Contenedor Dry";
 const ODOO_LOT_SELECTS_KEY = "odoo_lot_selects";
 
 type LotSelects = {
@@ -398,32 +398,28 @@ export class OdooImportService {
     await this.lotSelects({ refresh: true }).catch(() => undefined);
     if (this.isAborted(runId)) return;
 
-    const rawProducts = await this.odoo.searchRead("product.product", DRY_DOMAIN, ["id", "name", "default_code", "categ_id"], {
-      limit: 400,
-    });
+    const loaded = await this.loadDryProducts();
     if (this.isAborted(runId)) return;
-    const products = rawProducts.filter((p) => isDryContainerProduct(String(p.name || ""), String(p.default_code || "")));
+    const products = loaded.products;
     const productIds = products.map((p) => Number(p.id));
     if (!productIds.length) {
-      const empty = "Odoo no devolvió productos DRY.";
+      const empty = loaded.missingCategory
+        ? "Odoo no tiene la categoría de producto Contenedor Dry."
+        : "La categoría Contenedor Dry no tiene productos.";
       await this.logs.add(runId, { level: "warn", step: "lotes", message: empty });
       await this.logs.finish(runId, empty);
       await this.writeProgress({ status: "done", step: "listo", current: 5, total: 5, message: empty });
       return;
     }
     const productMap = new Map(products.map((p) => [Number(p.id), p]));
+    await this.logs.add(runId, { level: "ok", step: "lotes", message: `Categoría Contenedor Dry: ${products.length} productos.` });
 
-    const quants = await this.odoo.searchRead(
-      "stock.quant",
-      [
-        ["product_id", "in", productIds],
-        ["quantity", ">", 0],
-        ["lot_id", "!=", false],
-        ["location_id.usage", "=", "internal"],
-      ],
-      ["id", "lot_id", "location_id", "quantity", "product_id"],
-      { limit: 2000 },
-    );
+    const quants = await this.searchAll("stock.quant", [
+      ["product_id", "in", productIds],
+      ["quantity", ">", 0],
+      ["lot_id", "!=", false],
+      ["location_id.usage", "=", "internal"],
+    ], ["id", "lot_id", "location_id", "quantity", "product_id"]);
     if (this.isAborted(runId)) return;
 
     const lotIds = [...new Set(quants.map((q) => this.relId(q.lot_id)).filter((n): n is number => n > 0))];
@@ -649,23 +645,25 @@ export class OdooImportService {
   private async runSyncNew(runId: string, user: AuthUser) {
     this.runId = runId;
     try {
-      const rawProducts = await this.odoo.searchRead("product.product", DRY_DOMAIN, ["id", "name", "default_code", "categ_id"], { limit: 400 });
+      const loaded = await this.loadDryProducts();
       if (this.isAborted(runId)) return;
-      const products = rawProducts.filter((p) => isDryContainerProduct(String(p.name || ""), String(p.default_code || "")));
+      const products = loaded.products;
       const productIds = products.map((p) => Number(p.id));
       if (!productIds.length) {
-        const empty = "Odoo no devolvió productos DRY.";
+        const empty = loaded.missingCategory
+          ? "Odoo no tiene la categoría de producto Contenedor Dry."
+          : "La categoría Contenedor Dry no tiene productos.";
         await this.prisma.odooAssimilateRun.delete({ where: { id: runId } }).catch(() => undefined);
         await this.writeProgress({ status: "idle", step: "", current: 0, total: 0, iso: "", message: empty });
         await this.touchWatch({ lastRunAt: new Date().toISOString(), lastMessage: empty, lastNew: 0, lastAssimilated: 0 });
         return;
       }
       const productMap = new Map(products.map((p) => [Number(p.id), p]));
-      const quants = await this.odoo.searchRead(
+      await this.logs.add(runId, { level: "ok", step: "lotes", message: `Categoría Contenedor Dry: ${products.length} productos.` });
+      const quants = await this.searchAll(
         "stock.quant",
         [["product_id", "in", productIds], ["quantity", ">", 0], ["lot_id", "!=", false], ["location_id.usage", "=", "internal"]],
         ["id", "lot_id", "location_id", "quantity", "product_id"],
-        { limit: 2000 },
       );
       if (this.isAborted(runId)) return;
       const lotIds = [...new Set(quants.map((q) => this.relId(q.lot_id)).filter((n): n is number => n > 0))];
@@ -1319,7 +1317,7 @@ export class OdooImportService {
     const { depot, warehouse } = await depotForOdooLocation(this.prisma, locationName);
     const types = await this.loadTypeMasters();
     const cats = await this.prisma.category.findMany({ where: { archivedAt: null } });
-    const typeCode = this.resolveAssimilateType(cand, types);
+    const typeCode = await this.resolveAssimilateType(cand, types);
     const catCode = this.pickCode(
       cats.map((c) => c.code),
       cand.zdryCat || inferCatFromProduct(cand.productName, cats.find((c) => c.code === "ASIS")?.code || cats[0]?.code || "ASIS"),
@@ -3045,6 +3043,7 @@ export class OdooImportService {
     const saleByName = new Map(sales.map((s) => [String(s.name || ""), s]));
     const cands = await this.prisma.odooLotCandidate.findMany({ where: { odooLotId: { in: ids } } });
     const candByLot = new Map(cands.map((c) => [c.odooLotId, c]));
+    const onHand = await this.internalQtyByLot(ids);
     let n = 0;
     let left = 0;
     for (const lotId of ids) {
@@ -3055,6 +3054,14 @@ export class OdooImportService {
       const repairByName = new Map(repairs.filter((r) => this.relId(r.lot_id) === lotId).map((r) => [String(r.name || ""), r]));
       const seen = new Set<string>();
       const names: string[] = [];
+      const internalQty = onHand ? (onHand.get(lotId) ?? 0) : null;
+      const avail = availabilityAfterStock(moves, internalQty);
+      if (onHand) {
+        await this.prisma.odooLotCandidate.updateMany({
+          where: { odooLotId: lotId },
+          data: { qtyOnHand: internalQty ?? 0 },
+        });
+      }
       for (const m of moves) {
         const name = String(m.pickingName || m.reference || "").trim();
         if (!name || seen.has(name)) continue;
@@ -3099,6 +3106,7 @@ export class OdooImportService {
           { candidateId: cand?.id, containerIso: cand?.containerIso },
         );
       }
+      let linkedSale = false;
       for (const m of moves) {
         if (dossierKindForMove(m) !== "picking_out" || !m.origin) continue;
         const sale = saleByName.get(String(m.origin));
@@ -3130,9 +3138,41 @@ export class OdooImportService {
           }),
           { candidateId: cand?.id, containerIso: cand?.containerIso },
         );
+        linkedSale = true;
+      }
+      if (avail.availability === "left" && !linkedSale) {
+        const extra = await this.salesForSerial(iso);
+        for (const sale of extra) {
+          const name = String(sale.name || "").trim();
+          if (!name || seen.has(name)) continue;
+          seen.add(name);
+          names.push(name);
+          const saleUnit = saleUnitFromOrder({
+            iso,
+            order: sale,
+            lines: sale.lines,
+            invoices: sale.invoices,
+            pickingName: avail.pickingName,
+          });
+          await this.expediente.upsertShared(
+            [iso],
+            moveDossierDraft({
+              kind: "sale",
+              odooId: Number(sale.id) || syntheticMoveId(name),
+              name,
+              state: sale.state ? String(sale.state) : null,
+              partner: this.relName(sale.partner_id) || avail.destName || null,
+              date: sale.date_order ? String(sale.date_order) : null,
+              origin: sale.client_order_ref ? String(sale.client_order_ref) : avail.pickingName || null,
+              amount: Number(sale.amount_total) || null,
+              iso,
+              saleUnit,
+            }),
+            { candidateId: cand?.id, containerIso: cand?.containerIso },
+          );
+        }
       }
       await this.expediente.retainDocs(iso, ["picking_in", "picking_out", "transfer", "repair", "sale"], names);
-      const avail = lotAvailability(moves);
       if (avail.availability === "left") left += 1;
       await this.applyLotAvailability(cand?.containerIso || iso, lotId, avail);
       n += 1;
@@ -3255,6 +3295,90 @@ export class OdooImportService {
     }
   }
 
+  /** Cantidad que sigue en una ubicación interna. `null` si Odoo no respondió: no se inventa la salida. */
+  private async internalQtyByLot(lotIds: number[]): Promise<Map<number, number> | null> {
+    const ids = [...new Set(lotIds.filter((n) => n > 0))];
+    if (!ids.length) return new Map();
+    try {
+      const quants = await this.odoo.searchRead(
+        "stock.quant",
+        [["lot_id", "in", ids], ["quantity", ">", 0], ["location_id.usage", "=", "internal"]],
+        ["lot_id", "quantity"],
+        { limit: 2000 },
+      );
+      const map = new Map<number, number>();
+      for (const id of ids) map.set(id, 0);
+      for (const quant of quants) {
+        const lotId = this.relId(quant.lot_id);
+        if (!lotId) continue;
+        map.set(lotId, (map.get(lotId) || 0) + (Number(quant.quantity) || 0));
+      }
+      return map;
+    } catch {
+      return null;
+    }
+  }
+
+  /** La venta cuyo texto trae el serial, cuando el OUT no dejó el nombre de la SO. */
+  private async salesForSerial(iso: string) {
+    const forms = serialSearchForms(iso);
+    if (!forms.length) return [];
+    const leaves = forms.flatMap((form) => [
+      ["name", "ilike", form],
+      ["x_studio_equipo", "ilike", form],
+    ]);
+    const prefix = leaves.length > 1 ? Array(leaves.length - 1).fill("|") : [];
+    const key = iso.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    let lines: Record<string, unknown>[] = [];
+    try {
+      lines = await this.odoo.searchRead(
+        "sale.order.line",
+        [...prefix, ...leaves],
+        ["id", "order_id", "name", "x_studio_equipo", "product_id"],
+        { limit: 40 },
+      );
+    } catch {
+      const nameLeaves = forms.map((form) => ["name", "ilike", form]);
+      const namePrefix = nameLeaves.length > 1 ? Array(nameLeaves.length - 1).fill("|") : [];
+      lines = await this.odoo
+        .searchRead("sale.order.line", [...namePrefix, ...nameLeaves], ["id", "order_id", "name", "product_id"], { limit: 40 })
+        .catch(() => []);
+    }
+    const names = [
+      ...new Set(
+        lines
+          .filter((line) => {
+            const blob = `${line.name || ""} ${line.x_studio_equipo || ""}`.toUpperCase().replace(/[^A-Z0-9]/g, "");
+            return key && blob.includes(key);
+          })
+          .map((line) => this.relName(line.order_id))
+          .filter(Boolean),
+      ),
+    ].slice(0, 3);
+    if (!names.length) return [];
+    const orders = await this.readSaleOrders(names);
+    const orderIds = orders.map((row) => Number(row.id)).filter((id) => id > 0);
+    const invoiceIds = [
+      ...new Set(
+        orders.flatMap((row) => (Array.isArray(row.invoice_ids) ? row.invoice_ids.map((id: unknown) => Number(id)) : [])).filter((id) => id > 0),
+      ),
+    ];
+    const [orderLines, invoices] = await Promise.all([
+      orderIds.length ? this.readSaleOrderLines(orderIds) : [],
+      invoiceIds.length
+        ? this.odoo
+            .searchRead(
+              "account.move",
+              [["id", "in", invoiceIds]],
+              ["id", "name", "state", "payment_state", "invoice_date", "move_type"],
+              { limit: 80 },
+            )
+            .catch(() => [])
+        : [],
+    ]);
+    return orders.map((order) => ({ ...order, lines: orderLines, invoices }));
+  }
+
   private async loadMoveFacts(lotIds: number[]): Promise<Map<number, LotMoveFact[]>> {
     const out = new Map<number, LotMoveFact[]>();
     const moveLines = await this.odoo.searchRead(
@@ -3273,6 +3397,26 @@ export class OdooImportService {
         )
       : [];
     const moveMap = new Map(moves.map((m) => [Number(m.id), m]));
+    const coveredMoveIds = new Set(moveLines.map((l) => this.relId(l.move_id)).filter((n): n is number => n > 0));
+    let lotMoves: Record<string, unknown>[] = [];
+    try {
+      lotMoves = await this.odoo.searchRead(
+        "stock.move",
+        [["lot_ids", "in", lotIds], ["state", "!=", "cancel"]],
+        ["id", "picking_id", "purchase_line_id", "location_id", "location_dest_id", "origin", "reference", "state", "lot_ids"],
+        { limit: 2000 },
+      );
+    } catch {
+      lotMoves = [];
+    }
+    const extraMoves = lotMoves.filter((m) => {
+      const id = Number(m.id);
+      return id > 0 && !coveredMoveIds.has(id) && !moveMap.has(id);
+    });
+    for (const move of extraMoves) {
+      moves.push(move);
+      moveMap.set(Number(move.id), move);
+    }
     const pickingIds = [
       ...new Set(
         [...moveLines.map((l) => this.relId(l.picking_id)), ...moves.map((m) => this.relId(m.picking_id))].filter(
@@ -3338,6 +3482,36 @@ export class OdooImportService {
       const list = out.get(lotId) || [];
       list.push(fact);
       out.set(lotId, list);
+    }
+    const wanted = new Set(lotIds);
+    for (const move of extraMoves) {
+      const onMove = (Array.isArray(move.lot_ids) ? move.lot_ids : [])
+        .map((item) => (Array.isArray(item) ? Number(item[0]) : Number(item)))
+        .filter((id) => wanted.has(id));
+      const pick = pickMap.get(this.relId(move.picking_id));
+      const srcId = this.relId(move.location_id);
+      const destId = this.relId(move.location_dest_id);
+      const fact: LotMoveFact = {
+        state: String(move.state || ""),
+        origin: move.origin ? String(move.origin) : null,
+        reference: String(move.reference || pick?.name || ""),
+        pickingCode: pick ? String(pick.picking_type_code || "") : null,
+        pickingState: pick ? String(pick.state || "") : null,
+        pickingName: pick ? String(pick.name || "") : null,
+        purchaseId: this.relId(pick?.purchase_id) || null,
+        purchaseName: this.relName(pick?.purchase_id) || null,
+        purchaseLineId: this.relId(move.purchase_line_id) || null,
+        srcUsage: locUsage(srcId) || null,
+        destUsage: locUsage(destId) || null,
+        srcName: locName(srcId) || null,
+        destName: locName(destId) || null,
+        date: pick && pick.date_done && pick.date_done !== false ? String(pick.date_done) : pick?.scheduled_date ? String(pick.scheduled_date) : null,
+      };
+      for (const lotId of onMove) {
+        const list = out.get(lotId) || [];
+        list.push(fact);
+        out.set(lotId, list);
+      }
     }
     return out;
   }
@@ -4056,7 +4230,55 @@ export class OdooImportService {
     return decision.status === "matched" ? decision.code : null;
   }
 
-  private resolveAssimilateType(
+  private async searchAll(model: string, domain: unknown[], fields: string[], page = 400) {
+    const out: Record<string, unknown>[] = [];
+    for (let offset = 0; out.length < 20000; offset += page) {
+      const rows = await this.odoo.searchRead(model, domain, fields, { limit: page, offset });
+      out.push(...rows);
+      if (rows.length < page) break;
+    }
+    return out;
+  }
+
+  /** Productos de la categoría Odoo «Contenedor Dry», incluidos flat rack y medidas sin tipo. */
+  private async loadDryProducts() {
+    const categories = await this.odoo.searchRead(
+      "product.category",
+      [["name", "=", DRY_CATEGORY_NAME]],
+      ["id", "name"],
+      { limit: 20 },
+    );
+    const ids = categories.map((row) => Number(row.id)).filter((id) => id > 0);
+    if (!ids.length) return { products: [] as Record<string, unknown>[], missingCategory: true };
+    const products: Record<string, unknown>[] = [];
+    const seen = new Set<number>();
+    for (const id of ids) {
+      const rows = await this.searchAll("product.product", [["categ_id", "child_of", id]], ["id", "name", "default_code", "categ_id"]);
+      for (const row of rows) {
+        const productId = Number(row.id);
+        if (!productId || seen.has(productId)) continue;
+        seen.add(productId);
+        products.push(row);
+      }
+    }
+    return { products, missingCategory: false };
+  }
+
+  private async ensureOtherType() {
+    await this.prisma.containerType.upsert({
+      where: { code: OTHER_EQUIPMENT_TYPE },
+      update: {},
+      create: {
+        code: OTHER_EQUIPMENT_TYPE,
+        label: "Otros",
+        dims: "Por regularizar",
+        color: "#8a90a2",
+      },
+    });
+    return OTHER_EQUIPMENT_TYPE;
+  }
+
+  private async resolveAssimilateType(
     cand: { productName?: string | null; productCode?: string | null; zdryType?: string | null; payload?: unknown },
     masters: TypeMaster[],
   ) {
@@ -4066,7 +4288,8 @@ export class OdooImportService {
     if (confirmed && master) return master.code;
     const decision = explicitEquipmentType(cand.productName || "", cand.productCode || "", masters);
     if (decision.status === "matched") return decision.code;
-    throw new BadRequestException(decision.reason);
+    await this.ensureOtherType();
+    return equipmentTypeCode(decision);
   }
 
   private async currentInternalLocation(lotId: number): Promise<string | null> {

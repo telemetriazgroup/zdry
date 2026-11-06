@@ -16,8 +16,10 @@ export class StorageService implements OnModuleInit {
   private readonly bucket = process.env.MINIO_BUCKET || "zdry";
   private readonly s3 = new S3Client({
     region: process.env.MINIO_REGION || "us-east-1",
-    endpoint: process.env.MINIO_ENDPOINT || "http://localhost:9000",
+    endpoint: process.env.MINIO_ENDPOINT || "http://localhost:8333",
     forcePathStyle: true,
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
     credentials: {
       accessKeyId: process.env.MINIO_ACCESS_KEY || process.env.MINIO_ROOT_USER || "zdry",
       secretAccessKey: process.env.MINIO_SECRET_KEY || process.env.MINIO_ROOT_PASSWORD || "zdryminio",
@@ -29,7 +31,7 @@ export class StorageService implements OnModuleInit {
   }
 
   private async ensureBucket() {
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 30; i++) {
       try {
         await this.s3.send(new HeadBucketCommand({ Bucket: this.bucket }));
         return;
@@ -37,14 +39,14 @@ export class StorageService implements OnModuleInit {
         const name = (err as { name?: string }).name || "";
         if (name === "NotFound" || name === "NoSuchBucket") {
           await this.s3.send(new CreateBucketCommand({ Bucket: this.bucket }));
-          this.log.log(`Bucket MinIO creado: ${this.bucket}`);
+          this.log.log(`Bucket S3 creado: ${this.bucket}`);
           return;
         }
-        this.log.warn(`MinIO no listo (${i + 1}/12): ${(err as Error).message}`);
+        this.log.warn(`Almacén S3 no listo (${i + 1}/30): ${(err as Error).message}`);
         await new Promise((r) => setTimeout(r, 1000));
       }
     }
-    this.log.error("No se pudo contactar MinIO; las subidas fallarán hasta que esté disponible.");
+    this.log.error("No se pudo contactar el almacén S3; las subidas fallarán hasta que esté disponible.");
   }
 
   async put(key: string, body: Buffer, contentType: string) {

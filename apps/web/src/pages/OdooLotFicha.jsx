@@ -686,7 +686,7 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
               {row.typeDecision?.status === "matched" ? (
                 <small>Odoo nombra {row.typeDecision.code}. Se usa ese tipo al asimilar, salvo que el despacho elija otro y lo guarde.</small>
               ) : (
-                <small>{row.typeDecision?.reason || "El encargado de despacho debe indicar el tipo exacto."}</small>
+                <small>{row.typeDecision?.reason || "Si no eliges un tipo, entra en Otros."}</small>
               )}
             </label>
             <label>
@@ -710,15 +710,10 @@ export default function OdooLotFicha({ id, busy, onClose, onAssimilated, onSaved
               <button
                 className="btn-ghost"
                 type="button"
-                disabled={saving || !!busy || (row.typeDecision?.status === "needs_exact" && !form.zdryType)}
+                disabled={saving || !!busy}
                 onClick={async () => {
-                  const needsChoice = row.typeDecision?.status === "needs_exact";
                   const changed = (form.zdryType || "") !== (row.zdryType || "");
-                  if (needsChoice && !form.zdryType) {
-                    setError(row.typeDecision?.reason || "Indica el tipo exacto.");
-                    return;
-                  }
-                  if (needsChoice || (changed && form.zdryType)) {
+                  if (form.zdryType && changed) {
                     setSaving(true);
                     setError("");
                     try {

@@ -6,6 +6,7 @@ import { costLabel, originBadge } from "../odoo-origin.js";
 import OdooLotFicha, { SyncIcon } from "./OdooLotFicha.jsx";
 
 const PAGE_SIZE = 20;
+const DEPARTED_PAGE = 5;
 
 function searchable(r) {
   return [r.isoNormalized, r.serialRaw, r.productCode, r.productName, r.locationName, r.dua, r.odooMoName, r.odooSourceProductCode]
@@ -63,6 +64,7 @@ export default function OdooBandeja() {
   const [watch, setWatch] = useState({ mode: "manual", lastRunAt: null, lastMessage: "", lastNew: 0, lastAssimilated: 0 });
   const [expediente, setExpediente] = useState({ status: "idle", current: 0, total: 0, left: 0, message: "" });
   const [departed, setDeparted] = useState([]);
+  const [departedPage, setDepartedPage] = useState(1);
 
   async function load() {
     const list = await api("/odoo-import/candidates");
@@ -110,6 +112,11 @@ export default function OdooBandeja() {
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, pages);
   const pageRows = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const departedPages = Math.max(1, Math.ceil(departed.length / DEPARTED_PAGE));
+  const safeDepartedPage = Math.min(departedPage, departedPages);
+  const departedRows = departed.slice((safeDepartedPage - 1) * DEPARTED_PAGE, safeDepartedPage * DEPARTED_PAGE);
+  const departedFrom = departed.length ? (safeDepartedPage - 1) * DEPARTED_PAGE + 1 : 0;
+  const departedTo = Math.min(departed.length, safeDepartedPage * DEPARTED_PAGE);
   const pickable = filtered.filter(canPick);
   const selectedIds = pickable.filter((r) => sel[r.id]).map((r) => r.id);
   const allPickableSelected = pickable.length > 0 && pickable.every((r) => sel[r.id]);
@@ -418,8 +425,8 @@ export default function OdooBandeja() {
           </button>
         </div>
         <p className="section-sub">
-          Recorre las series ya asimiladas y deja en cada expediente solo lo de esa serie: su ingreso, salida, venta, reparación y traslados.
-          No borra unidades ni las vuelve a asimilar. Si detecta una salida hecha a cliente, la unidad sale de recepción y del catálogo.
+          Recorre las series ya asimiladas. Si Odoo ya no las tiene en una ubicación interna, o hay una salida hecha a cliente, salen de Recepción y quedan en Venta / en cliente.
+          Si encuentra la orden, entra en Ventas realizadas. No borra unidades ni las vuelve a asimilar. Una serie que sigue con cantidad en almacén, como un ajuste inicial, se queda en pendientes.
         </p>
         <div className="odoo-watch" style={{ marginTop: 12 }}>
           <b>Equipos con salida ({departed.length})</b>
@@ -438,7 +445,7 @@ export default function OdooBandeja() {
                   </tr>
                 </thead>
                 <tbody>
-                  {departed.slice(0, 40).map((u) => (
+                  {departedRows.map((u) => (
                     <tr key={u.iso}>
                       <td className="card-iso">{u.iso}</td>
                       <td>{u.typeLabel || u.type}</td>
@@ -452,7 +459,13 @@ export default function OdooBandeja() {
           ) : (
             <p className="section-sub">Todavía no hay equipos con salida detectada.</p>
           )}
-          {departed.length > 40 ? <p className="section-sub">Se muestran 40 de {departed.length}. El resto está en Recepción · Venta / en cliente.</p> : null}
+          {departed.length > DEPARTED_PAGE ? (
+            <div className="odoo-pager">
+              <button className="btn-ghost" type="button" disabled={safeDepartedPage <= 1} onClick={() => setDepartedPage(safeDepartedPage - 1)}>Anterior</button>
+              <span>{departedFrom}–{departedTo} de {departed.length} · Página {safeDepartedPage} / {departedPages}</span>
+              <button className="btn-ghost" type="button" disabled={safeDepartedPage >= departedPages} onClick={() => setDepartedPage(safeDepartedPage + 1)}>Siguiente</button>
+            </div>
+          ) : null}
         </div>
         {expediente.status === "running" || expediente.message ? (
           <div className="odoo-progress">

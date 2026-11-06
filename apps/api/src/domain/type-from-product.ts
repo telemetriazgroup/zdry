@@ -216,9 +216,16 @@ export function auditEquipment(row: TypeAuditInput, masters: TypeMaster[]): Type
   };
 }
 
+export const OTHER_EQUIPMENT_TYPE = "OTROS";
+
 export type EquipmentTypeDecision =
   | { status: "matched"; code: string; reason: string }
   | { status: "needs_exact"; reason: string };
+
+/** Si Odoo no nombra un tipo que ya existe, la serie entra en Otros y se regulariza después. */
+export function equipmentTypeCode(decision: EquipmentTypeDecision): string {
+  return decision.status === "matched" ? decision.code : OTHER_EQUIPMENT_TYPE;
+}
 
 /** Concordancia explícita: el texto de Odoo nombra un código (40DC, 20DC, 40HC) que existe en los maestros. */
 export function explicitEquipmentType(name: string, code: string, masters: TypeMaster[]): EquipmentTypeDecision {
@@ -237,12 +244,12 @@ export function explicitEquipmentType(name: string, code: string, masters: TypeM
   if (shape.namedCode) {
     return {
       status: "needs_exact",
-      reason: `Odoo nombra ${shape.namedCode} y ese tipo no está en los maestros. El encargado de despacho debe indicar el tipo exacto antes de asimilar.`,
+      reason: `Odoo nombra ${shape.namedCode} y ese tipo no está en los maestros. Entra en Otros hasta crear o fusionar el tipo.`,
     };
   }
   return {
     status: "needs_exact",
-    reason: "El producto de Odoo no nombra un tipo exacto (40DC, 20DC, 40HC…). El encargado de despacho debe indicarlo antes de asimilar.",
+    reason: "El producto de Odoo no nombra un tipo exacto (40DC, 20DC, 40HC…). Entra en Otros hasta crear o fusionar el tipo.",
   };
 }
 

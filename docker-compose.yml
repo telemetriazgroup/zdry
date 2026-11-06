@@ -25,17 +25,17 @@ services:
     ports:
       - "6379:6379"
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.52
+    command: ["mini", "-dir=/data", "-master.telemetry=false", "-webdav=false"]
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-zdry}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-zdryminio}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-zdry}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-zdryminio}
+      S3_BUCKET: ${MINIO_BUCKET:-zdry}
     volumes:
-      - zdry-minio:/data
+      - zdry-s3:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "8333:8333"
 
   mailhog:
     image: mailhog/mailhog:latest
@@ -49,10 +49,10 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-zdry}:${POSTGRES_PASSWORD:-zdry}@db:5432/${POSTGRES_DB:-zdry}
       REDIS_URL: redis://redis:6379
-      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ENDPOINT: http://seaweedfs:8333
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-zdry}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-zdryminio}
-      MINIO_BUCKET: zdry
+      MINIO_BUCKET: ${MINIO_BUCKET:-zdry}
       JWT_SECRET: ${JWT_SECRET:-cambiar-en-produccion}
       SEED_PASSWORD: ${SEED_PASSWORD:-Zdry123!}
       TZ: America/Lima
@@ -72,7 +72,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
+      seaweedfs:
         condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3003/health"]
@@ -91,4 +91,4 @@ services:
 
 volumes:
   zdry-pg:
-  zdry-minio:
+  zdry-s3:
