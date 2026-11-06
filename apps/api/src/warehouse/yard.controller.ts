@@ -28,6 +28,29 @@ export class YardController {
     return this.warehouse.setYardGhost(body, user, req.ip);
   }
 
+  @Post("release")
+  release(
+    @Body() body: { iso?: string; depotId?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.release(body.iso || "", body.depotId || "", user, req.ip);
+  }
+
+  @Post("aisle")
+  aisle(
+    @Body() body: { iso?: string; depotId?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.holdInAisle(body.iso || "", body.depotId || "", user, req.ip);
+  }
+
+  @Get("history/:iso")
+  history(@Param("iso") iso: string) {
+    return this.warehouse.movementHistory(iso);
+  }
+
   @Post("place")
   place(
     @Body() body: { iso?: string; depotId?: string; lado?: string; ruma?: number; columna?: number; nivel?: number },

@@ -24,6 +24,26 @@ function lengthOf(type) {
   return TEU * spanOf(type);
 }
 
+function feetOf(type) {
+  const code = String(type || "").toUpperCase();
+  if (code.startsWith("45")) return 45;
+  if (code.startsWith("40")) return 40;
+  if (code.startsWith("20")) return 20;
+  return 0;
+}
+
+function columnAllows(zone, row, col, level, incomingType, units, ghosts) {
+  const incoming = feetOf(incomingType);
+  if (incoming <= 20) return true;
+  for (let cursor = level - 1; cursor >= 1; cursor -= 1) {
+    const unit = (units || []).find((item) => item.lado === zone.name && item.ruma === row && item.columna === col && item.nivel === cursor);
+    const ghost = (ghosts || []).find((item) => item.zoneId === zone.id && item.row === row && item.col === col && item.level === cursor);
+    const feet = feetOf(unit?.type || ghost?.typeCode);
+    if (feet > 0 && incoming > feet) return false;
+  }
+  return true;
+}
+
 function inheritedType(zone, row, col, level, ownType, units, ghosts) {
   if (ownType) return ownType;
   const aboveUnit = (units || [])
@@ -85,7 +105,9 @@ function groundLabel(text) {
   return mesh;
 }
 
-function buildYard(zones, units, ghosts, typeColor) {
+function buildYard(zones, units, ghosts, typeColor, options = {}) {
+  const stackedUnits = (units || []).filter((unit) => !unit.onAisle && unit.lado !== "PASILLO");
+  const held = (units || []).filter((unit) => unit.onAisle || unit.lado === "PASILLO");
   const root = new THREE.Group();
   const disposables = [];
   const maxCols = Math.max(...zones.map((zone) => Number(zone.cols) || 1), 1);
@@ -122,10 +144,36 @@ function buildYard(zones, units, ghosts, typeColor) {
     for (let row = 1; row <= zone.rows; row += 1) {
       for (let col = 1; col <= zone.cols; col += 1) {
         let floor = 0.04;
+        let offered = false;
         for (let level = 1; level <= zone.levels; level += 1) {
-          const occupant = (units || []).find((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel === level);
+          const occupant = stackedUnits.find((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel === level);
           const ghost = (ghosts || []).find((item) => item.zoneId === zone.id && item.row === row && item.col === col && item.level === level);
-          if (!occupant && !ghost) continue;
+          if (!occupant && !ghost) {
+            if (options.targets && !offered && (level === 1 || floor > 0.2) && columnAllows(zone, row, col, level, options.incomingType, stackedUnits, ghosts)) {
+              offered = true;
+              const length = lengthOf(options.incomingType);
+              const height = BOX_H * highOf(options.incomingType);
+              const slotX = originX + (col - 1) * PITCH_X;
+              const x = slotX + (PITCH_X - 0.7 - length) / 2 + length / 2;
+              const z = originZ + (row - 1) * PITCH_Z + BOX_W / 2;
+              const hint = new THREE.Mesh(
+                new THREE.BoxGeometry(length, height * 0.35, BOX_W),
+                new THREE.MeshStandardMaterial({ color: "#f0c14a", transparent: true, opacity: 0.35, roughness: 0.8 }),
+              );
+              hint.position.set(x, floor + height * 0.18, z);
+              hint.userData.pick = {
+                key: `slot-${zone.id}-${row}-${col}-${level}`,
+                empty: true,
+                zoneName: zone.name,
+                row,
+                col,
+                level,
+              };
+              root.add(hint);
+              disposables.push(hint.geometry, hint.material);
+            }
+            continue;
+          }
           const named = Boolean(ghost?.code);
           const type = inheritedType(zone, row, col, level, occupant?.type || (named ? ghost.typeCode : ""), units, ghosts);
           const length = lengthOf(type);
@@ -219,6 +267,29 @@ function buildYard(zones, units, ghosts, typeColor) {
     paintLane(x, z, spanX, 0.16);
   }
 
+  held.forEach((unit, index) => {
+    const length = lengthOf(unit.type);
+    const height = BOX_H * highOf(unit.type);
+    const texture = faceTexture(unit.typeColor || "#8a90a2", String(unit.iso || "").slice(-6), false);
+    const geometry = new THREE.BoxGeometry(length, height, BOX_W);
+    const material = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.62, metalness: 0.04 });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(minX + length / 2 + index * (length + 1.1), 0.04 + height / 2, maxZ + 3.4);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData.pick = {
+      key: unit.iso,
+      code: unit.iso,
+      typeLabel: unit.typeLabel || unit.type,
+      where: "Pasillo · en el suelo",
+      note: "A la espera de un lugar.",
+    };
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color: "#121820" }));
+    mesh.add(edges);
+    root.add(mesh);
+    disposables.push(geometry, material, texture, edges.geometry, edges.material);
+  });
+
   const picks = [];
   root.traverse((node) => {
     if (node.userData.pick) picks.push(node.position);
@@ -239,7 +310,7 @@ function buildYard(zones, units, ghosts, typeColor) {
   return root;
 }
 
-export default function YardScene({ zones, units, ghosts, typeColor, onPick, picked, onClose }) {
+export default function YardScene({ zones, units, ghosts, typeColor, onPick, picked, onClose, targets, incomingType, transferring, onTransfer, onPark, onRelease, history }) {
   const mountRef = useRef(null);
   const pickRef = useRef(onPick);
   const colorRef = useRef(typeColor);
@@ -303,7 +374,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
         (content.userData.disposables || []).forEach((item) => item?.dispose?.());
         scene.remove(content);
       }
-      content = buildYard(zones, units, ghosts, colorRef.current);
+      content = buildYard(zones, units, ghosts, colorRef.current, { targets, incomingType });
       yardRoot.current = content;
       scene.add(content);
       view.target.copy(content.userData.center);
@@ -397,7 +468,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
       mount.removeChild(renderer.domElement);
       viewRef.current = null;
     };
-  }, [zones, units, ghosts]);
+  }, [zones, units, ghosts, targets, incomingType]);
 
   return (
     <div className="yard-scene">
@@ -419,6 +490,19 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
             <p>{picked.access}</p>
             <p>{picked.cost}</p>
             {picked.unknown ? <p>Este hueco no está en el catálogo.</p> : <p>Esa referencia de movimientos queda en el catálogo comercial.</p>}
+            {!picked.unknown && !picked.empty && onTransfer ? (
+              <div className="action-row">
+                <button className="btn-primary" type="button" onClick={onTransfer}>{transferring ? "Eligiendo destino" : "Trasladar"}</button>
+                {transferring ? <button className="btn-ghost" type="button" onClick={onPark}>Dejar en el pasillo</button> : null}
+                {transferring ? <button className="btn-ghost" type="button" onClick={onRelease}>Devolver</button> : null}
+              </div>
+            ) : null}
+            {transferring ? <p>Elige un cuadro amarillo libre. Un 40 no puede apoyarse en un 20.</p> : null}
+            {history?.length ? (
+              <ul className="yard-history">
+                {history.slice(0, 6).map((row) => <li key={row.id}>{row.detail}</li>)}
+              </ul>
+            ) : null}
           </aside>
         ) : null}
         <div className="yard-zoom">

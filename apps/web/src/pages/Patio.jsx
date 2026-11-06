@@ -93,7 +93,7 @@ export default function Patio() {
                     <td style={{ color: unit.catColor }}>{unit.catLabel}</td>
                     <td>{unit.status}</td>
                     <td>{unit.posLabel}</td>
-                    <td>{unit.movesToRetrieve ? `${unit.movesToRetrieve} movimiento(s)` : "En la cima"}</td>
+                    <td>{unit.onAisle ? "En el pasillo" : unit.lado ? (unit.movesToRetrieve ? `${unit.movesToRetrieve} movimiento(s)` : "En la cima") : "Sin posición"}</td>
                   </tr>
                 ))}
               </tbody>

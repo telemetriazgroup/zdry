@@ -98,6 +98,8 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   const [guestCode, setGuestCode] = useState("");
   const [guestType, setGuestType] = useState("");
   const [picked, setPicked] = useState(null);
+  const [transferIso, setTransferIso] = useState(null);
+  const [history, setHistory] = useState([]);
 
   useEffect(() => {
     setDraft(withSeats(layout.plan?.zones?.length ? layout.plan : FALLBACK_PLAN));
@@ -233,6 +235,55 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     }
   }
 
+  async function loadHistory(iso) {
+    if (!iso) { setHistory([]); return; }
+    try {
+      setHistory(await api(`/yard/history/${iso}`));
+    } catch {
+      setHistory([]);
+    }
+  }
+
+  async function returnUnit(iso) {
+    setError("");
+    try {
+      await api("/yard/release", { method: "POST", body: { iso, depotId: layout.depotId } });
+      setPicked(null);
+      setTransferIso(null);
+      await onReload();
+      await loadHistory(iso);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function moveUnit(iso, zoneName, row, col, level) {
+    setError("");
+    try {
+      await api("/yard/place", {
+        method: "POST",
+        body: { iso, depotId: layout.depotId, lado: zoneName, ruma: row, columna: col, nivel: level, regularize: true },
+      });
+      setTransferIso(null);
+      await onReload();
+      await loadHistory(iso);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function parkUnit(iso) {
+    setError("");
+    try {
+      await api("/yard/aisle", { method: "POST", body: { iso, depotId: layout.depotId } });
+      setTransferIso(null);
+      await onReload();
+      await loadHistory(iso);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   async function clearPicked() {
     if (!picked?.ghost) return;
     setError("");
@@ -270,7 +321,8 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         <b>Plano del almacén</b>
         <button className={mode === "3d" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("3d")}>Vista del operario</button>
         <button className={mode === "armar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("armar")}>Armar zonas</button>
-        <button className={mode === "regularizar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("regularizar")}>Regularizar</button>
+        <button className={mode === "regularizar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => { setMode("regularizar"); setTransferIso(null); }}>Regularizar</button>
+        <button className={mode === "trasladar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("trasladar")}>Trasladar</button>
       </div>
       {error ? <div className="err">{error}</div> : null}
 
@@ -319,10 +371,41 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         </div>
       ) : null}
 
-      {mode === "regularizar" ? (
+      {mode === "regularizar" || mode === "trasladar" ? (
         <div>
+          {mode === "trasladar" ? (
+            <>
+              <p className="section-sub">
+                Elige un equipo ubicado y toca el hueco destino. También puede quedar en el pasillo, en el suelo, hasta que tenga lugar. Cada traslado queda en su historial.
+                {transferIso ? ` En traslado: ${transferIso}.` : ""}
+              </p>
+              <div className="action-row">
+                <button className="btn-ghost" type="button" disabled={!transferIso} onClick={() => parkUnit(transferIso)}>Dejar en el pasillo</button>
+                <button className="btn-ghost" type="button" disabled={!transferIso} onClick={() => returnUnit(transferIso)}>Devolver a sin posición</button>
+              </div>
+              <div className="pill-list">
+                {layout.units.filter((unit) => unit.lado && !LEFT.has(unit.status)).map((unit) => (
+                  <button
+                    key={unit.iso}
+                    className="pill-check"
+                    type="button"
+                    style={{ cursor: "pointer", background: transferIso === unit.iso ? "#12203a" : "#fff", color: transferIso === unit.iso ? "#fff" : "inherit" }}
+                    onClick={() => { setTransferIso(unit.iso); loadHistory(unit.iso); }}
+                  >
+                    {unit.iso} — {unit.onAisle || unit.lado === "PASILLO" ? "Pasillo" : unit.posLabel || unit.lado}
+                  </button>
+                ))}
+              </div>
+              {history.length ? (
+                <ul className="yard-history">
+                  {history.slice(0, 8).map((row) => <li key={row.id}>{row.detail}</li>)}
+                </ul>
+              ) : null}
+            </>
+          ) : (
+            <>
           <p className="section-sub">
-            Elige un equipo de la lista y toca la altura. Los niveles de abajo quedan ocupados sin identificar, para que la ruma no flote. Ese hueco se reemplaza con un equipo disponible o con un código ajeno a ZDRY. Sin equipo elegido, el toque marca la celda como ocupada.
+            Elige un equipo de la lista y toca la altura. Los niveles de abajo quedan ocupados sin identificar, para que la ruma no flote. Ese hueco se reemplaza con un equipo disponible o con un código ajeno a ZDRY. Sin equipo elegido, el toque marca la celda como ocupada. Doble clic en un equipo lo devuelve a sin posición.
             {selectedIso ? ` Seleccionado: ${selectedIso}.` : ""}
           </p>
           <div className="guest-form">
@@ -352,7 +435,9 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               </button>
             ))}
           </div>
-          {info}
+            </>
+          )}
+          {mode === "regularizar" ? info : null}
           <div className="yard-plan-2d">
             {Array.from({ length: gridRows }, (_, rowIndex) => {
               const gridRow = rowIndex + 1;
@@ -393,7 +478,22 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
                                                   className={`yard-cell${occupant || named ? " full" : ""}${ghost && !occupant && !named ? " ghost" : ""}${picked?.key === (occupant?.iso || `g-${zone.id}-${row}-${col}-${level}`) ? " on" : ""}`}
                                                   style={color ? { background: color } : undefined}
                                                   aria-label={`${zone.name} fila ${row} columna ${col} altura ${level}`}
-                                                  onClick={() => onCell(zone, row, col, level, occupant, ghost)}
+                                                  onClick={() => {
+                                                    if (mode === "trasladar") {
+                                                      if (occupant) {
+                                                        setTransferIso(occupant.iso);
+                                                        setPicked(cellPick(zone, row, col, level, occupant, null));
+                                                        loadHistory(occupant.iso);
+                                                        return;
+                                                      }
+                                                      if (transferIso) moveUnit(transferIso, zone.name, row, col, level);
+                                                      return;
+                                                    }
+                                                    onCell(zone, row, col, level, occupant, ghost);
+                                                  }}
+                                                  onDoubleClick={() => {
+                                                    if (mode === "regularizar" && occupant) returnUnit(occupant.iso);
+                                                  }}
                                                 >
                                                   {occupant ? occupant.iso.slice(-4) : named ? ghost.code.slice(-4) : ghost ? "?" : level}
                                                 </button>
@@ -428,8 +528,23 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             ghosts={ghosts}
             typeColor={typeColor}
             picked={picked}
-            onClose={() => setPicked(null)}
+            targets={Boolean(transferIso)}
+            incomingType={layout.units.find((unit) => unit.iso === transferIso)?.type || ""}
+            transferring={Boolean(transferIso)}
+            history={history}
+            onTransfer={() => {
+              if (!picked?.code || picked.unknown) return;
+              setTransferIso(picked.code);
+              loadHistory(picked.code);
+            }}
+            onPark={() => transferIso && parkUnit(transferIso)}
+            onRelease={() => transferIso && returnUnit(transferIso)}
+            onClose={() => { setPicked(null); setTransferIso(null); }}
             onPick={(item) => {
+              if (item.empty && transferIso) {
+                moveUnit(transferIso, item.zoneName, item.row, item.col, item.level);
+                return;
+              }
               if (item.ghost) {
                 const zone = draft.zones.find((entry) => entry.id === item.ghost.zoneId);
                 const ghost = ghosts.find((entry) => entry.zoneId === item.ghost.zoneId && entry.row === item.ghost.row && entry.col === item.ghost.col && entry.level === item.ghost.level);

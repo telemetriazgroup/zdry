@@ -124,6 +124,7 @@ export default function CatalogMedia() {
   const [priceBusy, setPriceBusy] = useState(false);
   const [q, setQ] = useState("");
   const [onlyPhotos, setOnlyPhotos] = useState(false);
+  const [moveFilter, setMoveFilter] = useState("");
   const [group, setGroup] = useState("por publicar");
   const [page, setPage] = useState(1);
   const [publishBusy, setPublishBusy] = useState(false);
@@ -259,7 +260,7 @@ export default function CatalogMedia() {
 
   useEffect(() => {
     setPage(1);
-  }, [q, onlyPhotos, group]);
+  }, [q, onlyPhotos, group, moveFilter]);
 
   async function open(nextIso) {
     setError("");
@@ -735,9 +736,16 @@ export default function CatalogMedia() {
   }, [searchedRows]);
   const filteredRows = useMemo(() => {
     const list = searchedRows.filter((r) => catalogGroup(r) === group);
-    if (!onlyPhotos) return list;
-    return list.filter((r) => Number(r.photoCount) > 0);
-  }, [searchedRows, group, onlyPhotos]);
+    const withPhotos = onlyPhotos ? list.filter((r) => Number(r.photoCount) > 0) : list;
+    if (!moveFilter) return withPhotos;
+    return withPhotos.filter((row) => {
+      if (moveFilter === "none") return row.movesToRetrieve === null && !row.onAisle;
+      const moves = Number(row.movesToRetrieve);
+      if (!Number.isFinite(moves) || row.movesToRetrieve == null) return false;
+      if (moveFilter === "3+") return moves >= 3;
+      return moves === Number(moveFilter);
+    });
+  }, [searchedRows, group, onlyPhotos, moveFilter]);
   const readyRows = filteredRows.filter((r) => !pickLock(r));
   const allReadyPicked = readyRows.length > 0 && readyRows.every((r) => picked.has(r.iso));
   const pages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
@@ -819,6 +827,14 @@ export default function CatalogMedia() {
               <input type="checkbox" checked={onlyPhotos} onChange={(e) => setOnlyPhotos(e.target.checked)} />
               Solo con fotos
             </label>
+            <select aria-label="Filtrar por movimientos de patio" value={moveFilter} onChange={(e) => setMoveFilter(e.target.value)}>
+              <option value="">Todos los movimientos</option>
+              <option value="none">Sin posición en patio</option>
+              <option value="1">1 movimiento</option>
+              <option value="2">2 movimientos</option>
+              <option value="3">3 movimientos</option>
+              <option value="3+">3 o más</option>
+            </select>
             {canApprove ? (
               <button
                 className="btn-ghost"

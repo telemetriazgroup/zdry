@@ -64,7 +64,7 @@ import {
   posLabel,
   validateMove,
 } from "../domain/yard";
-import { ghostsWithSupport, movesAbove, normalizeYardPlan, zoneSlotError, type YardPlan } from "../domain/yard-plan";
+import { AISLE_SIDE, ghostsWithSupport, movesAbove, normalizeYardPlan, stackLengthError, zoneSlotError, type YardPlan } from "../domain/yard-plan";
 import { readMovementPolicy } from "../domain/freight-stub";
 import { PHOTO_STATUS_ACTIVE, PHOTO_STATUS_REJECTED } from "../domain/catalog-media";
 import { OdooClient } from "../odoo/odoo.client";
@@ -230,6 +230,23 @@ export class WarehouseService {
         throw new BadRequestException("Hay equipos encima. Identifica o mueve esos antes de liberar este hueco.");
       }
     }
+    const typeCode = String(input.typeCode || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 12);
+    if (input.occupied !== false && typeCode) {
+      const below = await this.prisma.container.findMany({
+        where: { depotId, lado: zone.name, ruma: row, columna: col, nivel: { lt: level }, archivedAt: null },
+        select: { iso: true, type: true, lado: true, ruma: true, columna: true, nivel: true },
+      });
+      const problem = stackLengthError(
+        zone,
+        plan.ghosts,
+        below.map((item) => ({ zoneName: zone.name, row, col, level: item.nivel || 0, type: item.type, iso: item.iso })),
+        typeCode,
+        row,
+        col,
+        level,
+      );
+      if (problem) throw new ConflictException(problem);
+    }
     const code = String(input.code || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 20);
     if (code && input.occupied !== false) {
       const existing = await this.prisma.container.findUnique({
@@ -248,7 +265,6 @@ export class WarehouseService {
       (ghost) => !(ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level === level),
     );
     if (input.occupied !== false) {
-      const typeCode = String(input.typeCode || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 12);
       ghosts.push(code ? { zoneId: zone.id, row, col, level, code, typeCode } : { zoneId: zone.id, row, col, level });
     }
     const stacked = await this.prisma.container.findMany({
@@ -2190,9 +2206,12 @@ export class WarehouseService {
         committed: containerCommitted(c),
         needsPlacement: needsYardPlacement(c),
         posLabel: posLabel(c),
-        movesToRetrieve: c.lado
-          ? movesAbove(plan.zones, plan.ghosts, stacked, c.lado, c.ruma || 0, c.columna || 0, c.nivel || 0, c.iso)
-          : 0,
+        onAisle: c.lado === AISLE_SIDE,
+        movesToRetrieve: c.lado === AISLE_SIDE
+          ? 0
+          : c.lado
+            ? movesAbove(plan.zones, plan.ghosts, stacked, c.lado, c.ruma || 0, c.columna || 0, c.nivel || 0, c.iso)
+            : 0,
         demo: c.demo,
       };
     });
@@ -2265,6 +2284,20 @@ export class WarehouseService {
           const taken = occupants.find(
             (item) => item.iso !== unit.iso && item.lado === lado && item.ruma === ruma && item.columna === columna && item.nivel === nivel,
           );
+          if (zone) {
+            const stacked = occupants
+              .filter((item) => item.iso !== unit.iso && item.lado && item.lado !== AISLE_SIDE && item.ruma && item.columna && item.nivel)
+              .map((item) => ({
+                zoneName: item.lado || "",
+                row: item.ruma || 0,
+                col: item.columna || 0,
+                level: item.nivel || 0,
+                type: item.type,
+                iso: item.iso,
+              }));
+            const problem = stackLengthError(zone, plan.ghosts, stacked, unit.type, ruma, columna, nivel);
+            if (problem) throw new ConflictException(problem);
+          }
           if (zone && input.regularize) {
             if (taken) throw new ConflictException(`${taken.iso} ya ocupa esa posición.`);
           } else {
@@ -2363,6 +2396,88 @@ export class WarehouseService {
         entity: "Container",
         entityId: iso,
         after: { depotId, lado, ruma, columna, nivel },
+        ip,
+      });
+      return out;
+    });
+  }
+
+  release(iso: string, depotId: string, user: AuthUser, ip?: string) {
+    return this.leaveYard(iso, depotId, null, user, ip);
+  }
+
+  holdInAisle(iso: string, depotId: string, user: AuthUser, ip?: string) {
+    return this.leaveYard(iso, depotId, AISLE_SIDE, user, ip);
+  }
+
+  movementHistory(iso: string) {
+    const code = (iso || "").trim().toUpperCase();
+    return this.prisma.containerHistory.findMany({
+      where: { iso: code, type: { in: ["Movimiento", "Compactación"] } },
+      orderBy: { createdAt: "desc" },
+      take: 30,
+      select: { id: true, type: true, detail: true, createdAt: true },
+    });
+  }
+
+  private async leaveYard(iso: string, depotId: string, nextSide: string | null, user: AuthUser, ip?: string) {
+    const code = (iso || "").trim().toUpperCase();
+    if (!code || !depotId) throw new BadRequestException("iso y depósito son obligatorios.");
+    const plan = await this.getYardPlan(depotId);
+    return this.locks.withYardLock(depotId, async () => {
+      const out = await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT iso FROM "Container" WHERE "depotId" = ${depotId} FOR UPDATE`;
+        const unit = await tx.container.findUnique({ where: { iso: code } });
+        if (!unit || unit.depotId !== depotId) throw new NotFoundException("Ese equipo no está en este almacén.");
+        if (!unit.lado) throw new BadRequestException("Ese equipo no tiene posición en el patio.");
+        const onAisle = unit.lado === AISLE_SIDE;
+        if (!onAisle && unit.ruma && unit.columna && unit.nivel) {
+          const zone = plan.zones.find((item) => item.name === unit.lado);
+          const others = await tx.container.findMany({
+            where: { depotId, lado: unit.lado, ruma: unit.ruma, columna: unit.columna, archivedAt: null },
+            select: { iso: true, lado: true, ruma: true, columna: true, nivel: true },
+          });
+          const stacked = others
+            .filter((item) => item.iso !== unit.iso && item.nivel)
+            .map((item) => ({ zoneName: unit.lado || "", row: unit.ruma || 0, col: unit.columna || 0, level: item.nivel || 0, iso: item.iso }));
+          const above = zone
+            ? movesAbove(plan.zones, plan.ghosts, stacked, unit.lado || "", unit.ruma, unit.columna, unit.nivel, unit.iso)
+            : stacked.filter((item) => item.level > (unit.nivel || 0)).length;
+          if (above) throw new ConflictException("Hay equipos encima. Muévelos antes de sacar este.");
+        }
+        const fromLabel = posLabel(unit);
+        await tx.containerPosition.updateMany({
+          where: { iso: unit.iso, closedAt: null },
+          data: { closedAt: new Date() },
+        });
+        await tx.container.update({
+          where: { iso: unit.iso },
+          data: { lado: nextSide, ruma: null, columna: null, nivel: null },
+        });
+        const remaining = await tx.container.findMany({
+          where: { depotId, lado: { not: null }, archivedAt: null },
+          select: { iso: true, lado: true, ruma: true, columna: true, nivel: true },
+        });
+        const stacked = remaining
+          .filter((item) => item.lado && item.lado !== AISLE_SIDE && item.ruma && item.columna && item.nivel)
+          .map((item) => ({ zoneName: item.lado || "", row: item.ruma || 0, col: item.columna || 0, level: item.nivel || 0, iso: item.iso }));
+        await tx.appSetting.upsert({
+          where: { key: yardPlanKey(depotId) },
+          update: { value: { ...plan, ghosts: ghostsWithSupport(plan.zones, plan.ghosts, stacked) } },
+          create: { key: yardPlanKey(depotId), value: { ...plan, ghosts: ghostsWithSupport(plan.zones, plan.ghosts, stacked) } },
+        });
+        const detail = nextSide
+          ? `Quedó en el pasillo, en el suelo, a la espera de un lugar. Salía de ${fromLabel}.`
+          : `Devuelto a sin posición. Salía de ${fromLabel}.`;
+        await tx.containerHistory.create({ data: { iso: unit.iso, type: "Movimiento", detail } });
+        return { ok: true, message: detail };
+      });
+      await this.audit.log({
+        user,
+        action: nextSide ? "aisle" : "release",
+        entity: "Container",
+        entityId: code,
+        after: { depotId, lado: nextSide },
         ip,
       });
       return out;

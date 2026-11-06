@@ -40,5 +40,8 @@ export async function retrievalByIso(prisma: PrismaService, rows: YardRow[], pol
       result.set(unit.iso, retrievalReference(moves, active));
     }
   }
+  for (const row of rows) {
+    if (row.lado === "PASILLO") result.set(row.iso, retrievalReference(0, active));
+  }
   return { policy: active, byIso: result };
 }

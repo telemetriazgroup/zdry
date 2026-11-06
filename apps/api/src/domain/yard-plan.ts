@@ -208,6 +208,39 @@ export function movesAbove(
   return units + unknown;
 }
 
+export const AISLE_SIDE = "PASILLO";
+
+export function feetOf(type?: string | null): number {
+  const code = String(type || "").toUpperCase();
+  if (code.startsWith("45")) return 45;
+  if (code.startsWith("40")) return 40;
+  if (code.startsWith("20")) return 20;
+  return 0;
+}
+
+/** Un equipo más largo no puede apoyarse en uno más corto. Un 20 sí puede ir sobre un 40. */
+export function stackLengthError(
+  zone: YardZone,
+  ghosts: YardGhost[],
+  stacked: Array<StackCell & { type?: string }>,
+  incomingType: string | null | undefined,
+  row: number,
+  col: number,
+  level: number,
+): string {
+  const incoming = feetOf(incomingType);
+  if (level <= 1 || incoming <= 0) return "";
+  for (let cursor = level - 1; cursor >= 1; cursor -= 1) {
+    const unit = stacked.find((cell) => cell.zoneName === zone.name && cell.row === row && cell.col === col && cell.level === cursor);
+    const ghost = ghosts.find((item) => item.zoneId === zone.id && item.row === row && item.col === col && item.level === cursor);
+    const feet = feetOf(unit?.type || ghost?.typeCode);
+    if (feet > 0 && incoming > feet) {
+      return `Un equipo de ${incoming} pies no puede ir encima de uno de ${feet} pies.`;
+    }
+  }
+  return "";
+}
+
 export function zoneSlotError(zone: YardZone, row: number, col: number, level: number) {
   if (row < 1 || row > zone.rows) return `La fila ${row} no existe en ${zone.name}.`;
   if (col < 1 || col > zone.cols) return `La columna ${col} no existe en ${zone.name}.`;

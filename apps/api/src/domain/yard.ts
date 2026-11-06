@@ -216,6 +216,7 @@ export function bestSlotFor(
 }
 
 export function posLabel(c: { lado?: string | null; ruma?: number | null; columna?: number | null; nivel?: number | null }): string {
+  if (c.lado === "PASILLO") return "Pasillo · en el suelo";
   return c.lado
     ? `Lado ${c.lado} · Ruma ${c.ruma} · Columna ${c.columna} · Nivel ${c.nivel}`
     : "Sin posición asignada";

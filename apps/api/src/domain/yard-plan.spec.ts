@@ -1,4 +1,4 @@
-import { defaultYardPlan, ghostsWithSupport, leftToCustomer, movesAbove, normalizeYardPlan, zoneSlotError } from "./yard-plan";
+import { defaultYardPlan, ghostsWithSupport, leftToCustomer, movesAbove, normalizeYardPlan, stackLengthError, zoneSlotError } from "./yard-plan";
 
 describe("yard plan", () => {
   it("arranca con una zona 3×4 de altura 5 y un pasillo", () => {
@@ -63,6 +63,16 @@ describe("yard plan", () => {
     ];
     const stacked = ghostsWithSupport(zones, ghosts, buried).filter((ghost) => ghost.level !== 2);
     expect(movesAbove(zones, stacked, buried, "Zona B", 3, 3, 2, "HHXU3465956")).toBe(3);
+  });
+
+  it("deja un 20 sobre un 40 y rechaza un 40 sobre un 20", () => {
+    const zone = { id: "b", name: "Zona B", rows: 4, cols: 3, levels: 5, gridRow: 1, gridCol: 2 };
+    const twenty = [{ zoneName: "Zona B", row: 1, col: 1, level: 1, type: "20DC" }];
+    const forty = [{ zoneName: "Zona B", row: 1, col: 2, level: 1, type: "40HC" }];
+    expect(stackLengthError(zone, [], twenty, "40HC", 1, 1, 2)).toContain("40 pies");
+    expect(stackLengthError(zone, [], forty, "20DC", 1, 2, 2)).toBe("");
+    expect(stackLengthError(zone, [{ zoneId: "b", row: 1, col: 3, level: 1 }], [], "40HC", 1, 3, 2)).toBe("");
+    expect(stackLengthError(zone, [{ zoneId: "b", row: 1, col: 1, level: 2 }], twenty, "40HC", 1, 1, 3)).toContain("20 pies");
   });
 
   it("separa lo que salió al cliente de lo que sigue a la mano", () => {
