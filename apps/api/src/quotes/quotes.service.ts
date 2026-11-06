@@ -75,12 +75,14 @@ import {
 import {
   FREIGHT_ZONES,
   FREIGHT_VEHICLE_LABELS,
-  FREE_MOVES,
-  MOVEMENT_RATE,
   freightConsolidatedEstimate,
   normalizeDispatchPlace,
+  readMovementPolicy,
   referentialFreightSnapshot,
+  retrievalReference,
+  type MovementPolicy,
 } from "../domain/freight-stub";
+import { retrievalByIso } from "../domain/yard-retrieval";
 import { buildQuotePdf } from "../domain/quote-pdf";
 import { extForMime, sniffPurchaseDocMime } from "../domain/purchase-docs";
 import {
@@ -320,6 +322,18 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  private retrievalFields(row: ReturnType<typeof retrievalReference> | undefined, placed: boolean, policy?: MovementPolicy) {
+    const base = row || retrievalReference(0, policy);
+    return {
+      placedInYard: placed,
+      movesToRetrieve: placed ? base.moves : 0,
+      retrievalExtraMoves: placed ? base.extraMoves : 0,
+      retrievalRate: base.rate,
+      retrievalFreeMoves: base.freeMoves,
+      retrievalReference: placed ? base.reference : 0,
+    };
+  }
+
   async catalogList(query: {
     q?: string;
     type?: string;
@@ -374,6 +388,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       this.loadAcquisitionRefs(),
     ]);
 
+    const retrieval = commercial ? await retrievalByIso(this.prisma, rows) : null;
     const items = [];
     for (const c of rows) {
       const prices = await this.ensureUnitPrices(c.iso, pricing, acquisition);
@@ -410,6 +425,17 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         margin: commercial ? Math.round(prices.priceList - prices.priceMin) : null,
         igv: showPrice ? igvOf(prices.priceList) : null,
         gross: showPrice ? grossOf(prices.priceList) : null,
+        ...(commercial
+          ? (() => {
+              const fields = this.retrievalFields(retrieval?.byIso.get(c.iso), Boolean(c.lado), retrieval?.policy);
+              const extra = fields.retrievalReference;
+              return {
+                ...fields,
+                priceList: prices.priceList + extra,
+                priceMin: prices.priceMin + extra,
+              };
+            })()
+          : {}),
         ...publicMediaFields(c),
       });
     }
@@ -488,6 +514,9 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       this.loadAcquisitionRefs(),
     ]);
     const prices = await this.ensureUnitPrices(c.iso, pricing, acquisition);
+    const retrieval = await retrievalByIso(this.prisma, [c]);
+    const fields = this.retrievalFields(retrieval.byIso.get(c.iso), Boolean(c.lado), retrieval.policy);
+    const extra = fields.retrievalReference;
     return {
       iso: c.iso,
       type: c.type,
@@ -506,9 +535,10 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       depotName: c.depot.name,
       depotCity: c.depot.city,
       status: c.status,
-      priceList: prices.priceList,
-      priceMin: prices.priceMin,
+      priceList: prices.priceList + extra,
+      priceMin: prices.priceMin + extra,
       margin: Math.round(prices.priceList - prices.priceMin),
+      ...fields,
       odooDescription: c.odooDescription || "",
       inspectionNotes: publicCatalogNotes(c.inspectionNotes),
       ...publicMediaFields(c),
@@ -1393,8 +1423,10 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Informa movimientos después de validar el pago.");
     }
     const m = Math.max(0, Math.floor(Number(moves) || 0));
+    const policy = await readMovementPolicy(this.prisma);
+    const priced = retrievalReference(m, policy);
     const canWaive = waive && (user.role === "admin" || user.role === "gerente" || user.role === "superadmin");
-    const amount = canWaive ? 0 : Math.max(0, m - FREE_MOVES) * MOVEMENT_RATE;
+    const amount = canWaive ? 0 : priced.reference;
     await this.prisma.quoteExtra.deleteMany({ where: { quoteId: id, kind: "movement" } });
     await this.prisma.quoteExtra.create({
       data: {
@@ -1402,12 +1434,12 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         kind: "movement",
         label: canWaive
           ? `Movimientos de patio (${m}) — exonerados`
-          : m <= FREE_MOVES
-            ? `Movimientos de patio (${m}) — cubiertos (3 libres)`
-            : `Movimientos de patio extra (${m - FREE_MOVES} × $${MOVEMENT_RATE})`,
+          : m <= policy.freeMoves
+            ? `Movimientos de patio (${m}) — cubiertos (${policy.freeMoves} libres)`
+            : `Movimientos de patio extra (${priced.extraMoves} × $${policy.rate})`,
         amount,
         accepted: amount === 0,
-        meta: { moves: m, free: FREE_MOVES, rate: MOVEMENT_RATE, waived: canWaive },
+        meta: { moves: m, free: policy.freeMoves, rate: policy.rate, waived: canWaive },
       },
     });
     await this.prisma.quote.update({
@@ -1573,8 +1605,9 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     const moves = movement && typeof movement.meta === "object" && movement.meta && "moves" in movement.meta
       ? Number((movement.meta as { moves?: number }).moves) || 0
       : 0;
-    if (moves > FREE_MOVES && !q.movementInformed && !q.movementWaived) {
-      throw new UnprocessableEntityException("Debes informar los movimientos de patio (más de 3) antes de programar el despacho.");
+    const movementPolicy = await readMovementPolicy(this.prisma);
+    if (moves > movementPolicy.freeMoves && !q.movementInformed && !q.movementWaived) {
+      throw new UnprocessableEntityException(`Debes informar los movimientos de patio (más de ${movementPolicy.freeMoves}) antes de programar el despacho.`);
     }
     if (!q.movementInformed && !q.movementWaived) {
       throw new UnprocessableEntityException("Informa los movimientos de patio (aunque sean 0) antes de programar.");

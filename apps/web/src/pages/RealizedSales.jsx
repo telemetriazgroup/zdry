@@ -4,6 +4,17 @@ import { api } from "../api.js";
 
 const PAGE_SIZE = 10;
 
+function currentMonth() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function monthLabel(value) {
+  const [year, month] = String(value || "").split("-");
+  if (!year || !month) return value;
+  return new Date(Number(year), Number(month) - 1, 1).toLocaleDateString("es-PE", { month: "long", year: "numeric" });
+}
+
 const TRACE_LABEL = {
   picking_in: "Entrada",
   transfer: "Traslado",
@@ -295,6 +306,7 @@ export default function RealizedSales({ embedded = false }) {
   const [openIso, setOpenIso] = useState("");
   const [dealName, setDealName] = useState("");
   const [sort, setSort] = useState({ key: "date", dir: "desc" });
+  const [month, setMonth] = useState(currentMonth);
 
   function load() {
     return api("/warehouse/realized-sales")
@@ -324,18 +336,23 @@ export default function RealizedSales({ embedded = false }) {
 
   const summary = data?.summary || {};
   const rows = data?.rows || [];
+  const months = useMemo(() => {
+    const found = new Set(rows.map((row) => String(row.date || "").slice(0, 7)).filter((value) => /^\d{4}-\d{2}$/.test(value)));
+    found.add(currentMonth());
+    return [...found].sort().reverse();
+  }, [rows]);
   const visible = useMemo(() => {
     const needle = q.trim().toUpperCase();
-    const filtered = !needle
-      ? rows
-      : rows.filter((row) =>
-        [row.iso, row.type, row.typeLabel, row.cat, row.catLabel, row.saleName, row.customer, row.origin, row.outName, ...(row.history || []).map((item) => item.saleName)]
-          .join(" ")
-          .toUpperCase()
-          .includes(needle),
-      );
+    const filtered = rows.filter((row) => {
+      if (month && !String(row.date || "").startsWith(month)) return false;
+      if (!needle) return true;
+      return [row.iso, row.type, row.typeLabel, row.cat, row.catLabel, row.saleName, row.customer, row.origin, row.outName, ...(row.history || []).map((item) => item.saleName)]
+        .join(" ")
+        .toUpperCase()
+        .includes(needle);
+    });
     return [...filtered].sort((a, b) => compareSales(a, b, sort.key, sort.dir) || a.iso.localeCompare(b.iso));
-  }, [rows, q, sort]);
+  }, [rows, q, sort, month]);
 
   const pages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const safePage = Math.min(page, pages);
@@ -345,7 +362,7 @@ export default function RealizedSales({ embedded = false }) {
 
   useEffect(() => {
     setPage(1);
-  }, [q, sort]);
+  }, [q, sort, month]);
 
   function toggleSort(key) {
     setSort((current) => {
@@ -411,6 +428,13 @@ export default function RealizedSales({ embedded = false }) {
               <p className="section-sub">En los últimos 7 días no hay ventas de dry con comercial en la cotización.</p>
             )}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <label className="odoo-filter">
+                Mes
+                <select value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Mes de salidas a cliente">
+                  <option value="">Todos los meses</option>
+                  {months.map((value) => <option key={value} value={value}>{monthLabel(value)}</option>)}
+                </select>
+              </label>
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}

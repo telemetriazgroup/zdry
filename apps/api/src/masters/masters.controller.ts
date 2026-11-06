@@ -19,6 +19,11 @@ import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
 import { masterListWhere } from "../domain/masters";
 import { ACQUISITION_REFS_KEY, normalizeAcquisitionRefs, normalizeSafetyMarginRules, SAFETY_MARGIN_KEY } from "../domain/pricing";
+import {
+  MOVEMENT_POLICY_KEY,
+  normalizeMovementPolicy,
+  readMovementPolicy,
+} from "../domain/freight-stub";
 import { mergeDimensionError, parseTypeMerge, retargetTypeRows } from "../domain/type-merge";
 import { refreshRulePrices } from "../odoo-import/acquisition-overlay.store";
 
@@ -28,6 +33,41 @@ export class MastersController {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
   ) {}
+
+  @Get("movement")
+  @Roles("admin")
+  movementPolicy() {
+    return readMovementPolicy(this.prisma);
+  }
+
+  @Put("movement")
+  @Roles("admin")
+  async saveMovementPolicy(
+    @Body() body: { freeMoves?: number; rate?: number },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const before = await readMovementPolicy(this.prisma);
+    const value = normalizeMovementPolicy({
+      freeMoves: body.freeMoves ?? before.freeMoves,
+      rate: body.rate ?? before.rate,
+    });
+    await this.prisma.appSetting.upsert({
+      where: { key: MOVEMENT_POLICY_KEY },
+      create: { key: MOVEMENT_POLICY_KEY, value },
+      update: { value },
+    });
+    await this.audit.log({
+      user,
+      action: "update",
+      entity: "AppSetting",
+      entityId: MOVEMENT_POLICY_KEY,
+      before,
+      after: value,
+      ip: req.ip,
+    });
+    return value;
+  }
 
   @Get("types")
   async types(@Query("includeArchived") includeArchived?: string) {

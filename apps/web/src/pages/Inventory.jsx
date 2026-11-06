@@ -22,6 +22,7 @@ export default function Inventory() {
   const [filterCat, setFilterCat] = useState("");
   const [filterDepot, setFilterDepot] = useState("");
   const [q, setQ] = useState("");
+  const [showLeft, setShowLeft] = useState(false);
   const canRecalc = hasRole(user, "admin", "gerente");
   const { notify, toastNode } = useNotice();
 
@@ -88,7 +89,10 @@ export default function Inventory() {
   const typeOptions = useMemo(() => [...new Set(rows.map((r) => r.type).filter(Boolean))].sort(), [rows]);
   const catOptions = useMemo(() => [...new Set(rows.map((r) => r.cat).filter(Boolean))].sort(), [rows]);
   const depotOptions = useMemo(() => [...new Set(rows.map((r) => r.depot).filter(Boolean))].sort(), [rows]);
+  const leftToCustomer = (status) => status === "Vendido" || status === "Alquilado" || status === "Retirado por cliente";
+  const leftCount = rows.filter((r) => leftToCustomer(r.status)).length;
   const visible = rows.filter((r) => {
+    if (!showLeft && leftToCustomer(r.status)) return false;
     if (filterType && r.type !== filterType) return false;
     if (filterCat && r.cat !== filterCat) return false;
     if (filterDepot && r.depot !== filterDepot) return false;
@@ -205,10 +209,15 @@ export default function Inventory() {
             <option value="">Depósito</option>
             {depotOptions.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
+          <label className="odoo-filter">
+            <input type="checkbox" checked={showLeft} onChange={(e) => setShowLeft(e.target.checked)} />
+            Ver salidas a cliente ({leftCount})
+          </label>
           <button className="btn-ghost" type="button" disabled={!visible.length} onClick={downloadInventory}>
             Descargar{visible.length !== rows.length ? ` (${visible.length})` : ""}
           </button>
         </div>
+        <p className="section-sub">{showLeft ? `Lista completa: ${visible.length}.` : `A la mano: ${visible.length}. ${leftCount} salida(s) a cliente quedan fuera hasta marcar la casilla.`}</p>
         <div className="tablewrap">
           <table className="data">
             <thead>

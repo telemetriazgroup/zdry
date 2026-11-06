@@ -23,6 +23,17 @@ function saleFloor(list, maxDiscountPct) {
   return Math.round(net * (1 - pct / 100));
 }
 
+function yardExtra(row) {
+  return Math.max(0, Math.round(Number(row?.retrievalReference) || 0));
+}
+
+function withYard(amount, extra) {
+  if (amount == null || amount === "") return null;
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n) + extra;
+}
+
 const PAGE_SIZE = 10;
 
 const GRADES = [
@@ -892,6 +903,7 @@ export default function CatalogMedia() {
                   <th>Costo base</th>
                   <th>Extras</th>
                   <th>Venta sug.</th>
+                  <th>Movimientos</th>
                   <th>Rango venta</th>
                   <th>Precio</th>
                   <th>Precio público</th>
@@ -935,8 +947,12 @@ export default function CatalogMedia() {
                       {r.overlayTotal ? usd(r.overlayTotal) : "—"}
                     </td>
                     <td title={`Cálculo de la regla: ${usd(r.suggestedMin)}–${usd(r.suggestedList)}`}>{usd(r.suggestedList)}</td>
-                    <td title={`Regla ${usd(r.suggestedMin)}–${usd(r.suggestedList)}. El mínimo aplica el descuento máximo sobre el precio a publicar.`}>
-                      {usd(r.priceMin)}–{usd(r.priceList)}
+                    <td title={yardExtra(r) ? `${r.retrievalExtraMoves} con cargo × ${usd(r.retrievalRate)} después de ${r.retrievalFreeMoves} libres` : `${r.retrievalFreeMoves ?? 3} movimientos van libres`}>
+                      {r.movesToRetrieve == null ? "Sin patio" : r.movesToRetrieve === 0 ? "En la cima" : `${r.movesToRetrieve} mov.`}
+                      {yardExtra(r) ? <div className="muted">+{usd(yardExtra(r))}</div> : null}
+                    </td>
+                    <td title={`Regla ${usd(r.suggestedMin)}–${usd(r.suggestedList)}. El cargo de movimientos sube el mínimo y el máximo en el mismo monto.`}>
+                      {usd(withYard(r.priceMin, yardExtra(r)))}–{usd(withYard(r.priceList, yardExtra(r)))}
                     </td>
                     <td onClick={(e) => e.stopPropagation()}>
                       {canPrice ? (
@@ -1146,6 +1162,13 @@ export default function CatalogMedia() {
                   </li>
                   <li>Regla de precio {offer.marginPct}% sobre el costo base → venta sugerida {usd(offer.suggestedList)}</li>
                   <li>Descuento máximo {offer.maxDiscountPct}% sobre la venta sugerida → piso de la regla {usd(offer.suggestedMin)}</li>
+                  <li>
+                    {offer.movesToRetrieve == null
+                      ? "Sin posición en el patio: el rango no suma movimientos."
+                      : offer.movesToRetrieve === 0
+                        ? "Está en la cima. Se saca sin movimientos."
+                        : `Para sacarlo: ${offer.movesToRetrieve} movimientos. ${offer.retrievalFreeMoves} van libres${yardExtra(offer) ? `; ${offer.retrievalExtraMoves} × ${usd(offer.retrievalRate)} = ${usd(yardExtra(offer))}. Ese cargo sube el mínimo y el máximo.` : ". Entran en los libres, sin cargo."}`}
+                  </li>
                 </ul>
                 <p className="section-sub">{offer.visibilityLabel}</p>
                 {offer.outdated ? (
@@ -1158,7 +1181,7 @@ export default function CatalogMedia() {
                   <div className="offer-kpi"><span>Margen seg.</span><b>{offer.safetyPct ? `${offer.safetyPct}%` : "—"}</b></div>
                   <div className="offer-kpi"><span>Costo base</span><b>{usd(offer.securedBase ?? offer.base)}</b></div>
                   <div className="offer-kpi"><span>Venta sugerida</span><b>{usd(offer.suggestedList)}</b></div>
-                  <div className="offer-kpi"><span>Rango de la regla</span><b>{usd(offer.suggestedMin)}–{usd(offer.suggestedList)}</b></div>
+                  <div className="offer-kpi"><span>{yardExtra(offer) ? "Rango con patio" : "Rango de la regla"}</span><b>{usd(withYard(offer.suggestedMin, yardExtra(offer)))}–{usd(withYard(offer.suggestedList, yardExtra(offer)))}</b></div>
                 </div>
                 <div className="form-grid">
                   <div>
@@ -1184,15 +1207,19 @@ export default function CatalogMedia() {
                 </div>
                 {(() => {
                   const list = Number(priceNet);
+                  const extra = yardExtra(offer);
                   const floor = saleFloor(list, offer.maxDiscountPct);
+                  const protectedFloor = floor == null ? null : floor + extra;
+                  const protectedTop = Number.isFinite(list) ? Math.round(list) + extra : null;
                   const ruleList = Math.round(Number(offer.suggestedList) || 0);
                   const changed = Number.isFinite(list) && Math.round(list) !== ruleList;
                   return (
                     <div className="commercial-range">
                       <b>Así lo verá el comercial</b>
                       <p>
-                        Precio de lista {usd(list)}. Con el descuento máximo {offer.maxDiscountPct}% puede bajar hasta {usd(floor)}.
-                        Rango de venta {usd(floor)}–{usd(list)}.
+                        Neto guardado {usd(list)}. Con el descuento máximo {offer.maxDiscountPct}% el piso de la regla es {usd(floor)}.
+                        Rango de venta {usd(protectedFloor)}–{usd(protectedTop)}.
+                        {extra ? ` Incluye ${usd(extra)} por movimientos de patio, sumado al mínimo y al máximo. Ese cargo no se vuelve a escribir en el precio guardado.` : ""}
                         {changed ? ` La regla sigue en ${usd(offer.suggestedMin)}–${usd(offer.suggestedList)}.` : " Coincide con el cálculo de la regla."}
                       </p>
                     </div>

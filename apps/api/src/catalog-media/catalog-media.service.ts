@@ -37,6 +37,7 @@ import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom, refreshRulePrices } from "../odoo-import/acquisition-overlay.store";
 import { DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
 import { catalogPublishBlock, isPendingValuation } from "../domain/odoo-reconcile";
+import { retrievalByIso } from "../domain/yard-retrieval";
 
 const ACTIVE_PHOTOS = { where: { status: PHOTO_STATUS_ACTIVE } };
 export const WATERMARK_KEY = "catalog_watermark";
@@ -134,6 +135,7 @@ export class CatalogMediaService {
       if (cand.odooLotId != null) candByLot.set(cand.odooLotId, ref);
     }
     const odooLocked = await this.odooLinks.viewerLocked();
+    const retrieval = await retrievalByIso(this.prisma, rows);
     return rows.map((c) => {
       const active = c.photos.filter((p) => p.status === PHOTO_STATUS_ACTIVE);
       const rejected = c.photos.filter((p) => p.status === PHOTO_STATUS_REJECTED);
@@ -207,6 +209,11 @@ export class CatalogMediaService {
         priceList: offer.priceList,
         priceMin: offer.priceMin,
         priceSource: offer.source,
+        movesToRetrieve: retrieval.byIso.get(c.iso)?.moves ?? null,
+        retrievalExtraMoves: retrieval.byIso.get(c.iso)?.extraMoves ?? 0,
+        retrievalFreeMoves: retrieval.policy.freeMoves,
+        retrievalRate: retrieval.policy.rate,
+        retrievalReference: retrieval.byIso.get(c.iso)?.reference ?? 0,
         awaitingReconcile: isPendingValuation(c),
         leftCustomer: c.status === "Vendido" || !!c.gateOut || c.commercialStatus === "vendido",
         publishBlock: catalogPublishBlock(c),
@@ -764,9 +771,16 @@ export class CatalogMediaService {
       orderBy: { createdAt: "desc" },
       take: 20,
     });
+    const retrieval = await retrievalByIso(this.prisma, [c]);
+    const access = retrieval.byIso.get(c.iso);
     const odooLocked = await this.odooLinks.viewerLocked();
     return {
       ...offer,
+      movesToRetrieve: access?.moves ?? null,
+      retrievalExtraMoves: access?.extraMoves ?? 0,
+      retrievalFreeMoves: retrieval.policy.freeMoves,
+      retrievalRate: retrieval.policy.rate,
+      retrievalReference: access?.reference ?? 0,
       odooLocked,
       rawBase: odooLocked ? null : offer.rawBase,
       base: odooLocked ? null : offer.base,

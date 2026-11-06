@@ -109,3 +109,40 @@ export function detectZoneFromText(text: string): FreightZone | null {
 
 export const FREE_MOVES = 3;
 export const MOVEMENT_RATE = 25;
+export const MOVEMENT_POLICY_KEY = "yard_movement";
+
+export type MovementPolicy = { freeMoves: number; rate: number };
+
+export const DEFAULT_MOVEMENT_POLICY: MovementPolicy = { freeMoves: FREE_MOVES, rate: MOVEMENT_RATE };
+
+export function normalizeMovementPolicy(value: unknown): MovementPolicy {
+  const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const freeRaw = Number(raw.freeMoves);
+  const rateRaw = Number(raw.rate);
+  return {
+    freeMoves: Number.isFinite(freeRaw) ? Math.max(0, Math.min(30, Math.floor(freeRaw))) : FREE_MOVES,
+    rate: Number.isFinite(rateRaw) ? Math.max(0, Math.min(10000, Math.round(rateRaw))) : MOVEMENT_RATE,
+  };
+}
+
+export async function readMovementPolicy(db: {
+  appSetting: { findUnique(args: { where: { key: string } }): Promise<{ value: unknown } | null> };
+}): Promise<MovementPolicy> {
+  const row = await db.appSetting.findUnique({ where: { key: MOVEMENT_POLICY_KEY } });
+  return normalizeMovementPolicy(row?.value);
+}
+
+/** Cargo para sacar la unidad. Los primeros movimientos libres no suman; el resto sí, al mínimo y al máximo. */
+export function retrievalReference(moves: number, policy: MovementPolicy = DEFAULT_MOVEMENT_POLICY) {
+  const count = Math.max(0, Math.floor(Number(moves) || 0));
+  const freeMoves = Math.max(0, Math.floor(Number(policy?.freeMoves) || 0));
+  const rate = Math.max(0, Math.round(Number(policy?.rate) || 0));
+  const extraMoves = Math.max(0, count - freeMoves);
+  return {
+    moves: count,
+    freeMoves,
+    rate,
+    extraMoves,
+    reference: extraMoves * rate,
+  };
+}

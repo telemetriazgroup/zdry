@@ -34,18 +34,21 @@ export default function Masters() {
   const [editingCat, setEditingCat] = useState(null);
   const [mergeKeep, setMergeKeep] = useState("");
   const [mergeAbsorb, setMergeAbsorb] = useState("");
+  const [movement, setMovement] = useState({ freeMoves: "3", rate: "25" });
 
   const q = showArchived ? "?includeArchived=1" : "";
 
   async function load() {
-    const [t, c, d] = await Promise.all([
+    const [t, c, d, move] = await Promise.all([
       api(`/masters/types${q}`),
       api(`/masters/categories${q}`),
       api(`/masters/depots${q}`),
+      api("/masters/movement").catch(() => null),
     ]);
     setTypes(t);
     setCats(c);
     setDepots(d);
+    if (move) setMovement({ freeMoves: String(move.freeMoves ?? 3), rate: String(move.rate ?? 25) });
   }
 
   useEffect(() => { load().catch((e) => setError(e.message)); }, [showArchived]);
@@ -170,6 +173,21 @@ export default function Masters() {
     setTypeForm({ code: t.code, label: t.label, dims: t.dims, color: t.color });
   }
 
+  async function saveMovement(e) {
+    e.preventDefault();
+    setError("");
+    try {
+      const saved = await api("/masters/movement", {
+        method: "PUT",
+        body: { freeMoves: Number(movement.freeMoves), rate: Number(movement.rate) },
+      });
+      setMovement({ freeMoves: String(saved.freeMoves), rate: String(saved.rate) });
+      flash("Costo de movimientos guardado. El rango del catálogo usa esta regla.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : err.message);
+    }
+  }
+
   function editCat(c) {
     setEditingCat(c.code);
     setCatForm({ code: c.code, label: c.label, color: c.color });
@@ -179,7 +197,8 @@ export default function Masters() {
     <>
       <h2 className="section-title">Catálogos maestros</h2>
       <p className="section-sub">
-        Edita depósitos, tipos y condiciones. Nada se borra: archivar los oculta del catálogo y de las operaciones.
+        Edita depósitos, tipos, condiciones y el costo de movimientos del patio.
+        Nada se borra: archivar los oculta del catálogo y de las operaciones.
         El administrador puede ver los archivados y restaurarlos.
       </p>
       {error ? <div className="err">{error}</div> : null}
@@ -188,6 +207,7 @@ export default function Masters() {
         <button type="button" className={`subtab ${tab === "depots" ? "active" : ""}`} onClick={() => setTab("depots")}>Depósitos</button>
         <button type="button" className={`subtab ${tab === "types" ? "active" : ""}`} onClick={() => setTab("types")}>Tipos</button>
         <button type="button" className={`subtab ${tab === "cats" ? "active" : ""}`} onClick={() => setTab("cats")}>Condiciones</button>
+        <button type="button" className={`subtab ${tab === "moves" ? "active" : ""}`} onClick={() => setTab("moves")}>Movimientos</button>
         <label className="muted" style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
           <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
           Ver archivados
@@ -281,6 +301,26 @@ export default function Masters() {
             </tbody>
           </table>
           </div>
+        </div>
+      )}
+
+      {tab === "moves" && (
+        <div className="panel">
+          <p className="section-sub">
+            Regla de patio para sacar un dry. Los primeros movimientos no suman cargo.
+            Del siguiente en adelante, cada movimiento sube el mínimo y el máximo del rango de venta, en el mismo monto, para no comerse el margen.
+          </p>
+          <form className="form-grid" onSubmit={saveMovement}>
+            <div>
+              <label>Movimientos libres</label>
+              <input type="number" min="0" max="30" step="1" value={movement.freeMoves} onChange={(e) => setMovement({ ...movement, freeMoves: e.target.value })} required />
+            </div>
+            <div>
+              <label>USD por movimiento extra</label>
+              <input type="number" min="0" max="10000" step="1" value={movement.rate} onChange={(e) => setMovement({ ...movement, rate: e.target.value })} required />
+            </div>
+            <button className="btn-primary" type="submit">Guardar regla</button>
+          </form>
         </div>
       )}
 

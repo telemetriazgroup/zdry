@@ -58,13 +58,14 @@ import {
   inspectDataMissing,
   inspectMissing,
   intakeTypeLabel,
-  movesToRetrieve,
   needsYardPlacement,
   normalizeLayoutRules,
   placeSuccessMessage,
   posLabel,
   validateMove,
 } from "../domain/yard";
+import { ghostsWithSupport, movesAbove, normalizeYardPlan, zoneSlotError, type YardPlan } from "../domain/yard-plan";
+import { readMovementPolicy } from "../domain/freight-stub";
 import { PHOTO_STATUS_ACTIVE, PHOTO_STATUS_REJECTED } from "../domain/catalog-media";
 import { OdooClient } from "../odoo/odoo.client";
 import { limaDayRange, listOdooLotNotes } from "../odoo/odoo-lot-photos";
@@ -106,6 +107,7 @@ const CAMPO_ODOO_LOCKED = [
 ] as const;
 
 const LAYOUT_RULES_KEY = "layout_rules";
+const yardPlanKey = (depotId: string) => `yard_plan:${depotId}`;
 const YARD_CONFIG_KEY = "yard_config";
 const COLORS_KEY = "container_colors";
 const MANUFACTURERS_KEY = "container_manufacturers";
@@ -172,6 +174,95 @@ export class WarehouseService {
       ip,
     });
     return value;
+  }
+
+  async getYardPlan(depotId: string): Promise<YardPlan> {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: yardPlanKey(depotId) } });
+    return normalizeYardPlan(row?.value);
+  }
+
+  async saveYardPlan(depotId: string, input: unknown, user: AuthUser, ip?: string) {
+    const depot = await this.prisma.depot.findUnique({ where: { id: depotId } });
+    if (!depot) throw new NotFoundException("Depósito no encontrado.");
+    const value = normalizeYardPlan(input);
+    await this.prisma.appSetting.upsert({
+      where: { key: yardPlanKey(depotId) },
+      update: { value },
+      create: { key: yardPlanKey(depotId), value },
+    });
+    await this.audit.log({
+      user,
+      action: "update",
+      entity: "AppSetting",
+      entityId: yardPlanKey(depotId),
+      after: value as object,
+      ip,
+    });
+    return value;
+  }
+
+  async setYardGhost(
+    input: { depotId?: string; zoneId?: string; row?: number; col?: number; level?: number; occupied?: boolean; code?: string; typeCode?: string },
+    user: AuthUser,
+    ip?: string,
+  ) {
+    const depotId = input.depotId || "";
+    const plan = await this.getYardPlan(depotId);
+    const zone = plan.zones.find((item) => item.id === input.zoneId);
+    if (!zone) throw new BadRequestException("Esa zona no está en el plano.");
+    const row = Number(input.row);
+    const col = Number(input.col);
+    const level = Number(input.level);
+    const error = zoneSlotError(zone, row, col, level);
+    if (error) throw new BadRequestException(error);
+    const taken = await this.prisma.container.findFirst({
+      where: { depotId, lado: zone.name, ruma: row, columna: col, nivel: level, archivedAt: null },
+      select: { iso: true },
+    });
+    if (taken) throw new ConflictException(`${taken.iso} ya está identificado en esa posición.`);
+    if (input.occupied === false) {
+      const aboveUnit = await this.prisma.container.findFirst({
+        where: { depotId, lado: zone.name, ruma: row, columna: col, nivel: { gt: level }, archivedAt: null },
+        select: { iso: true },
+      });
+      const aboveGhost = plan.ghosts.some((ghost) => ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level > level);
+      if (aboveUnit || aboveGhost) {
+        throw new BadRequestException("Hay equipos encima. Identifica o mueve esos antes de liberar este hueco.");
+      }
+    }
+    const code = String(input.code || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 20);
+    if (code && input.occupied !== false) {
+      const existing = await this.prisma.container.findUnique({
+        where: { iso: code },
+        select: { iso: true, depotId: true, archivedAt: true },
+      });
+      if (existing && !existing.archivedAt) {
+        throw new ConflictException(
+          existing.depotId === depotId
+            ? "Ese código ya está en este almacén. Elígelo en la lista y tócalo en la celda."
+            : "Ese código ya existe en otro almacén.",
+        );
+      }
+    }
+    const ghosts = plan.ghosts.filter(
+      (ghost) => !(ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level === level),
+    );
+    if (input.occupied !== false) {
+      const typeCode = String(input.typeCode || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 12);
+      ghosts.push(code ? { zoneId: zone.id, row, col, level, code, typeCode } : { zoneId: zone.id, row, col, level });
+    }
+    const stacked = await this.prisma.container.findMany({
+      where: { depotId, lado: { not: null }, archivedAt: null },
+      select: { iso: true, lado: true, ruma: true, columna: true, nivel: true },
+    });
+    const supported = ghostsWithSupport(
+      plan.zones,
+      ghosts,
+      stacked
+        .filter((item) => item.lado && item.ruma && item.columna && item.nivel)
+        .map((item) => ({ zoneName: item.lado || "", row: item.ruma || 0, col: item.columna || 0, level: item.nivel || 0, iso: item.iso })),
+    );
+    return this.saveYardPlan(depotId, { ...plan, ghosts: supported }, user, ip);
   }
 
   async meta(user?: AuthUser) {
@@ -2065,6 +2156,11 @@ export class WarehouseService {
     ]);
     const typeMap = Object.fromEntries(types.map((t) => [t.code, t]));
     const catMap = Object.fromEntries(categories.map((c) => [c.code, c]));
+    const storedPlan = await this.getYardPlan(depotId);
+    const stacked = rows
+      .filter((item) => item.lado && item.ruma && item.columna && item.nivel)
+      .map((item) => ({ zoneName: item.lado || "", row: item.ruma || 0, col: item.columna || 0, level: item.nivel || 0, iso: item.iso }));
+    const plan = { ...storedPlan, ghosts: ghostsWithSupport(storedPlan.zones, storedPlan.ghosts, stacked) };
     const occupants = rows.filter((c) => c.lado).map(toYardUnit);
     const units = rows.map((c) => {
       const yu = toYardUnit(c);
@@ -2072,7 +2168,7 @@ export class WarehouseService {
         iso: c.iso,
         type: c.type,
         typeLabel: typeMap[c.type]?.label || c.type,
-        typeColor: typeMap[c.type]?.color || "#1971c2",
+        typeColor: typeMap[c.type]?.color || "#8a90a2",
         cat: c.cat,
         catLabel: catMap[c.cat]?.label || c.cat,
         catColor: catMap[c.cat]?.color || "#495057",
@@ -2094,7 +2190,9 @@ export class WarehouseService {
         committed: containerCommitted(c),
         needsPlacement: needsYardPlacement(c),
         posLabel: posLabel(c),
-        movesToRetrieve: movesToRetrieve(occupants, yu),
+        movesToRetrieve: c.lado
+          ? movesAbove(plan.zones, plan.ghosts, stacked, c.lado, c.ruma || 0, c.columna || 0, c.nivel || 0, c.iso)
+          : 0,
         demo: c.demo,
       };
     });
@@ -2105,6 +2203,8 @@ export class WarehouseService {
       types,
       categories,
       config: DEFAULT_YARD_CONFIG,
+      plan,
+      retrieval: await readMovementPolicy(this.prisma),
       rules,
       units,
       occupants: units.filter((u) => u.lado),
@@ -2125,7 +2225,7 @@ export class WarehouseService {
   }
 
   async place(
-    input: { iso?: string; depotId?: string; lado?: string; ruma?: number; columna?: number; nivel?: number },
+    input: { iso?: string; depotId?: string; lado?: string; ruma?: number; columna?: number; nivel?: number; regularize?: boolean },
     user: AuthUser,
     ip?: string,
   ) {
@@ -2138,8 +2238,14 @@ export class WarehouseService {
     if (!iso || !depotId || !lado || !ruma || !columna || !nivel) {
       throw new BadRequestException("iso, depotId, lado, ruma, columna y nivel son obligatorios.");
     }
-    if (!DEFAULT_YARD_CONFIG.lados.includes(lado as (typeof DEFAULT_YARD_CONFIG.lados)[number])) {
-      throw new BadRequestException("Lado inválido.");
+    const plan = await this.getYardPlan(depotId);
+    const zone = plan.zones.find((item) => item.name === lado);
+    if (!zone && !DEFAULT_YARD_CONFIG.lados.includes(lado as (typeof DEFAULT_YARD_CONFIG.lados)[number])) {
+      throw new BadRequestException("Esa zona no está en el plano de este almacén.");
+    }
+    if (zone && input.regularize) {
+      const fit = zoneSlotError(zone, ruma, columna, nivel);
+      if (fit) throw new BadRequestException(fit);
     }
     const depot = await this.prisma.depot.findUnique({ where: { id: depotId } });
     if (!depot) throw new BadRequestException("Depósito inválido.");
@@ -2156,18 +2262,25 @@ export class WarehouseService {
               where: { depotId, lado: { not: null } },
             })
           ).map(toYardUnit);
-          const result = validateMove(
-            occupants,
-            toYardUnit(unit),
-            depotId,
-            lado,
-            ruma,
-            columna,
-            nivel,
-            DEFAULT_YARD_CONFIG,
-            rules,
+          const taken = occupants.find(
+            (item) => item.iso !== unit.iso && item.lado === lado && item.ruma === ruma && item.columna === columna && item.nivel === nivel,
           );
-          if (!result.ok) throw new ConflictException(result.message);
+          if (zone && input.regularize) {
+            if (taken) throw new ConflictException(`${taken.iso} ya ocupa esa posición.`);
+          } else {
+            const result = validateMove(
+              occupants,
+              toYardUnit(unit),
+              depotId,
+              lado,
+              ruma,
+              columna,
+              nivel,
+              DEFAULT_YARD_CONFIG,
+              rules,
+            );
+            if (!result.ok) throw new ConflictException(result.message);
+          }
           const fromLabel = unit.lado ? posLabel(unit) : null;
           if (unit.lado) {
             await tx.containerPosition.updateMany({
@@ -2190,15 +2303,48 @@ export class WarehouseService {
           await tx.containerPosition.create({
             data: { iso: unit.iso, depotId, lado, ruma, columna, nivel },
           });
+          let accessNote = "";
+          if (zone && input.regularize) {
+            const cleared = plan.ghosts.filter(
+              (ghost) => !(ghost.zoneId === zone.id && ghost.row === ruma && ghost.col === columna && ghost.level === nivel),
+            );
+            const column = occupants
+              .filter((item) => item.iso !== unit.iso && item.lado && item.ruma && item.columna && item.nivel)
+              .map((item) => ({
+                zoneName: item.lado || "",
+                row: item.ruma || 0,
+                col: item.columna || 0,
+                level: item.nivel || 0,
+                iso: item.iso,
+              }));
+            column.push({ zoneName: lado, row: ruma, col: columna, level: nivel, iso: unit.iso });
+            const nextGhosts = ghostsWithSupport(plan.zones, cleared, column);
+            const above = movesAbove(plan.zones, nextGhosts, column, lado, ruma, columna, nivel, unit.iso);
+            accessNote = above
+              ? ` Para acceder hay que mover ${above} equipo(s) que están encima.`
+              : " Está en la cima de la ruma.";
+            await tx.appSetting.upsert({
+              where: { key: yardPlanKey(depotId) },
+              update: { value: { ...plan, ghosts: nextGhosts } },
+              create: { key: yardPlanKey(depotId), value: { ...plan, ghosts: nextGhosts } },
+            });
+          }
           await tx.containerHistory.create({
             data: {
               iso: unit.iso,
               type: "Movimiento",
               detail:
                 (fromLabel ? `Movida de ${fromLabel} a ` : "Posición asignada: ") +
-                `Lado ${lado} · Ruma ${ruma} · Columna ${columna} · Nivel ${nivel}.`,
+                `Lado ${lado} · Ruma ${ruma} · Columna ${columna} · Nivel ${nivel}.` +
+                accessNote,
             },
           });
+          if (zone && input.regularize) {
+            return {
+              ok: true,
+              message: placeSuccessMessage(unit.iso, lado, ruma, columna, nivel) + accessNote,
+            };
+          }
           return {
             ok: true,
             message: placeSuccessMessage(unit.iso, lado, ruma, columna, nivel),

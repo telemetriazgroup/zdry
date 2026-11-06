@@ -10,6 +10,24 @@ import { WarehouseService } from "./warehouse.service";
 export class YardController {
   constructor(private readonly warehouse: WarehouseService) {}
 
+  @Post("plan")
+  savePlan(
+    @Body() body: { depotId?: string; zones?: unknown; aisles?: unknown; ghosts?: unknown },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.saveYardPlan(body.depotId || "", body, user, req.ip);
+  }
+
+  @Post("ghost")
+  ghost(
+    @Body() body: { depotId?: string; zoneId?: string; row?: number; col?: number; level?: number; occupied?: boolean; code?: string; typeCode?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.setYardGhost(body, user, req.ip);
+  }
+
   @Post("place")
   place(
     @Body() body: { iso?: string; depotId?: string; lado?: string; ruma?: number; columna?: number; nivel?: number },

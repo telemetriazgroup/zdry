@@ -910,10 +910,17 @@ export default function Catalog() {
                   <span><b>{u.catLabel}</b></span>
                   {makerLine(u, clientView) ? <span>{makerLine(u, clientView)}</span> : null}
                   <span>{u.depotName}</span>
+                  {commercial && u.movesToRetrieve != null ? (
+                    <span>
+                      {u.placedInYard
+                        ? `Para sacar: ${u.movesToRetrieve} mov. · ref. ${money(u.retrievalReference)}`
+                        : "Sin posición en el patio"}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="card-footer">
                   {commercial ? (
-                    <div className="card-price">Lista {money(u.priceList)} <small>Mínimo {money(u.priceMin)} · margen {money(u.margin)}</small></div>
+                    <div className="card-price">Lista {money(u.priceList)} <small>Mínimo {money(u.priceMin)} · margen {money(u.margin)}{u.retrievalReference ? " · incluye movimientos" : ""}</small></div>
                   ) : u.showPrice ? (
                     <div className="card-price">{money(u.gross)} <small>oferta · IGV incl. · neto {money(u.priceList)}</small></div>
                   ) : (
@@ -1027,6 +1034,16 @@ export default function Catalog() {
                     {clientView ? null : <tr><td>Año</td><td>{pdp.year || "—"}</td></tr>}
                     <tr><td>Tara / MGW</td><td>{tareMgwLabel(pdp.tareKg, pdp.mgwKg)}</td></tr>
                     <tr><td>Color</td><td>{pdp.color}</td></tr>
+                    {commercial && pdp.movesToRetrieve != null ? (
+                      <tr>
+                        <td>Para sacar del patio</td>
+                        <td>
+                          {pdp.placedInYard
+                            ? `${pdp.movesToRetrieve} movimiento(s). Referencia ${money(pdp.retrievalReference)} (${pdp.retrievalExtraMoves} extra × ${money(pdp.retrievalRate)}, ${pdp.retrievalFreeMoves} libres).`
+                            : "Sin posición en el patio."}
+                        </td>
+                      </tr>
+                    ) : null}
                   </tbody>
                 </table>
                 {publicNotes(pdp.inspectionNotes) ? <p className="section-sub" style={{ marginTop: 10 }}>{publicNotes(pdp.inspectionNotes)}</p> : null}
@@ -1034,7 +1051,7 @@ export default function Catalog() {
                   {commercial ? (
                     <>
                       <div className="amt">{money(pdp.priceList)}</div>
-                      <div className="muted">Lista · mínimo {money(pdp.priceMin)} · margen para negociar {money(pdp.margin)}</div>
+                      <div className="muted">Lista · mínimo {money(pdp.priceMin)} · margen para negociar {money(pdp.margin)}{pdp.retrievalReference ? " · el rango ya incluye el cargo de movimientos" : ""}</div>
                     </>
                   ) : pdp.showPrice ? (
                     <>
