@@ -3320,7 +3320,9 @@ export class OdooImportService {
   }
 
   /** La venta cuyo texto trae el serial, cuando el OUT no dejó el nombre de la SO. */
-  private async salesForSerial(iso: string) {
+  private async salesForSerial(
+    iso: string,
+  ): Promise<Array<Record<string, unknown> & { lines: Record<string, unknown>[]; invoices: Record<string, unknown>[] }>> {
     const forms = serialSearchForms(iso);
     if (!forms.length) return [];
     const leaves = forms.flatMap((form) => [
