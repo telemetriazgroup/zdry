@@ -38,7 +38,7 @@ function allowed(nav, pathname, role) {
   if ((role === "admin" || role === "compras") && pathname.startsWith("/app/compras")) return true;
   if (role === "coordinador" && pathname.startsWith("/app/compras/conciliar")) return true;
   if ((role === "admin" || role === "coordinador") && pathname.startsWith("/app/almacen/recepcion")) return true;
-  if ((role === "admin" || role === "coordinador") && pathname.startsWith("/app/almacen/visitas")) return true;
+  if ((role === "admin" || role === "coordinador" || role === "almacen") && pathname.startsWith("/app/almacen/visitas")) return true;
   if ((role === "admin" || role === "almacen" || role === "coordinador") && (pathname.startsWith("/app/almacen/patio") || pathname.startsWith("/app/almacen/campo"))) return true;
   return nav.some((item) => (item.end ? pathname === item.to : pathname === item.to || pathname.startsWith(item.to + "/")));
 }

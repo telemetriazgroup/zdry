@@ -11,11 +11,14 @@ import { REDIS } from "../redis/redis.constants";
 import { PUBLIC_VISIT_LIMITS, type ClientOrigin, type PublicVisitAction } from "../domain/client-origin";
 import {
   canPublicEditVisit,
+  displayPlate,
   normalizePlate,
   parseMotive,
   visitIsLocked,
   visitPhotoStatus,
 } from "../domain/gate-visit";
+import { equipmentIsoWarning } from "../domain/driver-registry";
+import { DriverRegistryService } from "./driver-registry.service";
 import {
   extForInspectionMime,
   MAX_INSPECTION_PHOTO_BYTES,
@@ -34,6 +37,7 @@ export class GateVisitsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly storage: StorageService,
+    private readonly registry: DriverRegistryService,
     @Inject(REDIS) private readonly redis: Redis,
   ) {}
 
@@ -52,13 +56,22 @@ export class GateVisitsService {
       trailerPlate: row.trailerPlate,
       phone: row.phone,
       equipmentCode: row.equipmentCode,
+      isoWarning: equipmentIsoWarning(row.equipmentCode || ""),
       containerIso: row.containerIso,
       linkedAt: row.linkedAt,
       linkedByName: row.linkedByName,
+      publicCode: row.publicCode,
+      siteId: row.siteId,
+      siteName: row.siteName,
+      status: row.status,
+      observations: row.observations,
+      motiveDetail: row.motiveDetail,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
-      locked: visitIsLocked(row.linkedAt),
-      hasPhoto: photoStatus !== "none",
+      locked: visitIsLocked(row.status) || !!row.archivedAt,
+      editable: canPublicEditVisit(row.status) && !row.archivedAt,
+      hasPhoto: photoStatus === "visible",
+      photoArchived: photoStatus === "archived",
       photoStatus,
       photoName: row.unitPhotoName || null,
       photoApprovedBy: row.unitPhotoApprovedBy,
@@ -91,9 +104,10 @@ export class GateVisitsService {
     phone?: string;
     equipmentCode?: string;
   }) {
-    const tractorPlate = normalizePlate(body.tractorPlate || "");
+    const tractorPlate = displayPlate(body.tractorPlate || "") || normalizePlate(body.tractorPlate || "");
     if (tractorPlate.length < 3) throw new BadRequestException("Indica la placa del tracto.");
-    const motive = parseMotive(body.motive) || "descargar";
+    const named = String(body.motive || "").trim().slice(0, 160);
+    const motive = named || parseMotive(body.motive) || "descargar";
     return {
       tractorPlate,
       company: String(body.company || "").trim(),
@@ -102,9 +116,9 @@ export class GateVisitsService {
       visitAt: body.visitAt ? new Date(body.visitAt) : new Date(),
       license: String(body.license || "").trim(),
       motive,
-      trailerPlate: normalizePlate(body.trailerPlate || ""),
-      phone: String(body.phone || "").trim(),
-      equipmentCode: String(body.equipmentCode || "").trim().toUpperCase() || null,
+      trailerPlate: displayPlate(body.trailerPlate || ""),
+      phone: String(body.phone || "").replace(/\D/g, "").slice(0, 15),
+      equipmentCode: String(body.equipmentCode || "").trim().slice(0, 40) || null,
     };
   }
 
@@ -117,7 +131,7 @@ export class GateVisitsService {
       orderBy: { updatedAt: "desc" },
     });
     if (!row) return { found: false, tractorPlate, locked: false, visit: null };
-    return { found: true, tractorPlate, locked: visitIsLocked(row.linkedAt), visit: this.present(row) };
+    return { found: true, tractorPlate, locked: visitIsLocked(row.status), visit: this.present(row) };
   }
 
   async byToken(token: string) {
@@ -127,14 +141,18 @@ export class GateVisitsService {
     if (!row) throw new NotFoundException("Visita no encontrada.");
     return {
       found: true,
-      locked: visitIsLocked(row.linkedAt),
-      editable: canPublicEditVisit(row.linkedAt),
+      locked: visitIsLocked(row.status) || !!row.archivedAt,
+      editable: canPublicEditVisit(row.status) && !row.archivedAt,
       visit: this.present(row),
     };
   }
 
   async upsertPublic(
     body: {
+      publicToken?: string;
+      siteId?: string;
+      motiveId?: string;
+      motiveDetail?: string;
       tractorPlate?: string;
       company?: string;
       ruc?: string;
@@ -145,35 +163,47 @@ export class GateVisitsService {
       trailerPlate?: string;
       phone?: string;
       equipmentCode?: string;
+      observations?: string;
     },
     origin?: ClientOrigin,
   ) {
-    const data = this.visitFields(body);
-    if (origin) await this.guardPublic("submit", origin, { tractorPlate: data.tractorPlate });
-    const existing = await this.prisma.gateVisit.findFirst({
-      where: { tractorPlate: data.tractorPlate, archivedAt: null },
-      orderBy: { updatedAt: "desc" },
-    });
-    if (existing && !canPublicEditVisit(existing.linkedAt)) {
-      throw new ForbiddenException("Esta placa ya está vinculada a un contenedor. Solo el coordinador o el administrador pueden desvincular.");
-    }
+    const token = String(body.publicToken || "").trim();
+    if (token) return this.updatePublic(token, body, origin);
+    const data = await this.registry.resolvePublic(body);
+    if (origin) await this.guardPublic("submit", origin, { tractorPlate: normalizePlate(data.tractorPlate) });
+    const publicCode = await this.registry.nextCode();
     const originData = origin
       ? {
-          clientIp: existing?.clientIp || origin.ip,
+          clientIp: origin.ip,
           userAgent: origin.userAgent,
           referer: origin.referer,
           originHost: origin.originHost,
           acceptLanguage: origin.acceptLanguage,
           forwardedFor: origin.forwardedFor,
-          originMeta: {
-            first: existing?.originMeta || origin,
-            last: origin,
-          } as Prisma.InputJsonValue,
+          originMeta: { first: origin, last: origin } as Prisma.InputJsonValue,
         }
       : {};
-    const row = existing
-      ? await this.prisma.gateVisit.update({ where: { id: existing.id }, data: { ...data, ...originData } })
-      : await this.prisma.gateVisit.create({ data: { ...data, ...originData } });
+    const row = await this.prisma.gateVisit.create({
+      data: {
+        siteId: data.siteId,
+        siteName: data.siteName,
+        motive: data.motive,
+        motiveDetail: data.motiveDetail,
+        company: data.company,
+        ruc: data.ruc,
+        driverName: data.driverName,
+        license: data.license,
+        phone: data.phone,
+        tractorPlate: data.tractorPlate,
+        trailerPlate: data.trailerPlate,
+        equipmentCode: data.equipmentCode || null,
+        observations: data.observations,
+        publicCode,
+        status: "REGISTRADO",
+        visitAt: new Date(),
+        ...originData,
+      },
+    });
     if (origin) {
       await this.logAccess({
         action: "submit",
@@ -183,22 +213,73 @@ export class GateVisitsService {
         blocked: false,
       });
     }
-    return { ok: true, visit: this.present(row), saved: true, editable: !visitIsLocked(row.linkedAt) };
+    await this.registry.notifyRegistration(row.id);
+    const saved = await this.prisma.gateVisit.findUnique({ where: { id: row.id } });
+    return { ok: true, visit: this.present(saved || row), saved: true, editable: true };
   }
 
-  async list(filter: "pending" | "linked" | "all" | "archived" = "pending") {
-    const where: Prisma.GateVisitWhereInput =
-      filter === "archived"
+  private async updatePublic(
+    token: string,
+    body: {
+      siteId?: string;
+      motiveId?: string;
+      motiveDetail?: string;
+      tractorPlate?: string;
+      company?: string;
+      ruc?: string;
+      driverName?: string;
+      license?: string;
+      trailerPlate?: string;
+      phone?: string;
+      equipmentCode?: string;
+      observations?: string;
+    },
+    origin?: ClientOrigin,
+  ) {
+    const existing = await this.prisma.gateVisit.findUnique({ where: { publicToken: token } });
+    if (!existing) throw new NotFoundException("Visita no encontrada.");
+    if (!canPublicEditVisit(existing.status) || existing.archivedAt) {
+      throw new ForbiddenException("Este ingreso ya no se puede modificar. El comprobante sigue disponible.");
+    }
+    const data = await this.registry.resolvePublic(body);
+    if (origin) await this.guardPublic("submit", origin, { tractorPlate: normalizePlate(data.tractorPlate) });
+    const row = await this.prisma.gateVisit.update({
+      where: { id: existing.id },
+      data: {
+        siteId: data.siteId,
+        siteName: data.siteName,
+        motive: data.motive,
+        motiveDetail: data.motiveDetail,
+        company: data.company,
+        ruc: data.ruc,
+        driverName: data.driverName,
+        license: data.license,
+        phone: data.phone,
+        tractorPlate: data.tractorPlate,
+        trailerPlate: data.trailerPlate,
+        equipmentCode: data.equipmentCode || null,
+        observations: data.observations,
+        visitAt: existing.visitAt,
+      },
+    });
+    return { ok: true, visit: this.present(row), saved: true, editable: true };
+  }
+
+  async list(filter: "pending" | "linked" | "all" | "archived" = "pending", status = "") {
+    const asked = String(status || "").trim().toUpperCase().replace("EN ATENCIÓN", "EN ATENCION");
+    const where: Prisma.GateVisitWhereInput = asked
+      ? { status: asked, archivedAt: null }
+      : filter === "archived"
         ? { archivedAt: { not: null } }
         : filter === "pending"
-          ? { linkedAt: null, archivedAt: null }
+          ? { status: { in: ["REGISTRADO", "EN ATENCION"] }, archivedAt: null }
           : filter === "linked"
             ? { linkedAt: { not: null }, archivedAt: null }
             : { archivedAt: null };
     const rows = await this.prisma.gateVisit.findMany({
       where,
-      orderBy: { updatedAt: "desc" },
-      take: 200,
+      orderBy: { visitAt: "desc" },
+      take: 400,
     });
     return rows.map((r) => this.present(r, true));
   }
@@ -309,7 +390,8 @@ export class GateVisitsService {
   ) {
     if (!staffManagesVisits(user.role)) throw new ForbiddenException("Sin acceso.");
     const data = this.visitFields(body);
-    const row = await this.prisma.gateVisit.create({ data });
+    const publicCode = await this.registry.nextCode();
+    const row = await this.prisma.gateVisit.create({ data: { ...data, publicCode, status: "REGISTRADO" } });
     await this.audit.log({
       user,
       action: "create",
@@ -335,6 +417,8 @@ export class GateVisitsService {
       trailerPlate?: string;
       phone?: string;
       equipmentCode?: string;
+      observations?: string;
+      motiveDetail?: string;
       iso?: string;
     },
     user: AuthUser,
@@ -355,7 +439,14 @@ export class GateVisitsService {
       phone: body.phone ?? visit.phone,
       equipmentCode: body.equipmentCode ?? visit.equipmentCode ?? "",
     });
-    const row = await this.prisma.gateVisit.update({ where: { id }, data });
+    const row = await this.prisma.gateVisit.update({
+      where: { id },
+      data: {
+        ...data,
+        observations: body.observations != null ? String(body.observations).trim().slice(0, 500) : visit.observations,
+        motiveDetail: body.motiveDetail != null ? String(body.motiveDetail).trim().slice(0, 160) : visit.motiveDetail,
+      },
+    });
     await this.audit.log({
       user,
       action: "update",
@@ -434,7 +525,6 @@ export class GateVisitsService {
       where: { id },
       data: {
         containerIso: iso,
-        equipmentCode: iso,
         linkedAt: new Date(),
         linkedByName: user.name,
       },
@@ -474,17 +564,20 @@ export class GateVisitsService {
     plateRaw: string,
     file: { buffer: Buffer; originalname: string; size: number } | undefined,
     origin?: ClientOrigin,
+    tokenRaw = "",
   ) {
+    const token = String(tokenRaw || "").trim();
     const tractorPlate = normalizePlate(plateRaw);
     if (origin) await this.guardPublic("photo", origin, { tractorPlate });
-    if (tractorPlate.length < 3) throw new BadRequestException("Indica la placa del tracto.");
-    const visit = await this.prisma.gateVisit.findFirst({
-      where: { tractorPlate, archivedAt: null },
-      orderBy: { updatedAt: "desc" },
-    });
+    const visit = token
+      ? await this.prisma.gateVisit.findUnique({ where: { publicToken: token } })
+      : await this.prisma.gateVisit.findFirst({
+          where: { tractorPlate, archivedAt: null, status: "REGISTRADO" },
+          orderBy: { createdAt: "desc" },
+        });
     if (!visit) throw new BadRequestException("Primero envía la ficha de visita y luego adjunta la foto.");
-    if (!canPublicEditVisit(visit.linkedAt)) {
-      throw new ForbiddenException("Esta placa ya está vinculada. El coordinador revisa la foto.");
+    if (!canPublicEditVisit(visit.status) || visit.archivedAt) {
+      throw new ForbiddenException("Este ingreso ya no admite otra foto.");
     }
     const row = await this.storePhoto(visit, file);
     if (origin) {
@@ -497,6 +590,32 @@ export class GateVisitsService {
       });
     }
     return row;
+  }
+
+  async archivePhoto(id: string, user: AuthUser, ip?: string) {
+    if (!staffManagesVisits(user.role)) throw new ForbiddenException("Sin acceso.");
+    const visit = await this.prisma.gateVisit.findUnique({ where: { id } });
+    if (!visit?.unitPhotoKey) throw new BadRequestException("Esta visita no tiene foto de unidad.");
+    const row = await this.prisma.gateVisit.update({
+      where: { id },
+      data: { unitPhotoArchivedAt: new Date(), unitPhotoArchivedBy: user.name },
+    });
+    await this.audit.log({ user, action: "archive_visit_photo", entity: "GateVisitPhoto", entityId: id, ip });
+    return this.present(row, true);
+  }
+
+  async restorePhoto(id: string, user: AuthUser, ip?: string) {
+    if (user.role !== "admin" && user.role !== "superadmin") {
+      throw new ForbiddenException("Solo el administrador puede volver a mostrar la foto.");
+    }
+    const visit = await this.prisma.gateVisit.findUnique({ where: { id } });
+    if (!visit?.unitPhotoKey) throw new BadRequestException("Esta visita no tiene foto de unidad.");
+    const row = await this.prisma.gateVisit.update({
+      where: { id },
+      data: { unitPhotoArchivedAt: null, unitPhotoArchivedBy: null },
+    });
+    await this.audit.log({ user, action: "restore_visit_photo", entity: "GateVisitPhoto", entityId: id, ip });
+    return this.present(row, true);
   }
 
   async uploadStaffPhoto(
@@ -546,8 +665,12 @@ export class GateVisitsService {
     const status = visitPhotoStatus(visit);
     const role = user?.role || "";
     const staff = staffManagesVisits(role);
-    if (!publicAccess && !staff && status !== "approved") {
-      throw new ForbiddenException("La foto de la visita aún no está aprobada.");
+    if (publicAccess && status !== "visible") throw new NotFoundException("Foto no encontrada.");
+    if (!publicAccess && (status === "archived" || status === "rejected") && !staff) {
+      throw new NotFoundException("Foto no encontrada.");
+    }
+    if (!publicAccess && !staff && role !== "almacen") {
+      throw new ForbiddenException("Sin acceso.");
     }
     const obj = await this.storage.get(visit.unitPhotoKey);
     return { ...obj, contentType: visit.unitPhotoMime || obj.contentType, name: visit.unitPhotoName || "unidad.jpg" };
@@ -595,6 +718,8 @@ export class GateVisitsService {
         unitPhotoApprovedAt: null,
         unitPhotoApprovedBy: null,
         unitPhotoRejectedAt: null,
+        unitPhotoArchivedAt: null,
+        unitPhotoArchivedBy: null,
       },
     });
     return this.present(row);

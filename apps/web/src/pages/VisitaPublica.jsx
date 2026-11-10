@@ -6,31 +6,24 @@ import { useLightbox } from "../media-lightbox.jsx";
 import {
   VISIT_FIELDS,
   downloadVisitPdf,
-  shortVisitCode,
   visitFieldValue,
   visitTicketHref,
 } from "../visit-ticket.js";
 
 const empty = {
-  tractorPlate: "",
+  siteId: "",
+  motiveId: "",
+  motiveDetail: "",
   company: "",
   ruc: "",
   driverName: "",
-  visitAt: "",
   license: "",
-  motive: "descargar",
-  trailerPlate: "",
   phone: "",
+  tractorPlate: "",
+  trailerPlate: "",
   equipmentCode: "",
+  observations: "",
 };
-
-function toLocalInput(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso).slice(0, 16);
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 function Brand() {
   return (
@@ -61,9 +54,9 @@ export default function VisitaPublica() {
   const lb = useLightbox();
   const showReceipt = params.get("recibo") === "1";
   const forceEdit = params.get("editar") === "1";
+  const [options, setOptions] = useState({ sites: [], motives: [] });
   const [form, setForm] = useState(empty);
   const [locked, setLocked] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -75,45 +68,41 @@ export default function VisitaPublica() {
   const [ticket, setTicket] = useState(null);
   const [qrSrc, setQrSrc] = useState("");
 
-  const staffVisitas = hasRole(user, "admin", "coordinador");
+  const staffVisitas = hasRole(user, "admin", "coordinador", "almacen");
+  const motive = options.motives.find((item) => item.id === form.motiveId);
 
-  function applyVisit(v, lockedNow, found) {
-    setLocked(!!lockedNow);
-    setSaved(!!found && !lockedNow);
+  function applyVisit(v) {
+    const editable = v.editable !== false && v.status === "REGISTRADO" && !v.archived;
+    setLocked(!editable);
     setForm({
-      tractorPlate: v.tractorPlate,
-      company: v.company,
-      ruc: v.ruc,
-      driverName: v.driverName,
-      visitAt: toLocalInput(v.visitAt),
-      license: v.license,
-      motive: v.motive || "descargar",
-      trailerPlate: v.trailerPlate,
-      phone: v.phone,
+      siteId: v.siteId || "",
+      motiveId: v.motiveId || "",
+      motiveDetail: v.motiveDetail || "",
+      company: v.company || "",
+      ruc: v.ruc || "",
+      driverName: v.driverName || "",
+      license: v.license || "",
+      phone: v.phone || "",
+      tractorPlate: v.tractorPlate || "",
+      trailerPlate: v.trailerPlate || "",
       equipmentCode: v.equipmentCode || "",
+      observations: v.observations || "",
     });
+    setPhotoStatus(v.photoStatus || "none");
   }
 
-  async function lookup(plate) {
-    if (token) return;
-    if ((plate || "").replace(/[^A-Za-z0-9]/g, "").length < 3) return;
-    try {
-      const d = await api(`/gate-visits/by-plate/${encodeURIComponent(plate)}`);
-      if (!d.found || !d.visit) {
-        setLocked(false);
-        setSaved(false);
-        setPhotoStatus("none");
-        return;
-      }
-      applyVisit(d.visit, d.locked, true);
-      setTicket(d.visit);
-      setPhotoStatus(d.visit.photoStatus || "none");
-      setPhotoBust(Date.now());
-      setMsg(d.locked ? "Esta placa ya está vinculada a un contenedor." : "");
-    } catch {
-      /* ignore lookup */
-    }
-  }
+  useEffect(() => {
+    api("/gate-visits/public/options")
+      .then((data) => {
+        setOptions({ sites: data.sites || [], motives: data.motives || [] });
+        setForm((current) => ({
+          ...current,
+          siteId: current.siteId || data.sites?.[0]?.id || "",
+          motiveId: current.motiveId || data.motives?.[0]?.id || "",
+        }));
+      })
+      .catch((e) => setError(e instanceof ApiError ? e.message : e.message));
+  }, []);
 
   useEffect(() => {
     if (!photo) {
@@ -126,39 +115,33 @@ export default function VisitaPublica() {
   }, [photo]);
 
   useEffect(() => {
-    const t = setTimeout(() => lookup(form.tractorPlate), 400);
-    return () => clearTimeout(t);
-  }, [form.tractorPlate, token]);
-
-  useEffect(() => {
-    if (!token) return;
+    if (!token) return undefined;
     let cancelled = false;
     api(`/gate-visits/ticket/${token}`)
       .then((d) => {
         if (cancelled || !d.visit) return;
-        applyVisit(d.visit, d.locked, true);
+        const motives = options.motives;
+        const match = motives.find((item) => item.name === d.visit.motive);
+        applyVisit({ ...d.visit, editable: d.editable, motiveId: match?.id || "" });
         setTicket(d.visit);
-        setPhotoStatus(d.visit.photoStatus || "none");
         setPhotoBust(Date.now());
-        if (d.locked) setMsg("Esta placa ya está vinculada a un contenedor.");
+        if (!d.editable) setMsg("Este ingreso ya no se puede modificar. Puedes descargar el comprobante.");
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof ApiError ? e.message : e.message);
       });
     return () => { cancelled = true; };
-  }, [token]);
+  }, [token, options.motives]);
 
   useEffect(() => {
     if (!ready || !token || !ticket || showReceipt || forceEdit) return;
-    if (staffVisitas) {
-      nav(`/app/almacen/visitas?visita=${encodeURIComponent(ticket.id)}`, { replace: true });
-    }
+    if (staffVisitas) nav(`/app/almacen/visitas?visita=${encodeURIComponent(ticket.id)}`, { replace: true });
   }, [ready, token, ticket, showReceipt, forceEdit, staffVisitas, nav]);
 
   useEffect(() => {
     if (!ticket?.publicToken) {
       setQrSrc("");
-      return;
+      return undefined;
     }
     let cancelled = false;
     import("qrcode").then((QRCode) => {
@@ -170,9 +153,18 @@ export default function VisitaPublica() {
     return () => { cancelled = true; };
   }, [ticket?.publicToken]);
 
+  function set(key, value) {
+    if (locked) return;
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
   function openPreview(e) {
     e.preventDefault();
     setError("");
+    if (motive?.asksDetail && form.motiveDetail.trim().length < 3) {
+      setError("Si el motivo es Otros, escribe el detalle.");
+      return;
+    }
     setPreview(true);
   }
 
@@ -181,27 +173,24 @@ export default function VisitaPublica() {
     setError("");
     setMsg("");
     try {
-      const out = await api("/gate-visits/public", { method: "POST", body: form });
+      const body = token ? { ...form, publicToken: token } : form;
+      const out = await api("/gate-visits/public", { method: "POST", body });
       const v = out.visit;
-      if (photo && v?.id) {
+      let next = v;
+      if (photo && v?.publicToken && !locked) {
         const fd = new FormData();
         fd.append("file", photo);
+        fd.append("publicToken", v.publicToken);
         fd.append("tractorPlate", form.tractorPlate);
-        const withPhoto = await apiUpload("/gate-visits/public/photo", fd);
-        setPhotoStatus(withPhoto.photoStatus || "pending");
+        next = await apiUpload("/gate-visits/public/photo", fd);
         setPhoto(null);
         setPhotoBust(Date.now());
-        setTicket({ ...v, ...withPhoto, publicToken: withPhoto.publicToken || v.publicToken });
-      } else {
-        setPhotoStatus(v?.photoStatus || "none");
-        setTicket(v);
       }
-      setLocked(!!v?.locked);
-      setSaved(!!out.saved && !v?.locked);
+      setTicket(next);
+      setPhotoStatus(next?.photoStatus || "none");
+      setLocked(!!next?.locked);
       setPreview(false);
-      if (v?.publicToken) {
-        nav(`/visita/${v.publicToken}?recibo=1`, { replace: true });
-      }
+      if (v?.publicToken) nav(`/visita/${v.publicToken}?recibo=1`, { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : err.message);
       setPreview(false);
@@ -210,52 +199,25 @@ export default function VisitaPublica() {
     }
   }
 
-  function set(k, v) {
-    if (locked) return;
-    setForm((f) => ({ ...f, [k]: v }));
-  }
-
-  const photoSrc = token
+  const photoSrc = token && photoStatus === "visible"
     ? `${apiUrl(`/gate-visits/ticket/${token}/photo`)}?t=${photoBust}`
-    : `${apiUrl(`/gate-visits/by-plate/${encodeURIComponent(form.tractorPlate)}/photo`)}?t=${photoBust}`;
-  const shownPhoto = photoLocal || (photoStatus !== "none" ? photoSrc : "");
-  const pdfPhoto = photoLocal || ((ticket?.hasPhoto || photoStatus !== "none") ? photoSrc : "");
-
-  function openPhoto() {
-    if (!shownPhoto) return;
-    lb.open([{ src: shownPhoto, type: "image", label: "Foto de la unidad" }]);
-  }
-
+    : "";
+  const shownPhoto = photoLocal || photoSrc;
+  const pdfPhoto = photoLocal || (ticket?.hasPhoto ? photoSrc : "");
+  const previewData = {
+    ...form,
+    ...ticket,
+    siteName: options.sites.find((site) => site.id === form.siteId)?.name || ticket?.siteName,
+    motive: motive?.name || ticket?.motive,
+    motiveDetail: form.motiveDetail,
+  };
   const welcomeName = (ticket?.driverName || form.driverName || "").trim() || "a ZGROUP";
-  const linked = !!(locked || ticket?.locked);
-
-  if (linked && ticket) {
-    return (
-      <div className="panel visita-public visita-welcome">
-        <Brand />
-        <p className="ok-msg">Esta placa ya está vinculada a un contenedor.</p>
-        {error ? <div className="err">{error}</div> : null}
-        <PreviewList data={{ ...form, visitAt: form.visitAt || ticket.visitAt }} />
-        {shownPhoto ? (
-          <button type="button" className="visit-photo-btn" onClick={openPhoto} style={{ margin: "12px auto 0" }}>
-            <img className="visit-photo-preview" src={shownPhoto} alt="Foto de la unidad" />
-          </button>
-        ) : null}
-        <div className="action-row" style={{ justifyContent: "center", marginTop: 16 }}>
-          <button className="btn-primary" type="button" onClick={() => downloadVisitPdf({ ...ticket, locked: true }, pdfPhoto).catch((e) => setError(e.message))}>
-            Descargar PDF
-          </button>
-        </div>
-        {lb.node}
-      </div>
-    );
-  }
 
   if (token && ready && staffVisitas && !showReceipt && !forceEdit && !error) {
     return (
       <div className="panel visita-public">
         <Brand />
-        <p className="section-sub">Abriendo la visita en el panel…</p>
+        <p className="section-sub">Abriendo el ingreso en el panel…</p>
       </div>
     );
   }
@@ -269,18 +231,19 @@ export default function VisitaPublica() {
     );
   }
 
-  if (showReceipt && ticket) {
+  if ((showReceipt && ticket) || (locked && ticket)) {
     return (
       <div className="panel visita-public visita-welcome">
         <Brand />
-        <h2 className="section-title">Bienvenido, {welcomeName}</h2>
-        <p className="section-sub">Bienvenido. Descarga el comprobante.</p>
+        <h2 className="section-title">Registro de conductores</h2>
+        <p className="section-sub">Bienvenido, {welcomeName}. Este es tu comprobante.</p>
         {error ? <div className="err">{error}</div> : null}
-        {qrSrc ? <img className="visita-qr" src={qrSrc} alt="QR de validación" /> : null}
-        <p className="visita-code">Código {shortVisitCode(ticket.publicToken)}</p>
-        <PreviewList data={{ ...form, visitAt: form.visitAt || ticket.visitAt }} />
+        {msg ? <div className="ok-msg">{msg}</div> : null}
+        {qrSrc ? <img className="visita-qr" src={qrSrc} alt="QR del registro" /> : null}
+        <p className="visita-code">Registro {ticket.publicCode || "—"}</p>
+        <PreviewList data={{ ...ticket, ...previewData }} />
         {shownPhoto ? (
-          <button type="button" className="visit-photo-btn" onClick={openPhoto} style={{ margin: "12px auto 0" }}>
+          <button type="button" className="visit-photo-btn" onClick={() => lb.open([{ src: shownPhoto, type: "image", label: "Foto de la unidad" }])} style={{ margin: "12px auto 0" }}>
             <img className="visit-photo-preview" src={shownPhoto} alt="Foto de la unidad" />
           </button>
         ) : null}
@@ -300,70 +263,63 @@ export default function VisitaPublica() {
   return (
     <div className="panel visita-public">
       <Brand />
-      <h2 className="section-title">Visita de puerta</h2>
-      <p className="section-sub">Identifícate con la placa del tracto.</p>
+      <h2 className="section-title">Registro de conductores</h2>
+      <p className="section-sub">Control de ingreso</p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
       <form className="form-grid" onSubmit={openPreview}>
-        <div><label>Placa tracto *</label><input value={form.tractorPlate} onChange={(e) => set("tractorPlate", e.target.value.toUpperCase())} required disabled={locked} /></div>
-        <div><label>Empresa</label><input value={form.company} onChange={(e) => set("company", e.target.value)} disabled={locked} /></div>
-        <div><label>RUC</label><input value={form.ruc} onChange={(e) => set("ruc", e.target.value)} disabled={locked} /></div>
-        <div><label>Conductor</label><input value={form.driverName} onChange={(e) => set("driverName", e.target.value)} disabled={locked} /></div>
-        <div><label>Hora</label><input type="datetime-local" value={form.visitAt} onChange={(e) => set("visitAt", e.target.value)} disabled={locked} /></div>
-        <div><label>Brevete</label><input value={form.license} onChange={(e) => set("license", e.target.value)} disabled={locked} /></div>
-        <div>
-          <label>Motivo</label>
-          <select value={form.motive} onChange={(e) => set("motive", e.target.value)} disabled={locked}>
-            <option value="descargar">Descargar</option>
-            <option value="cargar">Cargar</option>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label>Sede *</label>
+          <select value={form.siteId} onChange={(e) => set("siteId", e.target.value)} required disabled={locked}>
+            <option value="">Seleccione una sede</option>
+            {options.sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
           </select>
         </div>
-        <div><label>Placa carreta</label><input value={form.trailerPlate} onChange={(e) => set("trailerPlate", e.target.value.toUpperCase())} disabled={locked} /></div>
-        <div><label>Teléfono</label><input value={form.phone} onChange={(e) => set("phone", e.target.value)} disabled={locked} /></div>
-        <div><label>Código de equipo (opcional)</label><input value={form.equipmentCode} onChange={(e) => set("equipmentCode", e.target.value.toUpperCase())} disabled={locked} /></div>
+        <div><label>Empresa *</label><input value={form.company} onChange={(e) => set("company", e.target.value)} required disabled={locked} placeholder="Ingrese la empresa" /></div>
+        <div><label>RUC *</label><input value={form.ruc} onChange={(e) => set("ruc", e.target.value.replace(/\D/g, "").slice(0, 11))} required inputMode="numeric" disabled={locked} placeholder="Ingrese RUC de 11 dígitos" /></div>
+        <div><label>Nombres y apellidos *</label><input value={form.driverName} onChange={(e) => set("driverName", e.target.value)} required disabled={locked} /></div>
+        <div><label>N.º de brevete *</label><input value={form.license} onChange={(e) => set("license", e.target.value)} required disabled={locked} /></div>
+        <div><label>Teléfono *</label><input value={form.phone} onChange={(e) => set("phone", e.target.value.replace(/\D/g, "").slice(0, 9))} required inputMode="numeric" disabled={locked} placeholder="9 dígitos" /></div>
+        <div><label>Placa tracto *</label><input value={form.tractorPlate} onChange={(e) => set("tractorPlate", e.target.value.toUpperCase())} required disabled={locked} /></div>
+        <div><label>Placa carreta *</label><input value={form.trailerPlate} onChange={(e) => set("trailerPlate", e.target.value.toUpperCase())} required disabled={locked} /></div>
+        <div>
+          <label>Motivo de visita *</label>
+          <select value={form.motiveId} onChange={(e) => set("motiveId", e.target.value)} required disabled={locked}>
+            <option value="">Seleccione una opción</option>
+            {options.motives.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </div>
+        <div><label>Código de equipo</label><input value={form.equipmentCode} onChange={(e) => set("equipmentCode", e.target.value)} disabled={locked} placeholder="Ingrese código de equipo" /></div>
+        {motive?.asksDetail ? (
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label>Detalle del motivo *</label>
+            <input value={form.motiveDetail} onChange={(e) => set("motiveDetail", e.target.value)} disabled={locked} placeholder="Describe la visita" />
+          </div>
+        ) : null}
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label>Observaciones</label>
+          <textarea value={form.observations} onChange={(e) => set("observations", e.target.value)} disabled={locked} placeholder="Ingrese observaciones si corresponde" />
+        </div>
         <div style={{ gridColumn: "1 / -1" }}>
           <label>Foto de la unidad (opcional)</label>
-          <p className="section-sub" style={{ marginBottom: 6 }}>
-            Una toma del contenedor o del tracto para que patio lo contraste. El coordinador debe aprobarla antes de que la vea el personal de campo.
-          </p>
           <div className="visit-photo-box">
             {shownPhoto ? (
-              <button type="button" className="visit-photo-btn" onClick={openPhoto}>
+              <button type="button" className="visit-photo-btn" onClick={() => lb.open([{ src: shownPhoto, type: "image", label: "Foto de la unidad" }])}>
                 <img className="visit-photo-preview" src={shownPhoto} alt="Vista previa de la unidad" />
               </button>
             ) : null}
-            <div className="visit-photo-actions">
-              <span className="file-field-name">
-                {photo?.name
-                  || (photoStatus === "approved" ? "Foto enviada y aprobada"
-                    : photoStatus === "pending" ? "Foto enviada · pendiente de aprobación"
-                      : photoStatus === "rejected" ? "Foto rechazada · puedes cargar otra"
-                        : "Ningún archivo seleccionado")}
-              </span>
-              {shownPhoto ? (
-                <button className="btn-ghost" type="button" onClick={openPhoto}>Ver foto</button>
-              ) : null}
-              <label className="btn-ghost">
-                {shownPhoto ? "Cambiar foto" : "Elegir foto"}
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  hidden
-                  disabled={locked}
-                  onChange={(e) => setPhoto(e.target.files?.[0] || null)}
-                />
-              </label>
-            </div>
+            <label className="btn-ghost">
+              {shownPhoto ? "Cambiar foto" : "Elegir foto"}
+              <input type="file" accept="image/*" capture="environment" hidden disabled={locked} onChange={(e) => setPhoto(e.target.files?.[0] || null)} />
+            </label>
           </div>
         </div>
         <div className="action-row" style={{ gridColumn: "1 / -1" }}>
           <button className="btn-primary" type="submit" disabled={busy || locked}>
-            {locked ? "Vinculada" : saved ? "Revisar cambios" : "Enviar"}
+            {token ? "Guardar cambios" : "Registrar ingreso"}
           </button>
         </div>
       </form>
-
       <div className={`overlay ${preview ? "open" : ""}`} onClick={() => !busy && setPreview(false)}>
         <div className="modal quote-modal" onClick={(e) => e.stopPropagation()}>
           <div className="modal-head">
@@ -371,18 +327,10 @@ export default function VisitaPublica() {
             <button type="button" className="modal-close" onClick={() => setPreview(false)} disabled={busy}>×</button>
           </div>
           <div className="modal-body single">
-            <p className="section-sub">Si algo está mal, pulsa Corregir. Si está bien, Proceder registra la visita.</p>
-            <PreviewList data={form} />
-            {shownPhoto ? (
-              <button type="button" className="visit-photo-btn" onClick={openPhoto} style={{ marginTop: 10 }}>
-                <img className="visit-photo-preview" src={shownPhoto} alt="Vista previa" />
-              </button>
-            ) : null}
+            <PreviewList data={previewData} />
             <div className="action-row" style={{ marginTop: 16 }}>
               <button className="btn-ghost" type="button" disabled={busy} onClick={() => setPreview(false)}>Corregir</button>
-              <button className="btn-primary" type="button" disabled={busy} onClick={proceed}>
-                {busy ? "Guardando…" : "Proceder"}
-              </button>
+              <button className="btn-primary" type="button" disabled={busy} onClick={proceed}>{busy ? "Guardando…" : "Proceder"}</button>
             </div>
           </div>
         </div>

@@ -18,15 +18,19 @@ function statusOf(row) {
   return { key: "pendiente", label: "Pendiente de campo", color: "#495057" };
 }
 
+function photoVisible(visit) {
+  return visit?.photoStatus === "visible" || visit?.photoStatus === "approved";
+}
+
 function photoLabel(status) {
-  if (status === "approved") return "Foto aprobada";
-  if (status === "pending") return "Foto por aprobar";
+  if (status === "visible" || status === "approved") return "Foto de portería";
+  if (status === "archived") return "Foto archivada";
   if (status === "rejected") return "Foto rechazada";
   return "Sin foto";
 }
 
 function VisitItem({ visit, onClick, showPendingPhoto, extra }) {
-  const showPhoto = visit.photoStatus === "approved" || (showPendingPhoto && visit.hasPhoto);
+  const showPhoto = photoVisible(visit);
   return (
     <button type="button" className={`campo-item ${visit.containerIso ? "linked" : "pending-dry"}`} onClick={onClick}>
       <span className="campo-item-accent" />
@@ -252,20 +256,6 @@ export default function PatioCampo() {
     }
   }
 
-  async function reviewVisitPhoto(id, approve) {
-    try {
-      await api(`/gate-visits/${id}/photo/${approve ? "approve" : "reject"}`, { method: "POST" });
-      if (iso) {
-        const next = await api(`/warehouse/units/${iso}`);
-        setUnit(next);
-      }
-      await loadList();
-      setMsg(approve ? "Foto de visita aprobada. El personal de patio ya puede contrastarla." : "Foto de visita rechazada.");
-    } catch (e) {
-      setError(e.message);
-    }
-  }
-
   async function regularize() {
     setBusy(true);
     setError("");
@@ -282,7 +272,7 @@ export default function PatioCampo() {
   }
 
   const visitPhoto = unit?.visit;
-  const showContrast = visitPhoto && (visitPhoto.photoStatus === "approved" || (canReview && visitPhoto.hasPhoto));
+  const showContrast = visitPhoto && photoVisible(visitPhoto);
 
   if (unit) {
     return (
@@ -319,7 +309,7 @@ export default function PatioCampo() {
             {showContrast ? (
               <div className="campo-contrast">
                 <div>
-                  <label>Foto de la visita {unit.visit.photoStatus === "approved" ? "(aprobada)" : "(pendiente)"}</label>
+                  <label>Foto de la visita</label>
                   <button
                     type="button"
                     className="visit-photo-btn"
@@ -332,12 +322,6 @@ export default function PatioCampo() {
                   >
                     <img src={`${apiUrl(`/gate-visits/${unit.visit.id}/photo`)}?t=${bust}`} alt="Unidad en portería" />
                   </button>
-                  {canReview && unit.visit.photoStatus === "pending" ? (
-                    <div className="action-row">
-                      <button className="btn-primary" type="button" onClick={() => reviewVisitPhoto(unit.visit.id, true)}>Aprobar para patio</button>
-                      <button className="btn-ghost" type="button" onClick={() => reviewVisitPhoto(unit.visit.id, false)}>Rechazar</button>
-                    </div>
-                  ) : null}
                 </div>
                 <div>
                   <p className="section-sub" style={{ marginBottom: 8 }}>
@@ -474,7 +458,7 @@ export default function PatioCampo() {
       <div>
         <h2 className="section-title">Patio — campo</h2>
         <p className="section-sub">
-          Elige una visita o un DRY para subir fotos y evaluar. La foto de portería solo aparece aquí cuando el coordinador la aprueba.
+          Elige una visita o un DRY para subir fotos y evaluar. La foto de portería se muestra cuando el conductor la cargó.
         </p>
       </div>
       {error ? <div className="err">{error}</div> : null}
@@ -585,7 +569,7 @@ export default function PatioCampo() {
                 >
                   <span className="campo-item-accent" />
                   <span className="campo-item-thumb">
-                    {u.visit?.photoStatus === "approved" || (canReview && u.visit?.photoStatus && u.visit.photoStatus !== "none") ? (
+                    {photoVisible(u.visit) ? (
                       <img src={apiUrl(`/gate-visits/${u.visit.id}/photo`)} alt="" />
                     ) : (
                       <span>{u.visit ? photoLabel(u.visit.photoStatus) : "DRY"}</span>
@@ -643,7 +627,7 @@ export default function PatioCampo() {
         <div className="campo-stack" style={{ marginTop: 14 }}>
           {pageRows.map((r) => {
             const st = statusOf(r);
-            const showPhoto = r.visit?.photoStatus === "approved" || (canReview && r.visit?.photoStatus && r.visit.photoStatus !== "none");
+            const showPhoto = photoVisible(r.visit);
             return (
               <button key={r.iso} type="button" className="campo-item linked" onClick={() => { setIso(r.iso); setError(""); setMsg(""); }}>
                 <span className="campo-item-accent" />

@@ -1,17 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Query,
-  Req,
-  StreamableFile,
-  UploadedFile,
-  UseInterceptors,
-} from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, StreamableFile, UploadedFile, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { memoryStorage } from "multer";
 import { Request } from "express";
@@ -20,10 +7,15 @@ import { Roles } from "../auth/roles.decorator";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
 import { GateVisitsService } from "./gate-visits.service";
+import { DriverRegistryService } from "./driver-registry.service";
 import { clientOrigin } from "../domain/client-origin";
 import { MAX_INSPECTION_PHOTO_BYTES } from "../domain/inspection-media";
 
 type VisitBody = {
+  publicToken?: string;
+  siteId?: string;
+  motiveId?: string;
+  motiveDetail?: string;
   tractorPlate?: string;
   company?: string;
   ruc?: string;
@@ -34,6 +26,7 @@ type VisitBody = {
   trailerPlate?: string;
   phone?: string;
   equipmentCode?: string;
+  observations?: string;
   iso?: string;
 };
 
@@ -44,7 +37,10 @@ const photoUpload = FileInterceptor("file", {
 
 @Controller("gate-visits")
 export class GateVisitsController {
-  constructor(private readonly visits: GateVisitsService) {}
+  constructor(
+    private readonly visits: GateVisitsService,
+    private readonly registry: DriverRegistryService,
+  ) {}
 
   @Public()
   @Get("by-plate/:plate/photo")
@@ -87,20 +83,27 @@ export class GateVisitsController {
   }
 
   @Public()
+  @Get("public/options")
+  publicOptions() {
+    return this.registry.publicOptions();
+  }
+
+  @Public()
   @Post("public/photo")
   @UseInterceptors(photoUpload)
   uploadPublicPhoto(
     @Body("tractorPlate") tractorPlate: string,
+    @Body("publicToken") publicToken: string,
     @UploadedFile() file: Express.Multer.File | undefined,
     @Req() req: Request,
   ) {
-    return this.visits.uploadPublicPhoto(tractorPlate || "", file, clientOrigin(req));
+    return this.visits.uploadPublicPhoto(tractorPlate || "", file, clientOrigin(req), publicToken || "");
   }
 
-  @Roles("admin", "coordinador")
+  @Roles("admin", "almacen", "coordinador")
   @Get()
-  list(@Query("filter") filter?: "pending" | "linked" | "all" | "archived") {
-    return this.visits.list(filter || "pending");
+  list(@Query("filter") filter?: "pending" | "linked" | "all" | "archived", @Query("status") status?: string) {
+    return this.visits.list(filter || "pending", status || "");
   }
 
   @Roles("admin", "coordinador")
@@ -119,6 +122,156 @@ export class GateVisitsController {
   @Get("lookup")
   lookup(@Query("q") q?: string) {
     return this.visits.lookup(q || "");
+  }
+
+  @Roles("admin", "coordinador")
+  @Get("masters")
+  masters() {
+    return this.registry.catalog(true);
+  }
+
+  @Roles("admin", "coordinador")
+  @Post("sites")
+  addSite(@Body() body: { name?: string }, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.registry.addSite(body.name || "", user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Patch("sites/:id")
+  patchSite(
+    @Param("id") id: string,
+    @Body() body: { active?: boolean; replyPhone?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.registry.patchSite(id, body, user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Post("motives")
+  addMotive(@Body() body: { name?: string; asksDetail?: boolean }, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.registry.addMotive(body.name || "", !!body.asksDetail, user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Patch("motives/:id")
+  patchMotive(
+    @Param("id") id: string,
+    @Body() body: { active?: boolean },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.registry.patchMotive(id, body, user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Post("recipients")
+  addRecipient(
+    @Body() body: { siteId?: string; kind?: string; destination?: string; label?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.registry.addRecipient(body.siteId || "", body.kind || "", body.destination || "", body.label || "", user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Delete("recipients/:id")
+  removeRecipient(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.registry.removeRecipient(id, user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Post("warehouses")
+  addWarehouse(
+    @Body() body: { siteId?: string; name?: string; mapUrl?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.registry.addWarehouse(body.siteId || "", body.name || "", body.mapUrl || "", user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Patch("warehouses/:id")
+  patchWarehouse(
+    @Param("id") id: string,
+    @Body() body: { active?: boolean; mapUrl?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.registry.patchWarehouse(id, body, user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Post("templates")
+  saveTemplate(
+    @Body() body: { key?: "confirm" | "location"; value?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.registry.saveTemplate(body.key === "location" ? "location" : "confirm", body.value || "", user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Post("import")
+  @UseInterceptors(FileInterceptor("file", { storage: memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } }))
+  importExcel(@UploadedFile() file: Express.Multer.File | undefined, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    if (!file?.buffer?.length) throw new BadRequestException("Selecciona el Excel de conductores.");
+    return this.registry.importWorkbook(file.buffer, user, req.ip);
+  }
+
+  @Roles("admin", "almacen", "coordinador")
+  @Get(":id")
+  async detail(@Param("id") id: string, @CurrentUser() user: AuthUser) {
+    const row = await this.registry.detail(id);
+    if (user.role === "almacen") {
+      return { ...row, notices: [], statusEvents: [] };
+    }
+    return row;
+  }
+
+  @Roles("admin", "coordinador")
+  @Post(":id/status")
+  changeStatus(
+    @Param("id") id: string,
+    @Body() body: { status?: string; sendConfirm?: boolean },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.registry.changeStatus(id, body.status || "", !!body.sendConfirm, user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Post(":id/driver")
+  driverMessage(
+    @Param("id") id: string,
+    @Body() body: { kind?: "confirmacion" | "ubicacion"; warehouseId?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.registry.sendDriver(id, body.kind === "ubicacion" ? "ubicacion" : "confirmacion", body.warehouseId || "", user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Post(":id/notices/:noticeId/retry")
+  retryNotice(
+    @Param("id") id: string,
+    @Param("noticeId") noticeId: string,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.registry.retryNotice(id, noticeId, user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Post(":id/photo/archive")
+  archivePhoto(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.visits.archivePhoto(id, user, req.ip);
+  }
+
+  @Roles("admin")
+  @Post(":id/photo/restore")
+  restorePhoto(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.visits.restorePhoto(id, user, req.ip);
   }
 
   @Roles("admin", "coordinador")

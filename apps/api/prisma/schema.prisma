@@ -903,8 +903,91 @@ model ContainerDocument {
   @@index([iso, createdAt])
 }
 
+model VisitSite {
+  id         String            @id @default(uuid())
+  name       String            @unique
+  active     Boolean           @default(true)
+  replyPhone String            @default("")
+  sortOrder  Int               @default(0)
+  createdAt  DateTime          @default(now())
+  recipients VisitRecipient[]
+  warehouses VisitWarehouse[]
+  visits     GateVisit[]
+}
+
+model VisitMotive {
+  id         String   @id @default(uuid())
+  name       String   @unique
+  asksDetail Boolean  @default(false)
+  active     Boolean  @default(true)
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+}
+
+model VisitRecipient {
+  id          String    @id @default(uuid())
+  siteId      String
+  site        VisitSite @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  kind        String
+  destination String
+  label       String    @default("")
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  @@unique([siteId, kind, destination])
+  @@index([siteId, active])
+}
+
+model VisitWarehouse {
+  id        String    @id @default(uuid())
+  siteId    String
+  site      VisitSite @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  name      String
+  mapUrl    String
+  active    Boolean   @default(true)
+  sortOrder Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  @@unique([siteId, name])
+}
+
+model VisitStatusEvent {
+  id         String    @id @default(uuid())
+  visitId    String
+  visit      GateVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  fromStatus String
+  toStatus   String
+  byId       String?
+  byName     String    @default("")
+  createdAt  DateTime  @default(now())
+
+  @@index([visitId, createdAt])
+}
+
+model VisitNotice {
+  id          String    @id @default(uuid())
+  visitId     String
+  visit       GateVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  channel     String
+  audience    String
+  destination String
+  kind        String
+  status      String
+  detail      String    @default("")
+  createdAt   DateTime  @default(now())
+
+  @@index([visitId, createdAt])
+}
+
 model GateVisit {
   id            String     @id @default(uuid())
+  publicCode    String?    @unique
+  siteId        String?
+  site          VisitSite? @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  siteName      String     @default("")
+  status        String     @default("REGISTRADO")
+  observations  String     @default("")
+  motiveDetail  String     @default("")
   tractorPlate  String
   company       String     @default("")
   ruc           String     @default("")
@@ -925,6 +1008,9 @@ model GateVisit {
   unitPhotoApprovedAt   DateTime?
   unitPhotoApprovedBy   String?
   unitPhotoRejectedAt   DateTime?
+  unitPhotoArchivedAt   DateTime?
+  unitPhotoArchivedBy   String?
+  notifiedAt    DateTime?
   publicToken   String     @unique @default(uuid())
   clientIp          String?
   userAgent         String?   @db.Text
@@ -939,12 +1025,16 @@ model GateVisit {
   archivedByName    String?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
+  statusEvents  VisitStatusEvent[]
+  notices       VisitNotice[]
 
   @@index([tractorPlate])
   @@index([containerIso])
   @@index([linkedAt])
   @@index([archivedAt])
   @@index([clientIp])
+  @@index([status, archivedAt])
+  @@index([siteId])
 }
 
 model EvaluationConcept {

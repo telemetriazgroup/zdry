@@ -3,20 +3,30 @@ import QRCode from "qrcode";
 import { publicUrl } from "./api.js";
 
 export const VISIT_FIELDS = [
+  ["publicCode", "Registro"],
+  ["siteName", "Sede"],
+  ["status", "Estado"],
   ["tractorPlate", "Placa tracto"],
+  ["trailerPlate", "Placa carreta"],
+  ["driverName", "Conductor"],
   ["company", "Empresa"],
   ["ruc", "RUC"],
-  ["driverName", "Conductor"],
-  ["visitAt", "Hora"],
   ["license", "Brevete"],
-  ["motive", "Motivo"],
-  ["trailerPlate", "Placa carreta"],
   ["phone", "Teléfono"],
+  ["motive", "Motivo"],
   ["equipmentCode", "Código de equipo"],
+  ["observations", "Observaciones"],
 ];
 
 export function motiveLabel(motive) {
-  return motive === "cargar" ? "Cargar" : "Descargar";
+  if (motive === "cargar") return "Cargar contenedor";
+  if (motive === "descargar") return "Descargar contenedor";
+  return motive || "—";
+}
+
+export function statusLabel(status) {
+  if (status === "EN ATENCION") return "EN ATENCIÓN";
+  return status || "REGISTRADO";
 }
 
 export function formatVisitWhen(value) {
@@ -34,7 +44,10 @@ export function formatVisitWhen(value) {
 
 export function visitFieldValue(key, data) {
   if (key === "motive") return motiveLabel(data.motive);
+  if (key === "status") return statusLabel(data.status);
   if (key === "visitAt") return formatVisitWhen(data.visitAt);
+  if (key === "equipmentCode") return data.equipmentCode || "NO INDICADO";
+  if (key === "observations") return data.observations || "SIN OBSERVACIONES";
   return data[key] || "—";
 }
 
@@ -68,7 +81,7 @@ function imageFormat(dataUrl) {
 export async function downloadVisitPdf(visit, photoUrl) {
   const token = visit.publicToken;
   const url = visitTicketHref(token);
-  const code = shortVisitCode(token);
+  const code = visit.publicCode || shortVisitCode(token);
   const [logo, qr, photo] = await Promise.all([
     asDataUrl(publicUrl("/brand/zg_marca.png")),
     QRCode.toDataURL(url, { width: 360, margin: 1, errorCorrectionLevel: "M" }),
@@ -81,7 +94,7 @@ export async function downloadVisitPdf(visit, photoUrl) {
   doc.setFont("helvetica", "bold");
   doc.setFontSize(16);
   doc.setTextColor(18, 32, 58);
-  doc.text("Comprobante de visita", 16, 44);
+  doc.text("Registro de conductores", 16, 44);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(11);
   doc.setTextColor(70, 78, 90);
@@ -97,7 +110,7 @@ export async function downloadVisitPdf(visit, photoUrl) {
     doc.setFont("helvetica", "normal");
     doc.setTextColor(40, 48, 60);
     doc.text(String(visitFieldValue(key, visit)), 62, y, { maxWidth: 70 });
-    y += 8;
+    y += 7;
   }
 
   doc.addImage(qr, "PNG", 140, 42, 52, 52);
@@ -138,12 +151,12 @@ export async function downloadVisitPdf(visit, photoUrl) {
     doc.text("Sin foto adjunta.", 20, y + 30);
   }
 
-  if (visit.locked || visit.linkedAt || visit.containerIso) {
+  if (visit.locked) {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
     doc.setTextColor(18, 32, 58);
-    doc.text("Esta placa ya está vinculada a un contenedor.", 16, y + boxH + 10);
+    doc.text(`Estado ${statusLabel(visit.status)}. El enlace ya no modifica este ingreso.`, 16, y + boxH + 10);
   }
 
-  doc.save(`visita-${visit.tractorPlate || code}.pdf`);
+  doc.save(`registro-${visit.publicCode || visit.tractorPlate || code}.pdf`);
 }

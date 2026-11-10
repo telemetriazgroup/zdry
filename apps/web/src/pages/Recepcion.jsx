@@ -998,20 +998,6 @@ export default function Recepcion() {
     }
   }
 
-  async function reviewVisitPhoto(approve) {
-    const id = unit?.visit?.id;
-    if (!id) return;
-    try {
-      await api(`/gate-visits/${id}/photo/${approve ? "approve" : "reject"}`, { method: "POST" });
-      const next = await api(`/warehouse/units/${inspectIso}`);
-      setUnit(next);
-      setBust(Date.now());
-      setMsg(approve ? "Foto de visita aprobada. Patio ya puede contrastarla." : "Foto de visita rechazada.");
-    } catch (e) {
-      setError(e.message);
-    }
-  }
-
   async function uploadVisitPhoto(file) {
     const id = unit?.visit?.id;
     if (!file || !id) return;
@@ -1408,13 +1394,11 @@ export default function Recepcion() {
                   <div style={{ marginTop: 12 }}>
                     <label>Foto de la unidad (portería)</label>
                     <p className="section-sub">
-                      {unit.visit.photoStatus === "approved"
-                        ? "Aprobada: el personal de patio ya puede contrastarla."
-                        : unit.visit.photoStatus === "pending"
-                          ? "Pendiente de tu aprobación."
-                          : unit.visit.photoStatus === "rejected"
-                            ? "Rechazada. Puedes cargar otra y aprobarla."
-                            : "Opcional. Si el chofer no la subió, puedes cargarla aquí."}
+                      {unit.visit.photoStatus === "visible" || unit.visit.photoStatus === "approved"
+                        ? "El vigilante y patio la ven sin aprobación."
+                        : unit.visit.photoArchived || unit.visit.photoStatus === "archived"
+                          ? "Archivada. Solo un administrador puede volver a mostrarla."
+                          : "Opcional. Si el conductor no la subió, puedes cargarla aquí."}
                     </p>
                     {unit.visit.hasPhoto ? (
                       <button
@@ -1434,12 +1418,6 @@ export default function Recepcion() {
                         {unit.visit.hasPhoto ? "Reemplazar foto" : "Cargar foto"}
                         <input type="file" accept="image/*" hidden onChange={(e) => { uploadVisitPhoto(e.target.files?.[0]); e.target.value = ""; }} />
                       </label>
-                      {unit.visit.photoStatus === "pending" || unit.visit.photoStatus === "rejected" ? (
-                        <button className="btn-primary" type="button" onClick={() => reviewVisitPhoto(true)}>Aprobar para patio</button>
-                      ) : null}
-                      {unit.visit.photoStatus === "pending" || unit.visit.photoStatus === "approved" ? (
-                        <button className="btn-ghost" type="button" onClick={() => reviewVisitPhoto(false)}>Rechazar</button>
-                      ) : null}
                     </div>
                   </div>
                 ) : null}
