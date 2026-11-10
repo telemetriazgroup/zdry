@@ -42,6 +42,7 @@ export type YardUnit = {
   ruma: number | null;
   columna: number | null;
   nivel: number | null;
+  bayHalf?: string | null;
   status: string;
   physicallyReceived?: boolean;
 };
@@ -272,8 +273,10 @@ export function compactYardGravity(
           const occ = columnOccupants(occupants, depotId, lado, ruma, columna).sort(
             (a, b) => (a.nivel || 0) - (b.nivel || 0),
           );
-          occ.forEach((c, idx) => {
-            const toNivel = idx + 1;
+          const levels = [...new Set(occ.map((item) => item.nivel || 0))].sort((a, b) => a - b);
+          const nextLevel = new Map(levels.map((level, index) => [level, index + 1]));
+          occ.forEach((c) => {
+            const toNivel = nextLevel.get(c.nivel || 0) || 1;
             if ((c.nivel || 0) !== toNivel) {
               changes.push({
                 iso: c.iso,

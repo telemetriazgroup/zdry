@@ -1969,6 +1969,11 @@ button.tile.dry-click { display: block; }
 .yard-cell.full { color: #fff; border-color: transparent; }
 .yard-cell.ghost { background: repeating-linear-gradient(45deg, #d0d5dd, #d0d5dd 4px, #f8fafc 4px, #f8fafc 8px); color: #1d2633; }
 .yard-cell.on { outline: 2px solid #e8590c; }
+.yard-slide { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.yard-slide span { flex: 1 1 180px; font-size: 13px; }
+.yard-slide .btn-primary, .yard-slide .btn-ghost { width: auto; min-height: 36px; }
+.yard-bay { display: flex; gap: 2px; min-width: 0; }
+.yard-bay .yard-cell { flex: 1 1 0; min-width: 0; padding: 2px 1px; }
 .yard-page { min-width: 0; max-width: 100%; }
 .yard-panel { min-width: 0; max-width: 100%; overflow: hidden; }
 .yard-table { max-width: 100%; }

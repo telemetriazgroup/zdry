@@ -20,7 +20,7 @@ export async function retrievalByIso(prisma: PrismaService, rows: YardRow[], pol
     prisma.appSetting.findMany({ where: { key: { in: depotIds.map((id) => `yard_plan:${id}`) } } }),
     prisma.container.findMany({
       where: { depotId: { in: depotIds }, lado: { not: null }, archivedAt: null },
-      select: { iso: true, depotId: true, lado: true, ruma: true, columna: true, nivel: true },
+      select: { iso: true, depotId: true, lado: true, ruma: true, columna: true, nivel: true, type: true, bayHalf: true },
     }),
   ]);
   for (const depotId of depotIds) {
@@ -33,10 +33,12 @@ export async function retrievalByIso(prisma: PrismaService, rows: YardRow[], pol
         col: item.columna || 0,
         level: item.nivel || 0,
         iso: item.iso,
+        type: item.type,
+        half: item.bayHalf === "A" || item.bayHalf === "B" ? item.bayHalf : null,
       }));
     const ghosts = ghostsWithSupport(stored.zones, stored.ghosts, stacked);
     for (const unit of stacked) {
-      const moves = movesAbove(stored.zones, ghosts, stacked, unit.zoneName, unit.row, unit.col, unit.level, unit.iso);
+      const moves = movesAbove(stored.zones, ghosts, stacked, unit.zoneName, unit.row, unit.col, unit.level, unit.iso, unit.half, unit.type);
       result.set(unit.iso, retrievalReference(moves, active));
     }
   }

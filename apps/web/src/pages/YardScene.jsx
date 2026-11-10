@@ -35,27 +35,62 @@ function feetOf(type) {
   return 0;
 }
 
-function columnAllows(zone, row, col, level, incomingType, units, ghosts) {
+function baySpan(type, half) {
+  const feet = feetOf(type);
+  if (feet >= 40) return "full";
+  if (half === "A" || half === "B") return half;
+  if (feet > 0) return "center";
+  return "full";
+}
+
+function coversHalf(item, half) {
+  const span = baySpan(item.type || item.typeCode, item.half ?? item.bayHalf);
+  return span === "full" || span === half;
+}
+
+function columnAllows(zone, row, col, level, incomingType, units, ghosts, half) {
   const incoming = feetOf(incomingType);
   if (incoming <= 0) return true;
+  const span = baySpan(incomingType, half);
   for (let cursor = level - 1; cursor >= 1; cursor -= 1) {
-    const unit = (units || []).find((item) => item.lado === zone.name && item.ruma === row && item.columna === col && item.nivel === cursor);
-    const ghost = (ghosts || []).find((item) => item.zoneId === zone.id && item.row === row && item.col === col && item.level === cursor);
-    const feet = feetOf(unit?.type || ghost?.typeCode);
-    if (feet > 0 && incoming > feet) return false;
+    const items = [
+      ...(units || [])
+        .filter((item) => item.lado === zone.name && item.ruma === row && item.columna === col && item.nivel === cursor)
+        .map((item) => ({ type: item.type, half: item.bayHalf })),
+      ...(ghosts || [])
+        .filter((item) => item.zoneId === zone.id && item.row === row && item.col === col && item.level === cursor)
+        .map((item) => ({ type: item.typeCode, half: item.half })),
+    ];
+    const typed = (side) => {
+      const found = items.filter((item) => coversHalf(item, side) && feetOf(item.type) > 0);
+      return found.length ? Math.max(...found.map((item) => feetOf(item.type))) : null;
+    };
+    const feetA = typed("A");
+    const feetB = typed("B");
+    const centered = items.filter((item) => baySpan(item.type, item.half) === "center" && feetOf(item.type) > 0);
+    const centerFeet = centered.length ? Math.max(...centered.map((item) => feetOf(item.type))) : null;
+    if ((span === "full" || span === "center") && centerFeet != null && incoming > centerFeet) return false;
+    if ((span === "A" || span === "B") && centerFeet != null && (span === "A" ? feetA : feetB) == null) return false;
+    if (span === "full" && feetA != null && feetB != null && feetA >= 20 && feetB >= 20 && incoming <= 40) continue;
+    const sides = span === "full" ? ["A", "B"] : [span];
+    for (const side of sides) {
+      const feet = side === "A" ? feetA : feetB;
+      if (feet != null && incoming > feet) return false;
+    }
   }
   return true;
 }
 
-function inheritedType(zone, row, col, level, ownType, units, ghosts) {
+function inheritedType(zone, row, col, level, ownType, units, ghosts, half) {
   if (ownType) return ownType;
+  const sameSide = (item) => !half || coversHalf(item, half);
   const aboveUnit = (units || [])
-    .filter((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel > level && unit.type)
+    .filter((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel > level && unit.type && sameSide({ type: unit.type, half: unit.bayHalf }))
     .sort((left, right) => left.nivel - right.nivel)[0];
   if (aboveUnit) return aboveUnit.type;
-  const aboveGhost = (ghosts || []).find((ghost) => ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level > level && ghost.typeCode);
+  const aboveGhost = (ghosts || []).find((ghost) => ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level > level && ghost.typeCode && sameSide({ type: ghost.typeCode, half: ghost.half }));
   if (aboveGhost) return aboveGhost.typeCode;
-  const anyUnit = (units || []).find((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.type);
+  const anyUnit = (units || []).find((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.type && sameSide({ type: unit.type, half: unit.bayHalf }));
   return anyUnit?.type || "";
 }
 
@@ -146,79 +181,117 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
 
     for (let row = 1; row <= zone.rows; row += 1) {
       for (let col = 1; col <= zone.cols; col += 1) {
-        let floor = 0.04;
-        let offered = false;
+        let floorA = 0.04;
+        let floorB = 0.04;
+        const offered = { A: false, B: false, full: false };
+        const slotX = originX + (col - 1) * PITCH_X;
+        const usable = PITCH_X - 0.7;
+        const z = originZ + (row - 1) * PITCH_Z + BOX_W / 2;
+        const xFor = (span, length) => {
+          if (span === "A") return slotX + length / 2;
+          if (span === "B") return slotX + usable - length / 2;
+          return slotX + (usable - length) / 2 + length / 2;
+        };
         for (let level = 1; level <= zone.levels; level += 1) {
-          const occupant = stackedUnits.find((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel === level);
-          const ghost = (ghosts || []).find((item) => item.zoneId === zone.id && item.row === row && item.col === col && item.level === level);
-          if (!occupant && !ghost) {
-            if (options.targets && !offered && (level === 1 || floor > 0.2) && columnAllows(zone, row, col, level, options.incomingType, stackedUnits, ghosts)) {
-              offered = true;
-              const length = lengthOf(options.incomingType);
-              const height = BOX_H * highOf(options.incomingType);
-              const slotX = originX + (col - 1) * PITCH_X;
-              const x = slotX + (PITCH_X - 0.7 - length) / 2 + length / 2;
-              const z = originZ + (row - 1) * PITCH_Z + BOX_W / 2;
-              const hint = new THREE.Mesh(
-                new THREE.BoxGeometry(length, height * 0.35, BOX_W),
-                new THREE.MeshStandardMaterial({ color: "#f0c14a", transparent: true, opacity: 0.35, roughness: 0.8 }),
-              );
-              hint.position.set(x, floor + height * 0.18, z);
-              hint.userData.pick = {
-                key: `slot-${zone.id}-${row}-${col}-${level}`,
-                empty: true,
-                zoneName: zone.name,
-                row,
-                col,
-                level,
-              };
-              root.add(hint);
-              disposables.push(hint.geometry, hint.material);
-            }
-            continue;
+          const occupants = stackedUnits.filter((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel === level);
+          const marked = (ghosts || []).filter((item) => item.zoneId === zone.id && item.row === row && item.col === col && item.level === level);
+          const wide = (item, type, half) => {
+            const span = baySpan(type, half);
+            return span === "full" || span === "center" ? span : "";
+          };
+          const wideUnit = occupants.find((unit) => wide(unit, unit.type, unit.bayHalf));
+          const wideGhost = marked.find((item) => wide(item, item.typeCode, item.half));
+          const wideSpan = wideUnit ? wide(wideUnit, wideUnit.type, wideUnit.bayHalf) : wideGhost ? wide(wideGhost, wideGhost.typeCode, wideGhost.half) : "";
+          const pieces = wideSpan
+            ? [{ span: wideSpan, occupant: wideUnit || null, ghost: wideUnit ? null : wideGhost }]
+            : ["A", "B"].map((span) => ({
+              span,
+              occupant: occupants.find((unit) => baySpan(unit.type, unit.bayHalf) === span) || null,
+              ghost: marked.find((item) => baySpan(item.typeCode, item.half) === span) || null,
+            })).filter((piece) => piece.occupant || piece.ghost);
+          if (options.targets) {
+            const incomingSpan = baySpan(options.incomingType, null);
+            const free = wideSpan ? [] : ["A", "B"].filter((span) => !pieces.some((piece) => piece.span === span));
+            const hints = incomingSpan === "full" ? (free.length === 2 ? ["full"] : []) : free;
+            hints.forEach((span) => {
+              const floor = span === "B" ? floorB : span === "A" ? floorA : Math.max(floorA, floorB);
+              if (offered[span]) return;
+              if (!columnAllows(zone, row, col, level, options.incomingType, stackedUnits, ghosts, span === "full" ? null : span)) return;
+                offered[span] = true;
+                const length = span === "full" ? lengthOf(options.incomingType) : Math.min(lengthOf(options.incomingType), usable / 2 - 0.15);
+                const height = BOX_H * highOf(options.incomingType);
+                const hint = new THREE.Mesh(
+                  new THREE.BoxGeometry(length, height * 0.35, BOX_W),
+                  new THREE.MeshStandardMaterial({ color: "#f0c14a", transparent: true, opacity: 0.35, roughness: 0.8 }),
+                );
+                hint.position.set(xFor(span, length), floor + height * 0.18, z);
+                hint.userData.pick = {
+                  key: `slot-${zone.id}-${row}-${col}-${level}-${span}`,
+                  empty: true,
+                  zoneName: zone.name,
+                  row,
+                  col,
+                  level,
+                  ...(span === "A" || span === "B" ? { half: span } : {}),
+                };
+                root.add(hint);
+                disposables.push(hint.geometry, hint.material);
+            });
           }
-          const named = Boolean(ghost?.code);
-          const type = inheritedType(zone, row, col, level, occupant?.type || (named ? ghost.typeCode : ""), units, ghosts);
-          const length = lengthOf(type);
-          const height = BOX_H * highOf(type);
-          const slotX = originX + (col - 1) * PITCH_X;
-          const x = slotX + (PITCH_X - 0.7 - length) / 2 + length / 2;
-          const z = originZ + (row - 1) * PITCH_Z + BOX_W / 2;
-          const color = occupant ? (occupant.typeColor || "#8a90a2") : named ? (ghost.color || typeColor(ghost.typeCode)) : "#c5ccd6";
-          const label = occupant ? occupant.iso.slice(-6) : named ? ghost.code.slice(-6) : "?";
-          const texture = faceTexture(color, label, !occupant && !named);
-          const geometry = new THREE.BoxGeometry(length, height, BOX_W);
-          const material = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.62, metalness: 0.04 });
-          const mesh = new THREE.Mesh(geometry, material);
-          mesh.position.set(x, floor + height / 2, z);
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
-          mesh.userData.pick = occupant
-            ? {
-              key: occupant.iso,
-              code: occupant.iso,
-              typeLabel: occupant.typeLabel || occupant.type,
-              where: `${zone.name} · fila ${row} · columna ${col} · altura ${level}`,
-              note: occupant.status || "",
+          if (!pieces.length) continue;
+          pieces.forEach((piece) => {
+            const occupant = piece.occupant;
+            const ghost = piece.ghost;
+            const named = Boolean(ghost?.code);
+            const ownType = occupant?.type || (named ? ghost.typeCode : "");
+            const type = inheritedType(zone, row, col, level, ownType, units, ghosts, piece.span === "full" ? "" : piece.span);
+            const natural = lengthOf(type || (piece.span === "full" ? "40" : "20"));
+            const length = piece.span === "A" || piece.span === "B" ? Math.min(natural, usable / 2 - 0.15) : natural;
+            const height = BOX_H * highOf(type);
+            const floor = piece.span === "B" ? floorB : piece.span === "A" ? floorA : Math.max(floorA, floorB);
+            const color = occupant ? (occupant.typeColor || "#8a90a2") : named ? (ghost.color || typeColor(ghost.typeCode)) : "#c5ccd6";
+            const label = occupant ? occupant.iso.slice(-6) : named ? ghost.code.slice(-6) : "?";
+            const texture = faceTexture(color, label, !occupant && !named);
+            const geometry = new THREE.BoxGeometry(length, height, BOX_W);
+            const material = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.62, metalness: 0.04 });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(xFor(piece.span, length), floor + height / 2, z);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            const side = piece.span === "A" || piece.span === "B" ? ` · mitad ${piece.span}` : piece.span === "center" ? " · al centro" : "";
+            mesh.userData.pick = occupant
+              ? {
+                key: occupant.iso,
+                code: occupant.iso,
+                typeLabel: occupant.typeLabel || occupant.type,
+                where: `${zone.name} · fila ${row} · columna ${col} · altura ${level}${side}`,
+                note: occupant.status || "",
+              }
+              : {
+                key: `g-${zone.id}-${row}-${col}-${level}-${ghost.half || "F"}`,
+                code: named ? ghost.code : "Ocupado sin identificar",
+                typeLabel: named ? (ghost.typeCode || "Sin tipo") : "Pendiente",
+                where: `${zone.name} · fila ${row} · columna ${col} · altura ${level}${side}`,
+                note: named
+                  ? [ghost.note, "Equipo en el patio, fuera del inventario dry."].filter(Boolean).join(". ")
+                  : "El espacio está ocupado. El equipo todavía no tiene código.",
+                ghost: { zoneId: zone.id, row, col, level, ...(ghost.half ? { half: ghost.half } : {}) },
+              };
+            const edges = new THREE.LineSegments(
+              new THREE.EdgesGeometry(geometry),
+              new THREE.LineBasicMaterial({ color: "#121820" }),
+            );
+            mesh.add(edges);
+            root.add(mesh);
+            disposables.push(geometry, material, texture, edges.geometry, edges.material);
+            const top = floor + height;
+            if (piece.span === "A") floorA = top;
+            else if (piece.span === "B") floorB = top;
+            else {
+              floorA = top;
+              floorB = top;
             }
-            : {
-              key: `g-${zone.id}-${row}-${col}-${level}`,
-              code: named ? ghost.code : "Ocupado sin identificar",
-              typeLabel: named ? (ghost.typeCode || "Sin tipo") : "Pendiente",
-              where: `${zone.name} · fila ${row} · columna ${col} · altura ${level}`,
-              note: named
-                ? [ghost.note, "Equipo en el patio, fuera del inventario dry."].filter(Boolean).join(". ")
-                : "El espacio está ocupado. El equipo todavía no tiene código.",
-              ghost: { zoneId: zone.id, row, col, level },
-            };
-          const edges = new THREE.LineSegments(
-            new THREE.EdgesGeometry(geometry),
-            new THREE.LineBasicMaterial({ color: "#121820" }),
-          );
-          mesh.add(edges);
-          root.add(mesh);
-          disposables.push(geometry, material, texture, edges.geometry, edges.material);
-          floor += height;
+          });
         }
       }
     }
@@ -313,7 +386,7 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
   return root;
 }
 
-export default function YardScene({ zones, units, ghosts, typeColor, onPick, picked, onClose, targets, incomingType, transferring, onTransfer, onPark, onRelease, history }) {
+export default function YardScene({ zones, units, ghosts, typeColor, onPick, picked, onClose, targets, incomingType, transferring, onTransfer, onSlide, onPark, onRelease, history }) {
   const mountRef = useRef(null);
   const pickRef = useRef(onPick);
   const colorRef = useRef(typeColor);
@@ -328,8 +401,8 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
   dataRef.current = { zones, units, ghosts, targets, incomingType };
   const yardKey = JSON.stringify({
     zones: (zones || []).map((zone) => [zone.id, zone.name, zone.rows, zone.cols, zone.levels, zone.gridRow, zone.gridCol]),
-    units: (units || []).map((unit) => [unit.iso, unit.lado, unit.ruma, unit.columna, unit.nivel, unit.type, unit.onAisle]),
-    ghosts: (ghosts || []).map((ghost) => [ghost.zoneId, ghost.row, ghost.col, ghost.level, ghost.code || "", ghost.typeCode || ""]),
+    units: (units || []).map((unit) => [unit.iso, unit.lado, unit.ruma, unit.columna, unit.nivel, unit.type, unit.onAisle, unit.bayHalf || ""]),
+    ghosts: (ghosts || []).map((ghost) => [ghost.zoneId, ghost.row, ghost.col, ghost.level, ghost.code || "", ghost.typeCode || "", ghost.half || ""]),
     targets: Boolean(targets),
     incomingType: incomingType || "",
   });
@@ -588,7 +661,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
   return (
     <div className="yard-scene">
       <div className="yard-scene-tools">
-        <span>Arrastra para girar. Pellizca o usa los botones para acercar. Un 40 pies mide el doble que un 20.</span>
+        <span>Arrastra para girar. Pellizca o usa los botones para acercar. Un 20 al centro se corre a la izquierda o a la derecha.</span>
         <button className="btn-ghost yard-reset-view" type="button" onClick={() => viewRef.current?.reset()}>Vista general</button>
       </div>
       <div className={`yard-viewport${picked ? " has-pick" : ""}`} ref={mountRef}>
@@ -605,6 +678,27 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
             <p>{picked.access}</p>
             <p>{picked.cost}</p>
             {picked.unknown ? <p>Este hueco no está en el catálogo.</p> : <p className="yard-float-note">Esa referencia de movimientos queda en el catálogo comercial.</p>}
+            {(() => {
+              const pickedUnit = picked && !picked.unknown && !picked.empty
+                ? (units || []).find((unit) => unit.iso === (picked.code || picked.key))
+                : null;
+              const pickedGhost = picked?.ghost
+                ? (ghosts || []).find((ghost) => ghost.zoneId === picked.ghost.zoneId && ghost.row === picked.ghost.row && ghost.col === picked.ghost.col && ghost.level === picked.ghost.level && (ghost.half || "") === (picked.ghost.half || ""))
+                : null;
+              const feet = feetOf(pickedUnit?.type || pickedGhost?.typeCode);
+              const placed = pickedUnit ? pickedUnit.lado && pickedUnit.lado !== "PASILLO" : Boolean(pickedGhost?.code);
+              if (!onSlide || feet <= 0 || feet >= 40 || !placed) return null;
+              const side = pickedUnit?.bayHalf || pickedGhost?.half || "";
+              return (
+                <>
+                  <p>{side ? `Está en la mitad ${side}. El otro lado queda libre.` : "Está al centro. Muévelo a un lado para dejar espacio a otro de 20 pies."}</p>
+                  <div className="yard-float-actions">
+                    <button className={side === "A" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => onSlide("A")}>A la izquierda</button>
+                    <button className={side === "B" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => onSlide("B")}>A la derecha</button>
+                  </div>
+                </>
+              );
+            })()}
             <div className="yard-float-actions">
               {detailCode ? (
                 <button className="btn-primary" type="button" onClick={() => setDetailIso(detailCode)}>Más información</button>
@@ -615,7 +709,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
               {transferring ? <button className="btn-ghost" type="button" onClick={onPark}>Pasillo</button> : null}
               {transferring ? <button className="btn-ghost" type="button" onClick={onRelease}>Devolver</button> : null}
             </div>
-            {transferring ? <p>Elige un cuadro amarillo libre. Un 40 no puede apoyarse en un 20.</p> : null}
+            {transferring ? <p>Elige un cuadro amarillo libre. Un 40 cabe sobre dos de 20, uno a cada lado.</p> : null}
             {history?.length ? (
               <ul className="yard-history">
                 {history.slice(0, 6).map((row) => <li key={row.id}>{row.detail}</li>)}

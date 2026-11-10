@@ -21,7 +21,7 @@ export class YardController {
 
   @Post("ghost")
   ghost(
-    @Body() body: { depotId?: string; zoneId?: string; row?: number; col?: number; level?: number; occupied?: boolean; code?: string; typeCode?: string; color?: string; note?: string },
+    @Body() body: { depotId?: string; zoneId?: string; row?: number; col?: number; level?: number; occupied?: boolean; code?: string; typeCode?: string; color?: string; note?: string; half?: string },
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
@@ -53,7 +53,7 @@ export class YardController {
 
   @Post("place")
   place(
-    @Body() body: { iso?: string; depotId?: string; lado?: string; ruma?: number; columna?: number; nivel?: number },
+    @Body() body: { iso?: string; depotId?: string; lado?: string; ruma?: number; columna?: number; nivel?: number; half?: string },
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {

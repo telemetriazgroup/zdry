@@ -29,6 +29,8 @@ export type YardGhost = {
   typeCode?: string;
   color?: string;
   note?: string;
+  /** Mitad del puesto de 40 pies. Vacío: el equipo ocupa el puesto entero. */
+  half?: "A" | "B";
 };
 
 export type YardPlan = {
@@ -115,14 +117,17 @@ export function normalizeYardPlan(raw: unknown): YardPlan {
       level: inside(row.level, 1, zone.levels),
     };
     if (!ghost.row || !ghost.col || !ghost.level) return;
-    const key = `${ghost.zoneId}:${ghost.row}:${ghost.col}:${ghost.level}`;
-    if (ghostSeen.has(key)) return;
-    ghostSeen.add(key);
     const code = String(row.code || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 20);
     const typeCode = String(row.typeCode || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 12);
     const color = /^#[0-9a-fA-F]{6}$/.test(String(row.color || "")) ? String(row.color).toLowerCase() : "";
     const note = String(row.note || "").trim().slice(0, 120);
-    const named = code ? { ...ghost, code, typeCode, ...(color ? { color } : {}), ...(note ? { note } : {}) } : ghost;
+    const half = row.half === "A" || row.half === "B" ? row.half : "";
+    const key = `${ghost.zoneId}:${ghost.row}:${ghost.col}:${ghost.level}:${half || "F"}`;
+    if (ghostSeen.has(key)) return;
+    ghostSeen.add(key);
+    const named = code
+      ? { ...ghost, code, typeCode, ...(color ? { color } : {}), ...(note ? { note } : {}), ...(half ? { half } : {}) }
+      : { ...ghost, ...(half ? { half } : {}) };
     ghosts.push(named);
   });
   return { zones, aisles, ghosts };
@@ -159,35 +164,83 @@ export type StackCell = {
   col: number;
   level: number;
   iso?: string;
+  type?: string;
+  half?: "A" | "B" | null;
 };
+
+export type BaySpan = "full" | "center" | "A" | "B";
+
+/** Un 40 ocupa el puesto entero. Un 20 o un 10 sin lado queda al centro. Con mitad, ocupa A o B. */
+export function baySpan(type?: string | null, half?: string | null): BaySpan {
+  const feet = feetOf(type);
+  if (feet >= 40) return "full";
+  if (half === "A" || half === "B") return half;
+  if (feet > 0) return "center";
+  return "full";
+}
+
+export function spansOverlap(left: BaySpan, right: BaySpan) {
+  if (left === "center" || right === "center") return true;
+  return left === "full" || right === "full" || left === right;
+}
+
+function coversHalf(item: { type?: string | null; half?: string | null }, half: "A" | "B") {
+  const span = baySpan(item.type, item.half);
+  return span === "full" || span === half;
+}
+
+function occupiesHalf(item: { type?: string | null; half?: string | null }, half: "A" | "B") {
+  const span = baySpan(item.type, item.half);
+  return span === "full" || span === "center" || span === half;
+}
 
 /** Los niveles vacíos debajo de un equipo quedan ocupados sin identificar, para que la ruma no flote. */
 export function ghostsWithSupport(zones: YardZone[], ghosts: YardGhost[], occupied: StackCell[]): YardGhost[] {
   const next = ghosts.map((ghost) => ({ ...ghost }));
   const zoneByName = new Map(zones.map((zone) => [zone.name, zone]));
-  const tops = new Map<string, number>();
-  const bump = (zoneId: string, row: number, col: number, level: number) => {
-    if (level < 1) return;
-    const key = `${zoneId}:${row}:${col}`;
-    tops.set(key, Math.max(tops.get(key) || 0, level));
+  const columns = new Map<string, { zoneId: string; row: number; col: number; name: string }>();
+  const remember = (zoneId: string, name: string, row: number, col: number) => {
+    columns.set(`${zoneId}:${row}:${col}`, { zoneId, row, col, name });
   };
-  for (const ghost of next) bump(ghost.zoneId, ghost.row, ghost.col, ghost.level);
+  for (const ghost of next) {
+    const zone = zones.find((item) => item.id === ghost.zoneId);
+    if (zone) remember(ghost.zoneId, zone.name, ghost.row, ghost.col);
+  }
   for (const cell of occupied) {
     const zone = zoneByName.get(cell.zoneName);
-    if (zone) bump(zone.id, cell.row, cell.col, cell.level);
+    if (zone) remember(zone.id, zone.name, cell.row, cell.col);
   }
-  for (const [key, top] of tops) {
-    const [zoneId, rowRaw, colRaw] = key.split(":");
-    const zone = zones.find((item) => item.id === zoneId);
-    if (!zone) continue;
-    const row = Number(rowRaw);
-    const col = Number(colRaw);
-    for (let level = 1; level < top; level += 1) {
-      const hasGhost = next.some((ghost) => ghost.zoneId === zoneId && ghost.row === row && ghost.col === col && ghost.level === level);
-      const hasUnit = occupied.some(
-        (cell) => cell.zoneName === zone.name && cell.row === row && cell.col === col && cell.level === level,
+  for (const column of columns.values()) {
+    const at = (level: number) => {
+      const units = occupied.filter(
+        (cell) => cell.zoneName === column.name && cell.row === column.row && cell.col === column.col && cell.level === level,
       );
-      if (!hasGhost && !hasUnit) next.push({ zoneId, row, col, level });
+      const marked = next.filter(
+        (ghost) => ghost.zoneId === column.zoneId && ghost.row === column.row && ghost.col === column.col && ghost.level === level,
+      );
+      return [
+        ...units.map((cell) => ({ type: cell.type, half: cell.half })),
+        ...marked.map((ghost) => ({ type: ghost.typeCode, half: ghost.half })),
+      ];
+    };
+    const top = Math.max(
+      0,
+      ...occupied.filter((cell) => cell.zoneName === column.name && cell.row === column.row && cell.col === column.col).map((cell) => cell.level),
+      ...next.filter((ghost) => ghost.zoneId === column.zoneId && ghost.row === column.row && ghost.col === column.col).map((ghost) => ghost.level),
+    );
+    for (let level = 1; level < top; level += 1) {
+      const here = at(level);
+      const above = (half: "A" | "B") => {
+        for (let cursor = level + 1; cursor <= top; cursor += 1) {
+          if (at(cursor).some((item) => occupiesHalf(item, half))) return true;
+        }
+        return false;
+      };
+      const needA = above("A") && !here.some((item) => occupiesHalf(item, "A"));
+      const needB = above("B") && !here.some((item) => occupiesHalf(item, "B"));
+      if (needA && needB) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level });
+      else if (needA) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level, half: "A" });
+      else if (needB) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level, half: "B" });
     }
   }
   return next;
@@ -203,13 +256,20 @@ export function movesAbove(
   col: number,
   level: number,
   iso?: string,
+  half?: string | null,
+  type?: string | null,
 ): number {
   const zone = zones.find((item) => item.name === lado);
+  const span = type || half ? baySpan(type, half) : "full";
   const units = occupied.filter(
-    (cell) => cell.zoneName === lado && cell.row === row && cell.col === col && cell.level > level && cell.iso !== iso,
+    (cell) => cell.zoneName === lado && cell.row === row && cell.col === col && cell.level > level && cell.iso !== iso
+      && spansOverlap(baySpan(cell.type, cell.half), span),
   ).length;
   const unknown = zone
-    ? ghosts.filter((ghost) => ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level > level).length
+    ? ghosts.filter(
+      (ghost) => ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level > level
+        && spansOverlap(baySpan(ghost.typeCode, ghost.half), span),
+    ).length
     : 0;
   return units + unknown;
 }
@@ -225,24 +285,71 @@ export function feetOf(type?: string | null): number {
   return 0;
 }
 
-/** Un equipo más largo no puede apoyarse en uno más corto. Un 20 sí puede ir sobre un 40. */
+function supportFeet(items: Array<{ type?: string | null; half?: string | null }>, half: "A" | "B") {
+  const typed = items.filter((item) => coversHalf(item, half) && feetOf(item.type) > 0);
+  if (!typed.length) return null;
+  return Math.max(...typed.map((item) => feetOf(item.type)));
+}
+
+/** Un 40 se apoya en un 40 o en dos de 20, uno en cada mitad. Un 20 se apoya en su mitad o en un 40. */
 export function stackLengthError(
   zone: YardZone,
   ghosts: YardGhost[],
-  stacked: Array<StackCell & { type?: string }>,
+  stacked: Array<StackCell & { type?: string; half?: "A" | "B" | null }>,
   incomingType: string | null | undefined,
   row: number,
   col: number,
   level: number,
+  half?: string | null,
 ): string {
   const incoming = feetOf(incomingType);
   if (level <= 1 || incoming <= 0) return "";
+  const span = baySpan(incomingType, half);
   for (let cursor = level - 1; cursor >= 1; cursor -= 1) {
-    const unit = stacked.find((cell) => cell.zoneName === zone.name && cell.row === row && cell.col === col && cell.level === cursor);
-    const ghost = ghosts.find((item) => item.zoneId === zone.id && item.row === row && item.col === col && item.level === cursor);
-    const feet = feetOf(unit?.type || ghost?.typeCode);
-    if (feet > 0 && incoming > feet) {
-      return `Un equipo de ${incoming} pies no puede ir encima de uno de ${feet} pies.`;
+    const items = [
+      ...stacked
+        .filter((cell) => cell.zoneName === zone.name && cell.row === row && cell.col === col && cell.level === cursor)
+        .map((cell) => ({ type: cell.type, half: cell.half })),
+      ...ghosts
+        .filter((ghost) => ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level === cursor)
+        .map((ghost) => ({ type: ghost.typeCode, half: ghost.half })),
+    ];
+    const feetA = supportFeet(items, "A");
+    const feetB = supportFeet(items, "B");
+    const centered = items.filter((item) => baySpan(item.type, item.half) === "center" && feetOf(item.type) > 0);
+    const centerFeet = centered.length ? Math.max(...centered.map((item) => feetOf(item.type))) : null;
+    const fullFeet = items
+      .filter((item) => baySpan(item.type, item.half) === "full" && feetOf(item.type) > 0)
+      .map((item) => feetOf(item.type));
+    const fullSupport = fullFeet.length ? Math.max(...fullFeet) : null;
+    if (fullSupport != null && fullSupport >= incoming) continue;
+    if (span === "center") {
+      if (feetA != null && feetB != null && feetA >= incoming && feetB >= incoming) continue;
+      if (centerFeet != null && incoming > centerFeet) {
+        return `Un equipo de ${incoming} pies no puede ir encima de uno de ${centerFeet} pies.`;
+      }
+      const sideFeet = feetA ?? feetB;
+      if (sideFeet != null && incoming > sideFeet) {
+        return `Un equipo de ${incoming} pies no puede ir encima de uno de ${sideFeet} pies.`;
+      }
+      continue;
+    }
+    if (span === "full" && feetA != null && feetB != null && feetA >= 20 && feetB >= 20 && incoming <= 40) continue;
+    if (span === "full" && centerFeet != null && incoming > centerFeet) {
+      return `Un equipo de ${incoming} pies no puede ir encima de uno de ${centerFeet} pies que está al centro. Muévelo a la izquierda o a la derecha y completa la otra mitad.`;
+    }
+    if ((span === "A" || span === "B") && centerFeet != null && (span === "A" ? feetA : feetB) == null) {
+      return `Un equipo de ${incoming} pies no puede ir encima de uno de ${centerFeet} pies que está al centro. Muévelo a la izquierda o a la derecha.`;
+    }
+    const halves: Array<"A" | "B"> = span === "full" ? ["A", "B"] : [span];
+    for (const side of halves) {
+      const feet = side === "A" ? feetA : feetB;
+      if (feet == null) continue;
+      if (incoming > feet) {
+        return span === "full" && (feetA == null || feetB == null)
+          ? `Un equipo de 40 pies necesita un 40 debajo, o un 20 en cada mitad. Abajo hay uno de ${feet} pies.`
+          : `Un equipo de ${incoming} pies no puede ir encima de uno de ${feet} pies.`;
+      }
     }
   }
   return "";

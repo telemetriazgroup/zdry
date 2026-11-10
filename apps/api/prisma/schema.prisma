@@ -103,6 +103,7 @@ model Container {
   ruma               Int?
   columna            Int?
   nivel              Int?
+  bayHalf            String?
   tareKg             Int                 @default(0)
   mgwKg              Int                 @default(0)
   payloadKg          Int                 @default(0)

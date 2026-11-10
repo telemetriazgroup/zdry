@@ -75,6 +75,13 @@ describe("yard plan", () => {
     expect(stackLengthError(zone, [{ zoneId: "b", row: 1, col: 1, level: 2 }], twenty, "40HC", 1, 1, 3)).toContain("20 pies");
     expect(stackLengthError(zone, [], [{ zoneName: "Zona B", row: 1, col: 1, level: 1, type: "10" }], "20", 1, 1, 2)).toContain("20 pies");
     expect(stackLengthError(zone, [], forty, "10", 1, 2, 2)).toBe("");
+    const pair = [
+      { zoneName: "Zona B", row: 1, col: 1, level: 1, type: "20DC", half: "A" as const },
+      { zoneName: "Zona B", row: 1, col: 1, level: 1, type: "20DC", half: "B" as const },
+    ];
+    expect(stackLengthError(zone, [], pair, "40HC", 1, 1, 2)).toBe("");
+    expect(stackLengthError(zone, [], pair, "20DC", 1, 1, 2, "A")).toBe("");
+    expect(stackLengthError(zone, [], [pair[0]], "40HC", 1, 1, 2)).toContain("cada mitad");
   });
 
   it("separa lo que salió al cliente de lo que sigue a la mano", () => {

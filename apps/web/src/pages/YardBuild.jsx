@@ -44,39 +44,92 @@ function withSeats(plan) {
   return { ...plan, zones, ghosts: plan.ghosts || [] };
 }
 
+function feetOf(type) {
+  const code = String(type || "").toUpperCase();
+  if (code.startsWith("45")) return 45;
+  if (code.startsWith("40")) return 40;
+  if (code.startsWith("20")) return 20;
+  if (code.startsWith("10")) return 10;
+  return 0;
+}
+
+function baySpan(type, half) {
+  const feet = feetOf(type);
+  if (feet >= 40) return "full";
+  if (half === "A" || half === "B") return half;
+  if (feet > 0) return "center";
+  return "full";
+}
+
+function spansOverlap(left, right) {
+  if (left === "center" || right === "center") return true;
+  return left === "full" || right === "full" || left === right;
+}
+
+function coversHalf(item, half) {
+  const span = baySpan(item.type || item.typeCode, item.bayHalf || item.half);
+  return span === "full" || span === half;
+}
+
+function occupiesHalf(item, half) {
+  const span = baySpan(item.type || item.typeCode, item.bayHalf || item.half);
+  return span === "full" || span === "center" || span === half;
+}
+
 function supportedGhosts(zones, units, ghosts) {
   const next = (ghosts || []).map((ghost) => ({ ...ghost }));
-  const tops = new Map();
-  const bump = (zoneId, row, col, level) => {
-    if (level < 1) return;
-    const key = `${zoneId}:${row}:${col}`;
-    tops.set(key, Math.max(tops.get(key) || 0, level));
-  };
-  for (const ghost of next) bump(ghost.zoneId, ghost.row, ghost.col, ghost.level);
+  const columns = new Map();
+  const remember = (zoneId, name, row, col) => columns.set(`${zoneId}:${row}:${col}`, { zoneId, name, row, col });
+  for (const ghost of next) {
+    const zone = zones.find((item) => item.id === ghost.zoneId);
+    if (zone) remember(ghost.zoneId, zone.name, ghost.row, ghost.col);
+  }
   for (const unit of units || []) {
     const zone = zones.find((item) => item.name === unit.lado);
-    if (zone && unit.ruma && unit.columna && unit.nivel) bump(zone.id, unit.ruma, unit.columna, unit.nivel);
+    if (zone && unit.ruma && unit.columna && unit.nivel) remember(zone.id, zone.name, unit.ruma, unit.columna);
   }
-  for (const [key, top] of tops) {
-    const [zoneId, rowRaw, colRaw] = key.split(":");
-    const zone = zones.find((item) => item.id === zoneId);
-    if (!zone) continue;
-    const row = Number(rowRaw);
-    const col = Number(colRaw);
+  for (const column of columns.values()) {
+    const at = (level) => [
+      ...(units || [])
+        .filter((unit) => unit.lado === column.name && unit.ruma === column.row && unit.columna === column.col && unit.nivel === level)
+        .map((unit) => ({ type: unit.type, half: unit.bayHalf })),
+      ...next
+        .filter((ghost) => ghost.zoneId === column.zoneId && ghost.row === column.row && ghost.col === column.col && ghost.level === level)
+        .map((ghost) => ({ type: ghost.typeCode, half: ghost.half })),
+    ];
+    const top = Math.max(
+      0,
+      ...(units || []).filter((unit) => unit.lado === column.name && unit.ruma === column.row && unit.columna === column.col).map((unit) => unit.nivel || 0),
+      ...next.filter((ghost) => ghost.zoneId === column.zoneId && ghost.row === column.row && ghost.col === column.col).map((ghost) => ghost.level),
+    );
     for (let level = 1; level < top; level += 1) {
-      const hasGhost = next.some((ghost) => ghost.zoneId === zoneId && ghost.row === row && ghost.col === col && ghost.level === level);
-      const hasUnit = (units || []).some((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel === level);
-      if (!hasGhost && !hasUnit) next.push({ zoneId, row, col, level });
+      const here = at(level);
+      const above = (half) => {
+        for (let cursor = level + 1; cursor <= top; cursor += 1) {
+          if (at(cursor).some((item) => occupiesHalf(item, half))) return true;
+        }
+        return false;
+      };
+      const needA = above("A") && !here.some((item) => occupiesHalf(item, "A"));
+      const needB = above("B") && !here.some((item) => occupiesHalf(item, "B"));
+      if (needA && needB) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level });
+      else if (needA) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level, half: "A" });
+      else if (needB) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level, half: "B" });
     }
   }
   return next;
 }
 
-function movesAbove(zones, units, ghosts, zone, row, col, level, iso) {
+function movesAbove(zones, units, ghosts, zone, row, col, level, iso, half, type) {
+  const span = type || half ? baySpan(type, half) : "full";
   const unitsAbove = (units || []).filter(
-    (unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel > level && unit.iso !== iso,
+    (unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel > level && unit.iso !== iso
+      && spansOverlap(baySpan(unit.type, unit.bayHalf), span),
   ).length;
-  const ghostsAbove = ghosts.filter((ghost) => ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level > level).length;
+  const ghostsAbove = ghosts.filter(
+    (ghost) => ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level > level
+      && spansOverlap(baySpan(ghost.typeCode, ghost.half), span),
+  ).length;
   return unitsAbove + ghostsAbove;
 }
 
@@ -151,7 +204,9 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   }
 
   function cellPick(zone, row, col, level, occupant, ghost) {
-    const above = movesAbove(draft.zones, layout.units, ghosts, zone, row, col, level, occupant?.iso);
+    const span = occupant ? baySpan(occupant.type, occupant.bayHalf) : baySpan(ghost?.typeCode, ghost?.half);
+    const half = span === "A" || span === "B" ? span : "";
+    const above = movesAbove(draft.zones, layout.units, ghosts, zone, row, col, level, occupant?.iso, half, occupant?.type || ghost?.typeCode);
     const freeMoves = layout.retrieval?.freeMoves ?? 3;
     const rate = layout.retrieval?.rate ?? 25;
     const extraMoves = Math.max(0, above - freeMoves);
@@ -162,7 +217,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     const cost = extraMoves
       ? `Referencia de costo extra: USD ${reference} (${extraMoves} × ${rate}). ${freeMoves} movimientos van libres.`
       : `Sin cargo extra de movimientos. ${freeMoves} van libres.`;
-    const where = `${zone.name} · fila ${row} · columna ${col} · altura ${level}`;
+    const where = `${zone.name} · fila ${row} · columna ${col} · altura ${level}${half ? ` · mitad ${half}` : span === "center" ? " · al centro" : ""}`;
     if (occupant) {
       return {
         key: occupant.iso,
@@ -179,7 +234,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     if (!ghost) return null;
     const named = Boolean(ghost.code);
     return {
-      key: `g-${zone.id}-${row}-${col}-${level}`,
+      key: `g-${zone.id}-${row}-${col}-${level}-${ghost.half || "F"}`,
       code: named ? ghost.code : "Desconocido",
       title: named ? ghost.code : "Desconocido",
       unknown: !named,
@@ -190,11 +245,15 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       note: named
         ? `${ghost.note ? `${ghost.note}. ` : ""}Equipo ajeno a ZDRY, ${feetName(ghost.typeCode)}. ${access} ${cost}`
         : `Desconocido. ${access} ${cost}`,
-      ghost: above ? null : { zoneId: zone.id, row, col, level },
+      ghost: above ? null : { zoneId: zone.id, row, col, level, ...(ghost.half ? { half: ghost.half } : {}) },
     };
   }
 
-  async function onCell(zone, row, col, level, occupant, ghost) {
+  function clickedHalf(typeCode, half) {
+    return feetOf(typeCode) >= 40 ? undefined : half;
+  }
+
+  async function onCell(zone, row, col, level, occupant, ghost, half) {
     setError("");
     const code = guestCode.trim().toUpperCase();
     if (occupant) {
@@ -203,13 +262,13 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       return;
     }
     if (!selectedIso && !code) {
-      setPicked(cellPick(zone, row, col, level, null, ghost));
-      const above = movesAbove(draft.zones, layout.units, ghosts, zone, row, col, level);
+      setPicked(cellPick(zone, row, col, level, null, ghost || (half ? { half } : null)));
+      const above = movesAbove(draft.zones, layout.units, ghosts, zone, row, col, level, undefined, ghost?.half || half, ghost?.typeCode);
       if (ghost?.code || above) return;
       try {
         await api("/yard/ghost", {
           method: "POST",
-          body: { depotId: layout.depotId, zoneId: zone.id, row, col, level, occupied: !ghost },
+          body: { depotId: layout.depotId, zoneId: zone.id, row, col, level, occupied: !ghost, ...(half ? { half } : {}) },
         });
         await onReload();
       } catch (e) {
@@ -219,19 +278,23 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     }
     try {
       if (selectedIso) {
+        const selected = layout.units.find((unit) => unit.iso === selectedIso);
+        const placeHalf = clickedHalf(selected?.type, half);
         await api("/yard/place", {
           method: "POST",
-          body: { iso: selectedIso, depotId: layout.depotId, lado: zone.name, ruma: row, columna: col, nivel: level, regularize: true },
+          body: { iso: selectedIso, depotId: layout.depotId, lado: zone.name, ruma: row, columna: col, nivel: level, regularize: true, ...(placeHalf ? { half: placeHalf } : {}) },
         });
         setSelectedIso(null);
       } else {
         const known = layout.units.find((unit) => unit.iso.toUpperCase() === code);
         if (known) {
+          const placeHalf = clickedHalf(known.type, half);
           await api("/yard/place", {
             method: "POST",
-            body: { iso: known.iso, depotId: layout.depotId, lado: zone.name, ruma: row, columna: col, nivel: level, regularize: true },
+            body: { iso: known.iso, depotId: layout.depotId, lado: zone.name, ruma: row, columna: col, nivel: level, regularize: true, ...(placeHalf ? { half: placeHalf } : {}) },
           });
         } else {
+          const placeHalf = clickedHalf(guestFeet, half);
           await api("/yard/ghost", {
             method: "POST",
             body: {
@@ -245,6 +308,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               typeCode: guestFeet,
               color: guestColor,
               note: guestNote.trim(),
+              ...(placeHalf ? { half: placeHalf } : {}),
             },
           });
         }
@@ -280,16 +344,71 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     }
   }
 
-  async function moveUnit(iso, zoneName, row, col, level) {
+  async function moveUnit(iso, zoneName, row, col, level, half) {
     setError("");
     try {
+      const moving = layout.units.find((unit) => unit.iso === iso);
+      const placeHalf = clickedHalf(moving?.type, half);
       await api("/yard/place", {
         method: "POST",
-        body: { iso, depotId: layout.depotId, lado: zoneName, ruma: row, columna: col, nivel: level, regularize: true },
+        body: { iso, depotId: layout.depotId, lado: zoneName, ruma: row, columna: col, nivel: level, regularize: true, ...(placeHalf ? { half: placeHalf } : {}) },
       });
       setTransferIso(null);
       await onReload();
       await loadHistory(iso);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function slideTo(half) {
+    if (half !== "A" && half !== "B") return;
+    setError("");
+    try {
+      if (picked?.ghost) {
+        const ghost = ghosts.find((item) => item.zoneId === picked.ghost.zoneId && item.row === picked.ghost.row && item.col === picked.ghost.col && item.level === picked.ghost.level && (item.half || "") === (picked.ghost.half || ""));
+        if (!ghost?.code || feetOf(ghost.typeCode) <= 0 || feetOf(ghost.typeCode) >= 40 || ghost.half === half) return;
+        await api("/yard/ghost", {
+          method: "POST",
+          body: {
+            depotId: layout.depotId,
+            zoneId: ghost.zoneId,
+            row: ghost.row,
+            col: ghost.col,
+            level: ghost.level,
+            occupied: true,
+            code: ghost.code,
+            typeCode: ghost.typeCode,
+            ...(ghost.color ? { color: ghost.color } : {}),
+            ...(ghost.note ? { note: ghost.note } : {}),
+            half,
+          },
+        });
+      } else {
+        const unit = layout.units.find((item) => item.iso === picked?.code);
+        if (!unit?.lado || unit.lado === "PASILLO" || !unit.ruma || !unit.columna || !unit.nivel) return;
+        if (feetOf(unit.type) <= 0 || feetOf(unit.type) >= 40 || unit.bayHalf === half) return;
+        await api("/yard/place", {
+          method: "POST",
+          body: {
+            iso: unit.iso,
+            depotId: layout.depotId,
+            lado: unit.lado,
+            ruma: unit.ruma,
+            columna: unit.columna,
+            nivel: unit.nivel,
+            regularize: true,
+            half,
+          },
+        });
+        await loadHistory(unit.iso);
+      }
+      setPicked((current) => (current ? {
+        ...current,
+        where: String(current.where || "").replace(/ · (mitad [AB]|al centro)$/, "") + ` · mitad ${half}`,
+        ghost: current.ghost ? { ...current.ghost, half } : current.ghost,
+      } : current));
+      await onReload();
     } catch (e) {
       setError(e.message);
     }
@@ -332,6 +451,21 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
           </div>
           <div>{picked.where}</div>
           <div>{picked.note}</div>
+          {(() => {
+            const unit = layout.units.find((item) => item.iso === picked.code);
+            const ghost = picked.ghost ? ghosts.find((item) => item.zoneId === picked.ghost.zoneId && item.row === picked.ghost.row && item.col === picked.ghost.col && item.level === picked.ghost.level && (item.half || "") === (picked.ghost.half || "")) : null;
+            const feet = feetOf(unit?.type || ghost?.typeCode);
+            const placed = unit ? unit.lado && unit.lado !== "PASILLO" : Boolean(ghost?.code);
+            if (feet <= 0 || feet >= 40 || !placed) return null;
+            const side = unit?.bayHalf || ghost?.half || "";
+            return (
+              <div className="yard-slide">
+                <span>{side ? `Está en la mitad ${side}.` : "Está al centro. Muévelo a un lado para dejar espacio a otro de 20 pies."}</span>
+                <button className={side === "A" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => slideTo("A")}>A la izquierda</button>
+                <button className={side === "B" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => slideTo("B")}>A la derecha</button>
+              </div>
+            );
+          })()}
           {picked.ghost ? <button className="btn-ghost" type="button" onClick={clearPicked}>Liberar hueco</button> : null}
           {!picked.unknown && !picked.ghost && layout.units.some((unit) => unit.iso === picked.code) ? (
             <button className="btn-primary" type="button" onClick={() => setDetailIso(picked.code)}>Ver más información</button>
@@ -452,7 +586,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               <input aria-label="Nota del equipo" value={guestNote} onChange={(e) => setGuestNote(e.target.value)} placeholder="Opcional" maxLength={120} />
             </label>
           </div>
-          <p className="section-sub">Escribe el código y toca la celda. Si ese código ya está en el almacén, se ubica ese equipo. Si no es dry, queda con su largo, su color y la nota.</p>
+          <p className="section-sub">Escribe el código y toca la celda. Un 40 ocupa la columna completa. Un 20 o un 10 ocupa la mitad A o B. Dos de 20, uno en cada mitad, aguantan un 40 encima. Si no es dry, queda con su largo, su color y la nota.</p>
           <input className="odoo-search" aria-label="Buscar equipo sin posición" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar equipo sin posición" />
           <p className="section-sub">{loose.length} sin posición. {needle ? `Coincidencias: ${loose.filter((unit) => `${unit.iso} ${unit.typeLabel}`.toUpperCase().includes(needle)).length}.` : ""}</p>
           <div className="pill-list">
@@ -500,36 +634,60 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
                                             <span>Col {col}</span>
                                             {Array.from({ length: zone.levels }, (_, levelIndex) => {
                                               const level = zone.levels - levelIndex;
-                                              const occupant = layout.units.find((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel === level);
-                                              const ghost = ghosts.find((item) => item.zoneId === zone.id && item.row === row && item.col === col && item.level === level);
-                                              const named = Boolean(ghost?.code);
-                                              const color = occupant ? occupant.typeColor : named ? (ghost.color || typeColor(ghost.typeCode)) : undefined;
+                                              const hereUnits = layout.units.filter((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel === level);
+                                              const hereGhosts = ghosts.filter((item) => item.zoneId === zone.id && item.row === row && item.col === col && item.level === level);
+                                              const wideUnit = hereUnits.find((unit) => {
+                                                const span = baySpan(unit.type, unit.bayHalf);
+                                                return span === "full" || span === "center";
+                                              });
+                                              const wideGhost = hereGhosts.find((item) => {
+                                                const span = baySpan(item.typeCode, item.half);
+                                                return span === "full" || span === "center";
+                                              });
+                                              const slots = wideUnit || wideGhost
+                                                ? [{ half: "", occupant: wideUnit, ghost: wideGhost }]
+                                                : ["A", "B"].map((half) => ({
+                                                  half,
+                                                  occupant: hereUnits.find((unit) => baySpan(unit.type, unit.bayHalf) === half),
+                                                  ghost: hereGhosts.find((item) => baySpan(item.typeCode, item.half) === half),
+                                                }));
                                               return (
-                                                <button
-                                                  key={level}
-                                                  type="button"
-                                                  className={`yard-cell${occupant || named ? " full" : ""}${ghost && !occupant && !named ? " ghost" : ""}${picked?.key === (occupant?.iso || `g-${zone.id}-${row}-${col}-${level}`) ? " on" : ""}`}
-                                                  style={color ? { background: color } : undefined}
-                                                  aria-label={`${zone.name} fila ${row} columna ${col} altura ${level}`}
-                                                  onClick={() => {
-                                                    if (mode === "trasladar") {
-                                                      if (occupant) {
-                                                        setTransferIso(occupant.iso);
-                                                        setPicked(cellPick(zone, row, col, level, occupant, null));
-                                                        loadHistory(occupant.iso);
-                                                        return;
-                                                      }
-                                                      if (transferIso) moveUnit(transferIso, zone.name, row, col, level);
-                                                      return;
-                                                    }
-                                                    onCell(zone, row, col, level, occupant, ghost);
-                                                  }}
-                                                  onDoubleClick={() => {
-                                                    if (mode === "regularizar" && occupant) returnUnit(occupant.iso);
-                                                  }}
-                                                >
-                                                  {occupant ? occupant.iso.slice(-4) : named ? ghost.code.slice(-4) : ghost ? "?" : level}
-                                                </button>
+                                                <div className={slots.length > 1 ? "yard-bay" : undefined} key={level}>
+                                                  {slots.map((slot) => {
+                                                    const occupant = slot.occupant;
+                                                    const ghost = slot.ghost;
+                                                    const named = Boolean(ghost?.code);
+                                                    const color = occupant ? occupant.typeColor : named ? (ghost.color || typeColor(ghost.typeCode)) : undefined;
+                                                    const key = occupant?.iso || (ghost ? `g-${zone.id}-${row}-${col}-${level}-${ghost.half || "F"}` : "");
+                                                    return (
+                                                      <button
+                                                        key={slot.half || "F"}
+                                                        type="button"
+                                                        className={`yard-cell${occupant || named ? " full" : ""}${ghost && !occupant && !named ? " ghost" : ""}${key && picked?.key === key ? " on" : ""}`}
+                                                        style={color ? { background: color } : undefined}
+                                                        aria-label={`${zone.name} fila ${row} columna ${col} altura ${level}${slot.half ? ` mitad ${slot.half}` : ""}`}
+                                                        onClick={() => {
+                                                          if (mode === "trasladar") {
+                                                            if (occupant) {
+                                                              setTransferIso(occupant.iso);
+                                                              setPicked(cellPick(zone, row, col, level, occupant, null));
+                                                              loadHistory(occupant.iso);
+                                                              return;
+                                                            }
+                                                            if (transferIso) moveUnit(transferIso, zone.name, row, col, level, slot.half || undefined);
+                                                            return;
+                                                          }
+                                                          onCell(zone, row, col, level, occupant, ghost, slot.half || undefined);
+                                                        }}
+                                                        onDoubleClick={() => {
+                                                          if (mode === "regularizar" && occupant) returnUnit(occupant.iso);
+                                                        }}
+                                                      >
+                                                        {occupant ? occupant.iso.slice(-4) : named ? ghost.code.slice(-4) : ghost ? "?" : slot.half || level}
+                                                      </button>
+                                                    );
+                                                  })}
+                                                </div>
                                               );
                                             })}
                                           </div>
@@ -553,7 +711,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       ) : (
         <>
           <p className="section-sub yard-help">
-            La vista muestra las rumas como las ve el operario. El largo sigue al tipo: un 40 pies ocupa el doble que un 20. El color es el del código. Sin color, el equipo se ve gris. El rayado es un espacio ocupado sin identificar.
+            La vista muestra las rumas como las ve el operario. Un 40 ocupa la columna. Un 20 o un 10 ocupa una mitad, y dos de 20 aguantan un 40 encima. El color es el del código. Sin color, el equipo se ve gris. El rayado es un espacio ocupado sin identificar.
           </p>
           <YardScene
             zones={draft.zones}
@@ -570,17 +728,18 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               setTransferIso(picked.code);
               loadHistory(picked.code);
             }}
+            onSlide={(half) => slideTo(half)}
             onPark={() => transferIso && parkUnit(transferIso)}
             onRelease={() => transferIso && returnUnit(transferIso)}
             onClose={() => { setPicked(null); setTransferIso(null); }}
             onPick={(item) => {
               if (item.empty && transferIso) {
-                moveUnit(transferIso, item.zoneName, item.row, item.col, item.level);
+                moveUnit(transferIso, item.zoneName, item.row, item.col, item.level, item.half);
                 return;
               }
               if (item.ghost) {
                 const zone = draft.zones.find((entry) => entry.id === item.ghost.zoneId);
-                const ghost = ghosts.find((entry) => entry.zoneId === item.ghost.zoneId && entry.row === item.ghost.row && entry.col === item.ghost.col && entry.level === item.ghost.level);
+                const ghost = ghosts.find((entry) => entry.zoneId === item.ghost.zoneId && entry.row === item.ghost.row && entry.col === item.ghost.col && entry.level === item.ghost.level && (entry.half || "") === (item.ghost.half || ""));
                 if (zone && ghost) {
                   setPicked(cellPick(zone, ghost.row, ghost.col, ghost.level, null, ghost));
                   return;
