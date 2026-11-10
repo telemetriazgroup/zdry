@@ -97,7 +97,9 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [guestCode, setGuestCode] = useState("");
-  const [guestType, setGuestType] = useState("");
+  const [guestFeet, setGuestFeet] = useState("20");
+  const [guestColor, setGuestColor] = useState("#8a90a2");
+  const [guestNote, setGuestNote] = useState("");
   const [picked, setPicked] = useState(null);
   const [transferIso, setTransferIso] = useState(null);
   const [history, setHistory] = useState([]);
@@ -114,6 +116,13 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   const typeByCode = useMemo(() => Object.fromEntries(types.map((type) => [type.code, type])), [types]);
   const typeColor = (code) => typeByCode[code]?.color || "#8a90a2";
   const typeLabel = (code) => typeByCode[code]?.label || code || "Sin tipo";
+  const feetName = (code) => {
+    const raw = String(code || "").toUpperCase();
+    if (raw.startsWith("40")) return "40 pies";
+    if (raw.startsWith("20")) return "20 pies";
+    if (raw.startsWith("10")) return "10 pies";
+    return typeLabel(code);
+  };
 
   if (!draft?.zones?.length) return null;
 
@@ -174,12 +183,12 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       code: named ? ghost.code : "Desconocido",
       title: named ? ghost.code : "Desconocido",
       unknown: !named,
-      typeLabel: named ? typeLabel(ghost.typeCode) : "Desconocido",
+      typeLabel: named ? feetName(ghost.typeCode) : "Desconocido",
       where,
       access,
       cost,
       note: named
-        ? `Equipo ajeno a ZDRY. ${access} ${cost}`
+        ? `${ghost.note ? `${ghost.note}. ` : ""}Equipo ajeno a ZDRY, ${feetName(ghost.typeCode)}. ${access} ${cost}`
         : `Desconocido. ${access} ${cost}`,
       ghost: above ? null : { zoneId: zone.id, row, col, level },
     };
@@ -225,10 +234,22 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         } else {
           await api("/yard/ghost", {
             method: "POST",
-            body: { depotId: layout.depotId, zoneId: zone.id, row, col, level, occupied: true, code, typeCode: guestType },
+            body: {
+              depotId: layout.depotId,
+              zoneId: zone.id,
+              row,
+              col,
+              level,
+              occupied: true,
+              code,
+              typeCode: guestFeet,
+              color: guestColor,
+              note: guestNote.trim(),
+            },
           });
         }
         setGuestCode("");
+        setGuestNote("");
       }
       setPicked(null);
       await onReload();
@@ -321,11 +342,11 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   );
 
   return (
-    <div className="panel" style={{ marginTop: 14 }}>
+    <div className="panel yard-panel" style={{ marginTop: 14 }}>
       <div className="action-row yard-modes">
         <b>Plano del almacén</b>
-        <button className={mode === "3d" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("3d")}>Vista del operario</button>
-        <button className={mode === "armar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("armar")}>Armar zonas</button>
+        <button className={mode === "3d" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("3d")}>Vista 3D</button>
+        <button className={mode === "armar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("armar")}>Zonas</button>
         <button className={mode === "regularizar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => { setMode("regularizar"); setTransferIso(null); }}>Regularizar</button>
         <button className={mode === "trasladar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("trasladar")}>Trasladar</button>
       </div>
@@ -417,14 +438,21 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             <label className="zone-field">Código que no es dry
               <input aria-label="Código del equipo" value={guestCode} onChange={(e) => setGuestCode(e.target.value)} placeholder="Código" />
             </label>
-            <label className="zone-field">Tipo
-              <select aria-label="Tipo del equipo" value={guestType} onChange={(e) => setGuestType(e.target.value)}>
-                <option value="">Sin tipo</option>
-                {types.map((type) => <option key={type.code} value={type.code}>{type.label}</option>)}
+            <label className="zone-field">Largo
+              <select aria-label="Largo del equipo" value={guestFeet} onChange={(e) => setGuestFeet(e.target.value)}>
+                <option value="10">10 pies</option>
+                <option value="20">20 pies</option>
+                <option value="40">40 pies</option>
               </select>
             </label>
+            <label className="zone-field">Color
+              <input aria-label="Color del equipo" type="color" value={guestColor} onChange={(e) => setGuestColor(e.target.value)} />
+            </label>
+            <label className="zone-field">Nota
+              <input aria-label="Nota del equipo" value={guestNote} onChange={(e) => setGuestNote(e.target.value)} placeholder="Opcional" maxLength={120} />
+            </label>
           </div>
-          <p className="section-sub">Escribe el código y toca la celda. Si ese código ya está en el almacén, se ubica ese equipo. Si no es dry, queda en el patio con su código y su tipo.</p>
+          <p className="section-sub">Escribe el código y toca la celda. Si ese código ya está en el almacén, se ubica ese equipo. Si no es dry, queda con su largo, su color y la nota.</p>
           <input className="odoo-search" aria-label="Buscar equipo sin posición" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar equipo sin posición" />
           <p className="section-sub">{loose.length} sin posición. {needle ? `Coincidencias: ${loose.filter((unit) => `${unit.iso} ${unit.typeLabel}`.toUpperCase().includes(needle)).length}.` : ""}</p>
           <div className="pill-list">
@@ -475,7 +503,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
                                               const occupant = layout.units.find((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel === level);
                                               const ghost = ghosts.find((item) => item.zoneId === zone.id && item.row === row && item.col === col && item.level === level);
                                               const named = Boolean(ghost?.code);
-                                              const color = occupant ? occupant.typeColor : named ? typeColor(ghost.typeCode) : undefined;
+                                              const color = occupant ? occupant.typeColor : named ? (ghost.color || typeColor(ghost.typeCode)) : undefined;
                                               return (
                                                 <button
                                                   key={level}
@@ -524,7 +552,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         </div>
       ) : (
         <>
-          <p className="section-sub">
+          <p className="section-sub yard-help">
             La vista muestra las rumas como las ve el operario. El largo sigue al tipo: un 40 pies ocupa el doble que un 20. El color es el del código. Sin color, el equipo se ve gris. El rayado es un espacio ocupado sin identificar.
           </p>
           <YardScene

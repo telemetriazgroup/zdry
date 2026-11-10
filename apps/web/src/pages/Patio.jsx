@@ -71,7 +71,7 @@ export default function Patio() {
   }
 
   return (
-    <>
+    <div className="yard-page">
       <h2 className="section-title">Patio</h2>
       <div className="unit-picker">
         <label style={{ fontSize: 13, fontWeight: 700, color: "var(--text-2)" }}>Depósito:</label>
@@ -90,8 +90,8 @@ export default function Patio() {
           </button>
         ) : null}
         {isSuperadmin(user) ? (
-          <button className="btn-ghost" type="button" disabled={busy} onClick={resetDepot}>
-            {layout.simulation ? "Reiniciar simulación" : "Devolver todo a sin posición"}
+          <button className="btn-ghost yard-reset" type="button" disabled={busy} onClick={resetDepot}>
+            {layout.simulation ? "Reiniciar simulación" : "Vaciar posiciones"}
           </button>
         ) : null}
       </div>
@@ -106,7 +106,7 @@ export default function Patio() {
         onReload={() => load(layout.depotId)}
       />
       {placed.length ? (
-        <div className="panel" style={{ marginTop: 18 }}>
+        <div className="panel yard-table" style={{ marginTop: 18 }}>
           <div className="tablewrap">
             <table className="data">
               <thead>
@@ -130,6 +130,6 @@ export default function Patio() {
           </div>
         </div>
       ) : null}
-    </>
+    </div>
   );
 }

@@ -217,7 +217,7 @@ export class WarehouseService {
   }
 
   async setYardGhost(
-    input: { depotId?: string; zoneId?: string; row?: number; col?: number; level?: number; occupied?: boolean; code?: string; typeCode?: string },
+    input: { depotId?: string; zoneId?: string; row?: number; col?: number; level?: number; occupied?: boolean; code?: string; typeCode?: string; color?: string; note?: string },
     user: AuthUser,
     ip?: string,
   ) {
@@ -272,7 +272,11 @@ export class WarehouseService {
       (ghost) => !(ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level === level),
     );
     if (input.occupied !== false) {
-      ghosts.push(code ? { zoneId: zone.id, row, col, level, code, typeCode } : { zoneId: zone.id, row, col, level });
+      const color = /^#[0-9a-fA-F]{6}$/.test(String(input.color || "")) ? String(input.color).toLowerCase() : "";
+      const note = String(input.note || "").trim().slice(0, 120);
+      ghosts.push(code
+        ? { zoneId: zone.id, row, col, level, code, typeCode, ...(color ? { color } : {}), ...(note ? { note } : {}) }
+        : { zoneId: zone.id, row, col, level });
     }
     const stacked = positions;
     const supported = ghostsWithSupport(

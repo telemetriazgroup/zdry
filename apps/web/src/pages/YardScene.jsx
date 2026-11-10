@@ -14,6 +14,7 @@ function spanOf(type) {
   if (code.startsWith("45")) return 45 / 20;
   if (code.startsWith("40")) return 2;
   if (code.startsWith("20")) return 1;
+  if (code.startsWith("10")) return 0.5;
   return 1;
 }
 
@@ -30,12 +31,13 @@ function feetOf(type) {
   if (code.startsWith("45")) return 45;
   if (code.startsWith("40")) return 40;
   if (code.startsWith("20")) return 20;
+  if (code.startsWith("10")) return 10;
   return 0;
 }
 
 function columnAllows(zone, row, col, level, incomingType, units, ghosts) {
   const incoming = feetOf(incomingType);
-  if (incoming <= 20) return true;
+  if (incoming <= 0) return true;
   for (let cursor = level - 1; cursor >= 1; cursor -= 1) {
     const unit = (units || []).find((item) => item.lado === zone.name && item.ruma === row && item.columna === col && item.nivel === cursor);
     const ghost = (ghosts || []).find((item) => item.zoneId === zone.id && item.row === row && item.col === col && item.level === cursor);
@@ -182,7 +184,7 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
           const slotX = originX + (col - 1) * PITCH_X;
           const x = slotX + (PITCH_X - 0.7 - length) / 2 + length / 2;
           const z = originZ + (row - 1) * PITCH_Z + BOX_W / 2;
-          const color = occupant ? (occupant.typeColor || "#8a90a2") : named ? typeColor(ghost.typeCode) : "#c5ccd6";
+          const color = occupant ? (occupant.typeColor || "#8a90a2") : named ? (ghost.color || typeColor(ghost.typeCode)) : "#c5ccd6";
           const label = occupant ? occupant.iso.slice(-6) : named ? ghost.code.slice(-6) : "?";
           const texture = faceTexture(color, label, !occupant && !named);
           const geometry = new THREE.BoxGeometry(length, height, BOX_W);
@@ -205,7 +207,7 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
               typeLabel: named ? (ghost.typeCode || "Sin tipo") : "Pendiente",
               where: `${zone.name} · fila ${row} · columna ${col} · altura ${level}`,
               note: named
-                ? "Equipo en el patio, fuera del inventario dry."
+                ? [ghost.note, "Equipo en el patio, fuera del inventario dry."].filter(Boolean).join(". ")
                 : "El espacio está ocupado. El equipo todavía no tiene código.",
               ghost: { zoneId: zone.id, row, col, level },
             };
@@ -337,7 +339,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
     if (!mount) return undefined;
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setSize(mount.clientWidth, mount.clientHeight);
+    renderer.setSize(mount.clientWidth, mount.clientHeight, false);
     renderer.shadowMap.enabled = true;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     mount.appendChild(renderer.domElement);
@@ -352,7 +354,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
     scene.add(sun);
 
     const camera = new THREE.PerspectiveCamera(42, mount.clientWidth / Math.max(mount.clientHeight, 1), 0.1, 800);
-    const view = { yaw: 0.55, pitch: 1.08, dist: 26, target: new THREE.Vector3() };
+    const view = { yaw: 0.55, pitch: 1.08, dist: 26, target: new THREE.Vector3(), mode: "overview" };
     let content = null;
     let booted = false;
     let idle = 0;
@@ -378,12 +380,22 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
       sun.shadow.camera.updateProjectionMatrix();
     };
 
+    const fitOverviewDist = () => {
+      const radius = Math.max(content?.userData.radius || 8, 8);
+      const aspect = Math.max(camera.aspect || 1, 0.35);
+      const vFov = THREE.MathUtils.degToRad(camera.fov);
+      const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+      const dist = Math.max(radius / Math.tan(vFov / 2), radius / Math.tan(hFov / 2), 14);
+      return dist * 1.35;
+    };
+
     const frameOverview = () => {
       if (!content) return;
+      view.mode = "overview";
       view.yaw = 0.55;
       view.pitch = 1.08;
       view.target.copy(content.userData.center);
-      view.dist = Math.max(content.userData.radius * 2.4, 16);
+      view.dist = fitOverviewDist();
       placeCamera();
     };
 
@@ -397,6 +409,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
       const box = new THREE.Box3().setFromObject(mesh);
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
+      view.mode = "selection";
       view.target.copy(center);
       view.dist = Math.min(28, Math.max(size.length() * 2.2, 7));
       view.pitch = 1.02;
@@ -454,11 +467,12 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
     loop();
 
     const resize = () => {
-      const width = mount.clientWidth;
-      const height = mount.clientHeight;
-      renderer.setSize(width, height);
-      camera.aspect = width / Math.max(height, 1);
+      const width = Math.max(mount.clientWidth, 1);
+      const height = Math.max(mount.clientHeight, 1);
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
       camera.updateProjectionMatrix();
+      if (view.mode === "overview") frameOverview();
     };
     const observer = new ResizeObserver(resize);
     observer.observe(mount);
@@ -486,6 +500,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
         }
         pinch = dist;
         drag.moved = true;
+        view.mode = "free";
         return;
       }
       const dx = event.clientX - drag.x;
@@ -493,6 +508,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
       if (Math.hypot(dx, dy) > 4) drag.moved = true;
       drag.x = event.clientX;
       drag.y = event.clientY;
+      view.mode = "free";
       view.yaw -= dx * 0.008;
       view.pitch = Math.min(1.25, Math.max(0.35, view.pitch - dy * 0.005));
       placeCamera();
@@ -518,6 +534,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
     const onWheel = (event) => {
       event.preventDefault();
       armIdle();
+      view.mode = "free";
       view.dist = Math.min(160, Math.max(6, view.dist * (event.deltaY > 0 ? 1.08 : 0.92)));
       placeCamera();
     };
@@ -528,8 +545,8 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
     armIdle();
 
     viewRef.current = {
-      closer: () => { armIdle(); view.dist = Math.max(6, view.dist * 0.82); placeCamera(); },
-      farther: () => { armIdle(); view.dist = Math.min(160, view.dist * 1.18); placeCamera(); },
+      closer: () => { armIdle(); view.mode = "free"; view.dist = Math.max(6, view.dist * 0.82); placeCamera(); },
+      farther: () => { armIdle(); view.mode = "free"; view.dist = Math.min(160, view.dist * 1.18); placeCamera(); },
       reset: () => { armIdle(); frameOverview(); },
       rebuild,
       frameSelection,
@@ -572,9 +589,9 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
     <div className="yard-scene">
       <div className="yard-scene-tools">
         <span>Arrastra para girar. Pellizca o usa los botones para acercar. Un 40 pies mide el doble que un 20.</span>
-        <button className="btn-ghost" type="button" onClick={() => viewRef.current?.reset()}>Restablecer vista</button>
+        <button className="btn-ghost yard-reset-view" type="button" onClick={() => viewRef.current?.reset()}>Vista general</button>
       </div>
-      <div className="yard-viewport" ref={mountRef}>
+      <div className={`yard-viewport${picked ? " has-pick" : ""}`} ref={mountRef}>
         {picked ? (
           <aside className="yard-float" role="dialog" aria-label="Equipo seleccionado">
             <div className="yard-float-head">
@@ -587,17 +604,17 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
             <p>{picked.where}</p>
             <p>{picked.access}</p>
             <p>{picked.cost}</p>
-            {picked.unknown ? <p>Este hueco no está en el catálogo.</p> : <p>Esa referencia de movimientos queda en el catálogo comercial.</p>}
-            {detailCode ? (
-              <button className="btn-primary" type="button" onClick={() => setDetailIso(detailCode)}>Ver más información</button>
-            ) : null}
-            {!picked.unknown && !picked.empty && onTransfer ? (
-              <div className="action-row">
-                <button className="btn-primary" type="button" onClick={onTransfer}>{transferring ? "Eligiendo destino" : "Trasladar"}</button>
-                {transferring ? <button className="btn-ghost" type="button" onClick={onPark}>Dejar en el pasillo</button> : null}
-                {transferring ? <button className="btn-ghost" type="button" onClick={onRelease}>Devolver</button> : null}
-              </div>
-            ) : null}
+            {picked.unknown ? <p>Este hueco no está en el catálogo.</p> : <p className="yard-float-note">Esa referencia de movimientos queda en el catálogo comercial.</p>}
+            <div className="yard-float-actions">
+              {detailCode ? (
+                <button className="btn-primary" type="button" onClick={() => setDetailIso(detailCode)}>Más información</button>
+              ) : null}
+              {!picked.unknown && !picked.empty && onTransfer ? (
+                <button className="btn-primary" type="button" onClick={onTransfer}>{transferring ? "Destino" : "Trasladar"}</button>
+              ) : null}
+              {transferring ? <button className="btn-ghost" type="button" onClick={onPark}>Pasillo</button> : null}
+              {transferring ? <button className="btn-ghost" type="button" onClick={onRelease}>Devolver</button> : null}
+            </div>
             {transferring ? <p>Elige un cuadro amarillo libre. Un 40 no puede apoyarse en un 20.</p> : null}
             {history?.length ? (
               <ul className="yard-history">

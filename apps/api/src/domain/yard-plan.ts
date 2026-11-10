@@ -25,7 +25,10 @@ export type YardGhost = {
   level: number;
   /** Código escrito en patio cuando el equipo no está en el inventario dry. */
   code?: string;
+  /** 10, 20 o 40, o el código de tipo del inventario. */
   typeCode?: string;
+  color?: string;
+  note?: string;
 };
 
 export type YardPlan = {
@@ -117,7 +120,10 @@ export function normalizeYardPlan(raw: unknown): YardPlan {
     ghostSeen.add(key);
     const code = String(row.code || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 20);
     const typeCode = String(row.typeCode || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 12);
-    ghosts.push(code ? { ...ghost, code, typeCode } : ghost);
+    const color = /^#[0-9a-fA-F]{6}$/.test(String(row.color || "")) ? String(row.color).toLowerCase() : "";
+    const note = String(row.note || "").trim().slice(0, 120);
+    const named = code ? { ...ghost, code, typeCode, ...(color ? { color } : {}), ...(note ? { note } : {}) } : ghost;
+    ghosts.push(named);
   });
   return { zones, aisles, ghosts };
 }
@@ -215,6 +221,7 @@ export function feetOf(type?: string | null): number {
   if (code.startsWith("45")) return 45;
   if (code.startsWith("40")) return 40;
   if (code.startsWith("20")) return 20;
+  if (code.startsWith("10")) return 10;
   return 0;
 }
 

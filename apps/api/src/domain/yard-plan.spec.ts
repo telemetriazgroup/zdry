@@ -73,6 +73,8 @@ describe("yard plan", () => {
     expect(stackLengthError(zone, [], forty, "20DC", 1, 2, 2)).toBe("");
     expect(stackLengthError(zone, [{ zoneId: "b", row: 1, col: 3, level: 1 }], [], "40HC", 1, 3, 2)).toBe("");
     expect(stackLengthError(zone, [{ zoneId: "b", row: 1, col: 1, level: 2 }], twenty, "40HC", 1, 1, 3)).toContain("20 pies");
+    expect(stackLengthError(zone, [], [{ zoneName: "Zona B", row: 1, col: 1, level: 1, type: "10" }], "20", 1, 1, 2)).toContain("20 pies");
+    expect(stackLengthError(zone, [], forty, "10", 1, 2, 2)).toBe("");
   });
 
   it("separa lo que salió al cliente de lo que sigue a la mano", () => {
