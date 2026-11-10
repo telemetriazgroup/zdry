@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, apiBlob, apiUpload, apiUrl, formatWhen, publicUrl } from "../api.js";
-import { hasRole, useAuth } from "../auth.jsx";
+import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
+import { localPhone, PeruPhone } from "../peru-phone.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 import { downloadVisitPdf, statusLabel } from "../visit-ticket.js";
 
@@ -25,7 +26,9 @@ export default function Visitas() {
   const focusId = params.get("visita") || "";
   const manage = hasRole(user, "admin", "coordinador");
   const canRestorePhoto = hasRole(user, "admin");
+  const superuser = isSuperadmin(user);
   const [view, setView] = useState("ingresos");
+  const [menuTab, setMenuTab] = useState("sedes");
   const [status, setStatus] = useState("REGISTRADO");
   const [rows, setRows] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -45,6 +48,8 @@ export default function Visitas() {
   const [query, setQuery] = useState("");
   const [report, setReport] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [testing, setTesting] = useState("");
+  const [testReport, setTestReport] = useState(null);
 
   async function load(next = status) {
     const list = await api(`/gate-visits?status=${encodeURIComponent(next)}`);
@@ -68,7 +73,79 @@ export default function Visitas() {
     const first = data.sites?.[0]?.id || "";
     setRecipient((current) => ({ ...current, siteId: current.siteId || first }));
     setWarehouse((current) => ({ ...current, siteId: current.siteId || first }));
-    setReply((current) => ({ ...current, siteId: current.siteId || first }));
+    setReply((current) => {
+      const siteId = current.siteId || first;
+      const site = (data.sites || []).find((item) => item.id === siteId) || data.sites?.[0];
+      return { siteId: site?.id || "", phone: localPhone(site?.replyPhone) };
+    });
+  }
+
+  async function testSite(siteId) {
+    setError("");
+    setTesting(siteId);
+    try {
+      const result = await api(`/gate-visits/sites/${siteId}/test`, { method: "POST" });
+      setTestReport({ siteId, ...result });
+      setMsg(result.ok ? "La prueba quedó en cola." : "La prueba no salió completa. Revisa el detalle de la sede.");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setTesting("");
+    }
+  }
+
+  function pickReplySite(siteId) {
+    const site = (masters?.sites || []).find((item) => item.id === siteId);
+    setReply({ siteId, phone: localPhone(site?.replyPhone) });
+  }
+
+  async function saveReply() {
+    setError("");
+    const local = localPhone(reply.phone);
+    if (!reply.siteId) {
+      setError("Selecciona la sede.");
+      return;
+    }
+    if (local.length !== 9) {
+      setError("El WhatsApp de respuesta son 9 dígitos después del 51.");
+      return;
+    }
+    try {
+      await api(`/gate-visits/sites/${reply.siteId}`, { method: "PATCH", body: { replyPhone: `51${local}` } });
+      setMsg("Número de respuesta guardado.");
+      await loadMasters();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function removeVisit() {
+    if (!selected || !window.confirm(`¿Eliminar el ingreso de ${selected.driverName || selected.tractorPlate}?`)) return;
+    setError("");
+    try {
+      await api(`/gate-visits/${selected.id}`, { method: "DELETE" });
+      setSelected(null);
+      setMsg("Ingreso eliminado.");
+      await load(status);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function resetModule() {
+    if (!window.confirm("Se borrarán todos los ingresos de conductores. Las sedes, motivos, correos y almacenes se mantienen.")) return;
+    setError("");
+    try {
+      const result = await api("/gate-visits/reset", { method: "POST" });
+      setSelected(null);
+      setRows([]);
+      setStatus("REGISTRADO");
+      setView("ingresos");
+      setMsg(`Módulo reiniciado. Se eliminaron ${result.removed} ingresos.`);
+      await load("REGISTRADO");
+    } catch (e) {
+      setError(e.message);
+    }
   }
 
   useEffect(() => {
@@ -193,17 +270,27 @@ export default function Visitas() {
       </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
-      <div className="recv-actions">
-        <button className={`btn-ghost ${view === "ingresos" ? "on" : ""}`} type="button" onClick={() => setView("ingresos")}>Ingresos</button>
-        {manage ? <button className={`btn-primary ${view === "asimilar" ? "on" : ""}`} type="button" onClick={() => setView("asimilar")}>Asimilar datos</button> : null}
-        {manage ? <button className={`btn-ghost ${view === "menu" ? "on" : ""}`} type="button" onClick={() => { setView("menu"); loadMasters().catch((e) => setError(e.message)); }}>Menú</button> : null}
+      <div className="drv-tabs" role="tablist">
+        <button className={view === "ingresos" ? "on" : ""} type="button" onClick={() => setView("ingresos")}>Ingresos</button>
+        {manage ? <button className={view === "asimilar" ? "on" : ""} type="button" onClick={() => setView("asimilar")}>Asimilar datos</button> : null}
+        {manage ? <button className={view === "menu" ? "on" : ""} type="button" onClick={() => { if (view !== "menu") setMenuTab("sedes"); setView("menu"); loadMasters().catch((e) => setError(e.message)); }}>Menú</button> : null}
       </div>
+      {view === "menu" ? (
+        <div className="drv-subtabs" role="tablist">
+          <button className={menuTab === "sedes" ? "on" : ""} type="button" onClick={() => setMenuTab("sedes")}>Sedes</button>
+          <button className={menuTab === "motivos" ? "on" : ""} type="button" onClick={() => setMenuTab("motivos")}>Motivos</button>
+          <button className={menuTab === "almacenes" ? "on" : ""} type="button" onClick={() => setMenuTab("almacenes")}>Almacén y mapa</button>
+          <button className={menuTab === "plantillas" ? "on" : ""} type="button" onClick={() => setMenuTab("plantillas")}>Plantillas</button>
+          {superuser ? <button className={menuTab === "registros" ? "on" : ""} type="button" onClick={() => setMenuTab("registros")}>Registros</button> : null}
+        </div>
+      ) : null}
 
       {view === "ingresos" ? (
         <>
-          <div className="recv-actions">
+          <div className="drv-filters">
+            <span>Estado</span>
             {STATUSES.map(([key, label]) => (
-              <button key={key} className={`btn-ghost ${status === key ? "on" : ""}`} type="button" onClick={() => { setStatus(key); load(key).catch((e) => setError(e.message)); }}>{label}</button>
+              <button key={key} className={status === key ? "on" : ""} type="button" onClick={() => { setStatus(key); load(key).catch((e) => setError(e.message)); }}>{label}</button>
             ))}
           </div>
           <input className="drv-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar conductor, placa, código o empresa" />
@@ -248,6 +335,7 @@ export default function Visitas() {
                 {canRestorePhoto && selected.photoArchived ? <button className="btn-ghost" type="button" onClick={restorePhoto}>Volver a mostrar la foto</button> : null}
                 <div className="action-row">
                   <button className="btn-primary" type="button" onClick={() => downloadVisitPdf(selected, selected.hasPhoto ? apiUrl(`/gate-visits/${selected.id}/photo`) : "").catch((e) => setError(e.message))}>Descargar PDF</button>
+                  {superuser ? <button className="btn-ghost drv-danger" type="button" onClick={removeVisit}>Eliminar registro</button> : null}
                 </div>
                 {manage ? (
                   <>
@@ -317,9 +405,10 @@ export default function Visitas() {
         </section>
       ) : null}
 
+      {view === "menu" && !masters ? <p className="section-sub">Cargando el menú…</p> : null}
       {view === "menu" && masters ? (
         <div className="drv-menu">
-          <section>
+          {menuTab === "sedes" ? <section>
             <h4>Sedes</h4>
             <div className="action-row">
               <input value={siteName} onChange={(e) => setSiteName(e.target.value)} placeholder="Nueva sede" />
@@ -335,12 +424,15 @@ export default function Visitas() {
                     <li key={item.id}>{item.kind}: {item.destination} <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/recipients/${item.id}`, { method: "DELETE" }).then(loadMasters).catch((e) => setError(e.message))}>Quitar</button></li>
                   ))}
                 </ul>
-                <p className="section-sub">Almacenes</p>
-                <ul>
-                  {(site.warehouses || []).map((item) => (
-                    <li key={item.id}>{item.name} · {item.mapUrl}</li>
-                  ))}
-                </ul>
+                <p className="section-sub">WhatsApp de respuesta: {site.replyPhone ? `+51 ${localPhone(site.replyPhone)}` : "sin número"}</p>
+                <button className="btn-ghost" type="button" disabled={testing === site.id} onClick={() => testSite(site.id)}>{testing === site.id ? "Enviando prueba…" : "Enviar prueba"}</button>
+                {testReport?.siteId === site.id ? (
+                  <ul className="drv-notes">
+                    {(testReport.items || []).map((item, index) => (
+                      <li key={`${item.channel}-${item.destination}-${index}`}>{item.channel} · {item.destination} · {item.status}{item.detail ? ` · ${item.detail}` : ""}</li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             ))}
             <div className="form-grid">
@@ -365,19 +457,19 @@ export default function Visitas() {
             <button className="btn-primary" type="button" onClick={() => api("/gate-visits/recipients", { method: "POST", body: recipient }).then(() => { setRecipient({ ...recipient, destination: "" }); return loadMasters(); }).catch((e) => setError(e.message))}>Agregar destino</button>
             <div className="form-grid">
               <div>
-                <label>Número de respuesta</label>
-                <select value={reply.siteId} onChange={(e) => setReply({ ...reply, siteId: e.target.value })}>
+                <label>Sede del número de respuesta</label>
+                <select value={reply.siteId} onChange={(e) => pickReplySite(e.target.value)}>
                   {masters.sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
                 </select>
               </div>
               <div>
                 <label>WhatsApp de respuesta</label>
-                <input value={reply.phone} onChange={(e) => setReply({ ...reply, phone: e.target.value })} placeholder="9 dígitos" />
+                <PeruPhone value={reply.phone} onChange={(phone) => setReply({ ...reply, phone })} placeholder="9 dígitos" />
               </div>
             </div>
-            <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/sites/${reply.siteId}`, { method: "PATCH", body: { replyPhone: reply.phone } }).then(() => { setMsg("Número de respuesta guardado."); return loadMasters(); }).catch((e) => setError(e.message))}>Guardar número de respuesta</button>
-          </section>
-          <section>
+            <button className="btn-primary" type="button" onClick={saveReply}>Guardar número de respuesta</button>
+          </section> : null}
+          {menuTab === "motivos" ? <section>
             <h4>Motivos</h4>
             <div className="action-row">
               <input value={motiveName} onChange={(e) => setMotiveName(e.target.value)} placeholder="Nuevo motivo" />
@@ -389,8 +481,8 @@ export default function Visitas() {
                 <li key={item.id}>{item.name} {item.asksDetail ? "(pide detalle)" : ""} <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/motives/${item.id}`, { method: "PATCH", body: { active: !item.active } }).then(loadMasters).catch((e) => setError(e.message))}>{item.active ? "Ocultar" : "Mostrar"}</button></li>
               ))}
             </ul>
-          </section>
-          <section>
+          </section> : null}
+          {menuTab === "almacenes" ? <section>
             <h4>Almacén y mapa</h4>
             <div className="form-grid">
               <div>
@@ -403,15 +495,32 @@ export default function Visitas() {
               <div><label>Google Maps</label><input value={warehouse.mapUrl} onChange={(e) => setWarehouse({ ...warehouse, mapUrl: e.target.value })} placeholder="https://maps.app.goo.gl/..." /></div>
             </div>
             <button className="btn-primary" type="button" onClick={() => api("/gate-visits/warehouses", { method: "POST", body: warehouse }).then(() => { setWarehouse({ ...warehouse, name: "", mapUrl: "" }); return loadMasters(); }).catch((e) => setError(e.message))}>Agregar almacén</button>
-          </section>
-          <section>
+            {masters.sites.map((site) => (
+              <div key={site.id} className="drv-block">
+                <b>{site.name}</b>
+                <ul>
+                  {(site.warehouses || []).length ? site.warehouses.map((item) => (
+                    <li key={item.id}>{item.name} · {item.mapUrl}</li>
+                  )) : <li>Sin almacenes.</li>}
+                </ul>
+              </div>
+            ))}
+          </section> : null}
+          {menuTab === "plantillas" ? <section>
             <h4>Plantilla de confirmación</h4>
             <textarea value={confirmText} onChange={(e) => setConfirmText(e.target.value)} rows={6} />
             <button className="btn-ghost" type="button" onClick={() => api("/gate-visits/templates", { method: "POST", body: { key: "confirm", value: confirmText } }).then(() => setMsg("Plantilla de confirmación guardada.")).catch((e) => setError(e.message))}>Guardar confirmación</button>
             <h4>Plantilla de ubicación</h4>
             <textarea value={locationText} onChange={(e) => setLocationText(e.target.value)} rows={7} />
             <button className="btn-ghost" type="button" onClick={() => api("/gate-visits/templates", { method: "POST", body: { key: "location", value: locationText } }).then(() => setMsg("Plantilla de ubicación guardada.")).catch((e) => setError(e.message))}>Guardar ubicación</button>
-          </section>
+          </section> : null}
+          {menuTab === "registros" && superuser ? (
+            <section>
+              <h4>Registros</h4>
+              <p className="section-sub">Elimina todos los ingresos de conductores. Las sedes, los motivos, los correos y los almacenes se quedan.</p>
+              <button className="btn-ghost drv-danger" type="button" onClick={resetModule}>Reiniciar módulo</button>
+            </section>
+          ) : null}
         </div>
       ) : null}
       {lb.node}

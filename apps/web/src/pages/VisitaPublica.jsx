@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, apiUpload, apiUrl, ApiError, publicUrl } from "../api.js";
+import { localPhone, PeruPhone } from "../peru-phone.jsx";
 import { hasRole, useAuth } from "../auth.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 import {
@@ -91,7 +92,7 @@ export default function VisitaPublica() {
       ruc: v.ruc || "",
       driverName: v.driverName || "",
       license: v.license || "",
-      phone: v.phone || "",
+      phone: localPhone(v.phone || ""),
       tractorPlate: v.tractorPlate || "",
       trailerPlate: v.trailerPlate || "",
       equipmentCode: v.equipmentCode || "",
@@ -293,7 +294,7 @@ export default function VisitaPublica() {
           {msg ? <div className="ok-msg">{msg}</div> : null}
           <Section icon={<svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6a2.5 2.5 0 0 1 0 5.5z" /></svg>} title="SEDE DE REGISTRO">
             <label className="reg-field reg-span">
-              Sede <i>*</i>
+              Sede<i>*</i>
               <select value={form.siteId} onChange={(e) => set("siteId", e.target.value)} required disabled={locked}>
                 <option value="">Seleccione una sede</option>
                 {options.sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
@@ -302,19 +303,19 @@ export default function VisitaPublica() {
             </label>
           </Section>
           <Section icon={<svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-8 2-8 5v1h16v-1c0-3-4-5-8-5z" /></svg>} title="DATOS DEL CONDUCTOR">
-            <label className="reg-field">Empresa <i>*</i><input value={form.company} onChange={(e) => set("company", e.target.value)} required disabled={locked} placeholder="Ingrese la empresa" /></label>
-            <label className="reg-field">RUC <i>*</i><input value={form.ruc} onChange={(e) => set("ruc", e.target.value.replace(/\D/g, "").slice(0, 11))} required inputMode="numeric" disabled={locked} placeholder="Ingrese RUC de 11 dígitos" /></label>
-            <label className="reg-field">Nombres y apellidos <i>*</i><input value={form.driverName} onChange={(e) => set("driverName", e.target.value)} required disabled={locked} placeholder="Ingrese nombres y apellidos" /></label>
-            <label className="reg-field">N.º de brevete <i>*</i><input value={form.license} onChange={(e) => set("license", e.target.value)} required disabled={locked} placeholder="Ingrese n.º de brevete" /></label>
-            <label className="reg-field">Teléfono <i>*</i><input value={form.phone} onChange={(e) => set("phone", e.target.value.replace(/\D/g, "").slice(0, 9))} required inputMode="numeric" disabled={locked} placeholder="Ingrese teléfono de 9 dígitos" /></label>
+            <label className="reg-field">Empresa<i>*</i><input value={form.company} onChange={(e) => set("company", e.target.value)} required disabled={locked} placeholder="Ingrese la empresa" /></label>
+            <label className="reg-field">RUC<i>*</i><input value={form.ruc} onChange={(e) => set("ruc", e.target.value.replace(/\D/g, "").slice(0, 11))} required inputMode="numeric" disabled={locked} placeholder="Ingrese RUC de 11 dígitos" /></label>
+            <label className="reg-field">Nombres y apellidos<i>*</i><input value={form.driverName} onChange={(e) => set("driverName", e.target.value)} required disabled={locked} placeholder="Ingrese nombres y apellidos" /></label>
+            <label className="reg-field">N.º de brevete<i>*</i><input value={form.license} onChange={(e) => set("license", e.target.value)} required disabled={locked} placeholder="Ingrese n.º de brevete" /></label>
+            <label className="reg-field">Teléfono<i>*</i><PeruPhone value={form.phone} onChange={(phone) => set("phone", phone)} required disabled={locked} placeholder="Ingrese teléfono de 9 dígitos" /></label>
           </Section>
           <Section icon={<svg viewBox="0 0 24 24"><path d="M3 7h11v8H3V7zm11 2h4l3 3v3h-7V9zM7 18a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm10 0a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" /></svg>} title="DATOS DEL VEHÍCULO">
-            <label className="reg-field">Placa tracto <i>*</i><input value={form.tractorPlate} onChange={(e) => set("tractorPlate", e.target.value.toUpperCase())} required disabled={locked} placeholder="Ingrese placa del tracto" /></label>
-            <label className="reg-field">Placa carreta <i>*</i><input value={form.trailerPlate} onChange={(e) => set("trailerPlate", e.target.value.toUpperCase())} required disabled={locked} placeholder="Ingrese placa de la carreta" /></label>
+            <label className="reg-field">Placa tracto<i>*</i><input value={form.tractorPlate} onChange={(e) => set("tractorPlate", e.target.value.toUpperCase())} required disabled={locked} placeholder="Ingrese placa del tracto" /></label>
+            <label className="reg-field">Placa carreta<i>*</i><input value={form.trailerPlate} onChange={(e) => set("trailerPlate", e.target.value.toUpperCase())} required disabled={locked} placeholder="Ingrese placa de la carreta" /></label>
           </Section>
           <Section icon={<svg viewBox="0 0 24 24"><path d="M6 2h9l5 5v15a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V8h4.5zM8 12h8v1.6H8zm0 3.4h8V17H8z" /></svg>} title="DATOS DE LA VISITA">
             <label className="reg-field">
-              Motivo de visita <i>*</i>
+              Motivo de visita<i>*</i>
               <select value={form.motiveId} onChange={(e) => set("motiveId", e.target.value)} required disabled={locked}>
                 <option value="">Seleccione una opción</option>
                 {options.motives.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
@@ -322,7 +323,7 @@ export default function VisitaPublica() {
             </label>
             <label className="reg-field">Código de equipo<input value={form.equipmentCode} onChange={(e) => set("equipmentCode", e.target.value)} disabled={locked} placeholder="Ingrese código de equipo" /></label>
             {motive?.asksDetail ? (
-              <label className="reg-field reg-span">Detalle del motivo <i>*</i><input value={form.motiveDetail} onChange={(e) => set("motiveDetail", e.target.value)} disabled={locked} placeholder="Describe la visita" /></label>
+              <label className="reg-field reg-span">Detalle del motivo<i>*</i><input value={form.motiveDetail} onChange={(e) => set("motiveDetail", e.target.value)} disabled={locked} placeholder="Describe la visita" /></label>
             ) : null}
             <label className="reg-field reg-span">
               Observaciones

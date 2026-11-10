@@ -237,8 +237,78 @@ export function registryNotice(input: {
 
 export function htmlSalidaUrl(url: string) {
   const clean = String(url || "").trim().replace(/\/+$/, "");
+  if (clean.endsWith("/salida-registro")) return clean;
   if (clean.endsWith("/salida")) return `${clean}-registro`;
-  return `${clean}-registro`;
+  return `${clean}/salida-registro`;
+}
+
+export type RegistrationCard = {
+  sede: string;
+  motivo: string;
+  fecha: string;
+  hora: string;
+  placaTracto: string;
+  placaCarreta: string;
+  conductor: string;
+  empresa: string;
+  ruc: string;
+  brevete: string;
+  telefono: string;
+  codigoEquipo: string;
+  estado: string;
+  observaciones: string;
+  id: string;
+};
+
+function shown(value: string, empty = "NO INDICADO") {
+  return String(value || "").trim() || empty;
+}
+
+export function registrationCard(input: {
+  site: string;
+  motive: string;
+  when: Date;
+  tractorPlate: string;
+  trailerPlate: string;
+  driverName: string;
+  company: string;
+  ruc: string;
+  license: string;
+  phone: string;
+  equipmentCode: string;
+  status: string;
+  observations: string;
+  publicCode: string;
+}): RegistrationCard {
+  const parts = limaParts(input.when);
+  return {
+    sede: String(input.site || "").trim().toUpperCase(),
+    motivo: String(input.motive || "").trim().toUpperCase(),
+    fecha: `${parts.d}/${parts.m}/${parts.y}`,
+    hora: `${parts.hh}:${parts.mm}:${parts.ss}`,
+    placaTracto: String(input.tractorPlate || "").trim(),
+    placaCarreta: shown(input.trailerPlate),
+    conductor: String(input.driverName || "").trim(),
+    empresa: shown(input.company),
+    ruc: shown(input.ruc),
+    brevete: shown(input.license),
+    telefono: shown(input.phone),
+    codigoEquipo: shown(input.equipmentCode),
+    estado: statusLabel(input.status) || "REGISTRADO",
+    observaciones: shown(input.observations, "SIN OBSERVACIONES"),
+    id: String(input.publicCode || "").trim(),
+  };
+}
+
+export function registrationRequest(
+  card: RegistrationCard,
+  whatsapp: Array<{ telefono: string; contacto: string }>,
+  correos: string[],
+) {
+  const body: Record<string, unknown> = { registro: card };
+  if (whatsapp.length) body.whatsapp = whatsapp.map((item) => ({ telefono: item.telefono, contacto: item.contacto }));
+  if (correos.length) body.correo = correos.map((direccion) => ({ direccion }));
+  return body;
 }
 
 export type PublicInput = {
@@ -256,6 +326,20 @@ export type PublicInput = {
   observations?: string;
 };
 
+export function peruLocalPhone(raw: string) {
+  let digits = String(raw || "").replace(/\D/g, "");
+  if (digits.startsWith("51") && digits.length > 9) digits = digits.slice(2);
+  return digits.slice(0, 9);
+}
+
+export function peruReplyPhone(raw: string): string | null {
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (!digits) return "";
+  const local = peruLocalPhone(digits);
+  if (local.length !== 9) return null;
+  return `51${local}`;
+}
+
 export function validatePublicInput(input: PublicInput) {
   const siteId = String(input.siteId || "").trim();
   const motiveId = String(input.motiveId || "").trim();
@@ -263,7 +347,7 @@ export function validatePublicInput(input: PublicInput) {
   const driverName = String(input.driverName || "").trim().slice(0, 160);
   const license = String(input.license || "").trim().slice(0, 40);
   const ruc = String(input.ruc || "").replace(/\D/g, "");
-  const phone = String(input.phone || "").replace(/\D/g, "");
+  const phone = peruLocalPhone(input.phone || "");
   const tractorPlate = displayPlate(input.tractorPlate || "");
   const trailerPlate = displayPlate(input.trailerPlate || "");
   const equipmentCode = String(input.equipmentCode || "").trim().slice(0, 40);

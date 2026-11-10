@@ -8,7 +8,12 @@ import {
   formatLimaStamp,
   formatPublicCode,
   motiveForMessage,
+  htmlSalidaUrl,
   normalizeStatus,
+  registrationCard,
+  registrationRequest,
+  peruLocalPhone,
+  peruReplyPhone,
   readXlsxSheets,
   registrationRows,
   validatePublicInput,
@@ -115,5 +120,42 @@ describe("registro de conductores", () => {
     expect(parsed.rows[0].publicCode).toBe("ZG-20261110-095608");
     expect(parsed.rows[0].status).toBe("REGISTRADO");
     expect(parsed.rows[0].siteName).toBe("Lima");
+  });
+
+  it("el aviso de inscripción manda la ficha y no el texto ni el HTML", () => {
+    const card = registrationCard({
+      site: "Lima",
+      motive: "Cargar contenedor",
+      when: new Date("2026-11-10T14:56:08.000Z"),
+      tractorPlate: "CYB.476",
+      trailerPlate: "A8F974",
+      driverName: "DOMINGO CHUCO CAPCHA",
+      company: "LH TRADE",
+      ruc: "20545385296",
+      license: "21106707",
+      phone: "954124973",
+      equipmentCode: "",
+      status: "REGISTRADO",
+      observations: "",
+      publicCode: "ZG-20261110-095608",
+    });
+    expect(card.fecha).toBe("10/11/2026");
+    expect(card.hora).toBe("09:56:08");
+    expect(card.codigoEquipo).toBe("NO INDICADO");
+    const body = registrationRequest(card, [{ telefono: "51900000000", contacto: "51900000001" }], ["operaciones@zgroup.com.pe"]);
+    expect(body.registro).toEqual(card);
+    expect(body).not.toHaveProperty("html");
+    expect(JSON.stringify(body.whatsapp)).not.toContain("mensaje");
+    expect(htmlSalidaUrl("https://ztrack.app/servicio/salida")).toBe("https://ztrack.app/servicio/salida-registro");
+    expect(htmlSalidaUrl("https://ztrack.app/servicio/salida-registro")).toBe("https://ztrack.app/servicio/salida-registro");
+  });
+
+  it("el teléfono de respuesta guarda el 51 y los 9 dígitos", () => {
+    expect(peruLocalPhone("51927249461")).toBe("927249461");
+    expect(peruLocalPhone("927249461")).toBe("927249461");
+    expect(peruReplyPhone("927249461")).toBe("51927249461");
+    expect(peruReplyPhone("51927249461")).toBe("51927249461");
+    expect(peruReplyPhone("123")).toBeNull();
+    expect(peruReplyPhone("")).toBe("");
   });
 });

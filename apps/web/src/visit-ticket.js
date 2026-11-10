@@ -48,6 +48,11 @@ export function visitFieldValue(key, data) {
   if (key === "visitAt") return formatVisitWhen(data.visitAt);
   if (key === "equipmentCode") return data.equipmentCode || "NO INDICADO";
   if (key === "observations") return data.observations || "SIN OBSERVACIONES";
+  if (key === "phone") {
+    const digits = String(data.phone || "").replace(/\D/g, "");
+    const local = digits.startsWith("51") && digits.length > 9 ? digits.slice(2, 11) : digits.slice(0, 9);
+    return local ? `+51 ${local}` : "—";
+  }
   return data[key] || "—";
 }
 

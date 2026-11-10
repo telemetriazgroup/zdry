@@ -149,6 +149,12 @@ export class GateVisitsController {
   }
 
   @Roles("admin", "coordinador")
+  @Post("sites/:id/test")
+  testSite(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.registry.testSite(id, user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
   @Post("motives")
   addMotive(@Body() body: { name?: string; asksDetail?: boolean }, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.registry.addMotive(body.name || "", !!body.asksDetail, user, req.ip);
@@ -221,12 +227,24 @@ export class GateVisitsController {
     });
   }
 
+  @Roles("superadmin")
+  @Post("reset")
+  resetVisits(@CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.registry.resetVisits(user, req.ip);
+  }
+
   @Roles("admin", "coordinador")
   @Post("import")
   @UseInterceptors(FileInterceptor("file", { storage: memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } }))
   importExcel(@UploadedFile() file: Express.Multer.File | undefined, @CurrentUser() user: AuthUser, @Req() req: Request) {
     if (!file?.buffer?.length) throw new BadRequestException("Selecciona el Excel de conductores.");
     return this.registry.importWorkbook(file.buffer, user, req.ip);
+  }
+
+  @Roles("superadmin")
+  @Delete(":id")
+  removeVisit(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.registry.removeVisit(id, user, req.ip);
   }
 
   @Roles("admin", "almacen", "coordinador")
