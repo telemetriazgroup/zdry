@@ -27,9 +27,19 @@ const empty = {
 
 function Brand() {
   return (
-    <div className="visita-brand">
+    <div className="reg-logo">
       <img src={publicUrl("/brand/zg_marca.png")} alt="ZGROUP" />
+      <span>INGENIERÍA EN FRÍO</span>
     </div>
+  );
+}
+
+function Section({ icon, title, children }) {
+  return (
+    <section className="reg-section">
+      <h3>{icon}<span>{title}</span></h3>
+      <div className="reg-grid">{children}</div>
+    </section>
   );
 }
 
@@ -64,7 +74,6 @@ export default function VisitaPublica() {
   const [photoLocal, setPhotoLocal] = useState("");
   const [photoStatus, setPhotoStatus] = useState("none");
   const [photoBust, setPhotoBust] = useState(0);
-  const [preview, setPreview] = useState(false);
   const [ticket, setTicket] = useState(null);
   const [qrSrc, setQrSrc] = useState("");
 
@@ -158,14 +167,14 @@ export default function VisitaPublica() {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
-  function openPreview(e) {
+  function submitForm(e) {
     e.preventDefault();
     setError("");
     if (motive?.asksDetail && form.motiveDetail.trim().length < 3) {
       setError("Si el motivo es Otros, escribe el detalle.");
       return;
     }
-    setPreview(true);
+    proceed();
   }
 
   async function proceed() {
@@ -189,11 +198,9 @@ export default function VisitaPublica() {
       setTicket(next);
       setPhotoStatus(next?.photoStatus || "none");
       setLocked(!!next?.locked);
-      setPreview(false);
       if (v?.publicToken) nav(`/visita/${v.publicToken}?recibo=1`, { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : err.message);
-      setPreview(false);
     } finally {
       setBusy(false);
     }
@@ -215,45 +222,53 @@ export default function VisitaPublica() {
 
   if (token && ready && staffVisitas && !showReceipt && !forceEdit && !error) {
     return (
-      <div className="panel visita-public">
+      <div className="reg-page">
         <Brand />
-        <p className="section-sub">Abriendo el ingreso en el panel…</p>
+        <div className="reg-card reg-card-plain"><p>Abriendo el ingreso en el panel…</p></div>
       </div>
     );
   }
 
   if (showReceipt && !ticket && !error) {
     return (
-      <div className="panel visita-public">
+      <div className="reg-page">
         <Brand />
-        <p className="section-sub">Preparando tu comprobante…</p>
+        <div className="reg-card reg-card-plain"><p>Preparando tu comprobante…</p></div>
       </div>
     );
   }
 
   if ((showReceipt && ticket) || (locked && ticket)) {
     return (
-      <div className="panel visita-public visita-welcome">
+      <div className="reg-page">
         <Brand />
-        <h2 className="section-title">Registro de conductores</h2>
-        <p className="section-sub">Bienvenido, {welcomeName}. Este es tu comprobante.</p>
-        {error ? <div className="err">{error}</div> : null}
-        {msg ? <div className="ok-msg">{msg}</div> : null}
-        {qrSrc ? <img className="visita-qr" src={qrSrc} alt="QR del registro" /> : null}
-        <p className="visita-code">Registro {ticket.publicCode || "—"}</p>
-        <PreviewList data={{ ...ticket, ...previewData }} />
-        {shownPhoto ? (
-          <button type="button" className="visit-photo-btn" onClick={() => lb.open([{ src: shownPhoto, type: "image", label: "Foto de la unidad" }])} style={{ margin: "12px auto 0" }}>
-            <img className="visit-photo-preview" src={shownPhoto} alt="Foto de la unidad" />
-          </button>
-        ) : null}
-        <div className="action-row" style={{ justifyContent: "center", marginTop: 16 }}>
-          <button className="btn-primary" type="button" onClick={() => downloadVisitPdf(ticket, pdfPhoto).catch((e) => setError(e.message))}>
-            Descargar PDF
-          </button>
-          {!ticket.locked ? (
-            <Link className="btn-ghost" to={`/visita/${ticket.publicToken}?editar=1`}>Corregir datos</Link>
-          ) : null}
+        <div className="reg-card reg-receipt">
+          <header className="reg-banner">
+            <span className="reg-banner-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M3 7h11v8H3V7zm11 2h4l3 3v3h-7V9zM7 18a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm10 0a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" /></svg>
+            </span>
+            <div>
+              <strong>REGISTRO DE CONDUCTORES</strong>
+              <small>Control de ingreso</small>
+            </div>
+          </header>
+          <div className="reg-body">
+            <p className="reg-hello">Bienvenido, {welcomeName}.</p>
+            {error ? <div className="err">{error}</div> : null}
+            {msg ? <div className="ok-msg">{msg}</div> : null}
+            {qrSrc ? <img className="visita-qr" src={qrSrc} alt="QR del registro" /> : null}
+            <p className="visita-code">Registro {ticket.publicCode || "—"}</p>
+            <PreviewList data={{ ...ticket, ...previewData }} />
+            {shownPhoto ? (
+              <button type="button" className="visit-photo-btn" onClick={() => lb.open([{ src: shownPhoto, type: "image", label: "Foto de la unidad" }])}>
+                <img className="visit-photo-preview" src={shownPhoto} alt="Foto de la unidad" />
+              </button>
+            ) : null}
+            <div className="reg-receipt-actions">
+              <button className="reg-submit" type="button" onClick={() => downloadVisitPdf(ticket, pdfPhoto).catch((e) => setError(e.message))}>Descargar PDF</button>
+              {!ticket.locked ? <Link className="reg-link" to={`/visita/${ticket.publicToken}?editar=1`}>Corregir datos</Link> : null}
+            </div>
+          </div>
         </div>
         {lb.node}
       </div>
@@ -261,80 +276,73 @@ export default function VisitaPublica() {
   }
 
   return (
-    <div className="panel visita-public">
+    <div className="reg-page">
       <Brand />
-      <h2 className="section-title">Registro de conductores</h2>
-      <p className="section-sub">Control de ingreso</p>
-      {error ? <div className="err">{error}</div> : null}
-      {msg ? <div className="ok-msg">{msg}</div> : null}
-      <form className="form-grid" onSubmit={openPreview}>
-        <div style={{ gridColumn: "1 / -1" }}>
-          <label>Sede *</label>
-          <select value={form.siteId} onChange={(e) => set("siteId", e.target.value)} required disabled={locked}>
-            <option value="">Seleccione una sede</option>
-            {options.sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
-          </select>
-        </div>
-        <div><label>Empresa *</label><input value={form.company} onChange={(e) => set("company", e.target.value)} required disabled={locked} placeholder="Ingrese la empresa" /></div>
-        <div><label>RUC *</label><input value={form.ruc} onChange={(e) => set("ruc", e.target.value.replace(/\D/g, "").slice(0, 11))} required inputMode="numeric" disabled={locked} placeholder="Ingrese RUC de 11 dígitos" /></div>
-        <div><label>Nombres y apellidos *</label><input value={form.driverName} onChange={(e) => set("driverName", e.target.value)} required disabled={locked} /></div>
-        <div><label>N.º de brevete *</label><input value={form.license} onChange={(e) => set("license", e.target.value)} required disabled={locked} /></div>
-        <div><label>Teléfono *</label><input value={form.phone} onChange={(e) => set("phone", e.target.value.replace(/\D/g, "").slice(0, 9))} required inputMode="numeric" disabled={locked} placeholder="9 dígitos" /></div>
-        <div><label>Placa tracto *</label><input value={form.tractorPlate} onChange={(e) => set("tractorPlate", e.target.value.toUpperCase())} required disabled={locked} /></div>
-        <div><label>Placa carreta *</label><input value={form.trailerPlate} onChange={(e) => set("trailerPlate", e.target.value.toUpperCase())} required disabled={locked} /></div>
-        <div>
-          <label>Motivo de visita *</label>
-          <select value={form.motiveId} onChange={(e) => set("motiveId", e.target.value)} required disabled={locked}>
-            <option value="">Seleccione una opción</option>
-            {options.motives.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
-        </div>
-        <div><label>Código de equipo</label><input value={form.equipmentCode} onChange={(e) => set("equipmentCode", e.target.value)} disabled={locked} placeholder="Ingrese código de equipo" /></div>
-        {motive?.asksDetail ? (
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label>Detalle del motivo *</label>
-            <input value={form.motiveDetail} onChange={(e) => set("motiveDetail", e.target.value)} disabled={locked} placeholder="Describe la visita" />
+      <form className="reg-card" onSubmit={submitForm}>
+        <header className="reg-banner">
+          <span className="reg-banner-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M3 7h11v8H3V7zm11 2h4l3 3v3h-7V9zM7 18a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm10 0a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" /></svg>
+          </span>
+          <div>
+            <strong>REGISTRO DE CONDUCTORES</strong>
+            <small>Control de ingreso</small>
           </div>
-        ) : null}
-        <div style={{ gridColumn: "1 / -1" }}>
-          <label>Observaciones</label>
-          <textarea value={form.observations} onChange={(e) => set("observations", e.target.value)} disabled={locked} placeholder="Ingrese observaciones si corresponde" />
-        </div>
-        <div style={{ gridColumn: "1 / -1" }}>
-          <label>Foto de la unidad (opcional)</label>
-          <div className="visit-photo-box">
-            {shownPhoto ? (
-              <button type="button" className="visit-photo-btn" onClick={() => lb.open([{ src: shownPhoto, type: "image", label: "Foto de la unidad" }])}>
-                <img className="visit-photo-preview" src={shownPhoto} alt="Vista previa de la unidad" />
-              </button>
-            ) : null}
-            <label className="btn-ghost">
-              {shownPhoto ? "Cambiar foto" : "Elegir foto"}
-              <input type="file" accept="image/*" capture="environment" hidden disabled={locked} onChange={(e) => setPhoto(e.target.files?.[0] || null)} />
+        </header>
+        <div className="reg-body">
+          {error ? <div className="err">{error}</div> : null}
+          {msg ? <div className="ok-msg">{msg}</div> : null}
+          <Section icon={<svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6a2.5 2.5 0 0 1 0 5.5z" /></svg>} title="SEDE DE REGISTRO">
+            <label className="reg-field reg-span">
+              Sede <i>*</i>
+              <select value={form.siteId} onChange={(e) => set("siteId", e.target.value)} required disabled={locked}>
+                <option value="">Seleccione una sede</option>
+                {options.sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
+              </select>
+              <small>Seleccione la sede de ZGROUP donde realizará el ingreso.</small>
             </label>
-          </div>
-        </div>
-        <div className="action-row" style={{ gridColumn: "1 / -1" }}>
-          <button className="btn-primary" type="submit" disabled={busy || locked}>
-            {token ? "Guardar cambios" : "Registrar ingreso"}
+          </Section>
+          <Section icon={<svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-8 2-8 5v1h16v-1c0-3-4-5-8-5z" /></svg>} title="DATOS DEL CONDUCTOR">
+            <label className="reg-field">Empresa <i>*</i><input value={form.company} onChange={(e) => set("company", e.target.value)} required disabled={locked} placeholder="Ingrese la empresa" /></label>
+            <label className="reg-field">RUC <i>*</i><input value={form.ruc} onChange={(e) => set("ruc", e.target.value.replace(/\D/g, "").slice(0, 11))} required inputMode="numeric" disabled={locked} placeholder="Ingrese RUC de 11 dígitos" /></label>
+            <label className="reg-field">Nombres y apellidos <i>*</i><input value={form.driverName} onChange={(e) => set("driverName", e.target.value)} required disabled={locked} placeholder="Ingrese nombres y apellidos" /></label>
+            <label className="reg-field">N.º de brevete <i>*</i><input value={form.license} onChange={(e) => set("license", e.target.value)} required disabled={locked} placeholder="Ingrese n.º de brevete" /></label>
+            <label className="reg-field">Teléfono <i>*</i><input value={form.phone} onChange={(e) => set("phone", e.target.value.replace(/\D/g, "").slice(0, 9))} required inputMode="numeric" disabled={locked} placeholder="Ingrese teléfono de 9 dígitos" /></label>
+          </Section>
+          <Section icon={<svg viewBox="0 0 24 24"><path d="M3 7h11v8H3V7zm11 2h4l3 3v3h-7V9zM7 18a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm10 0a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" /></svg>} title="DATOS DEL VEHÍCULO">
+            <label className="reg-field">Placa tracto <i>*</i><input value={form.tractorPlate} onChange={(e) => set("tractorPlate", e.target.value.toUpperCase())} required disabled={locked} placeholder="Ingrese placa del tracto" /></label>
+            <label className="reg-field">Placa carreta <i>*</i><input value={form.trailerPlate} onChange={(e) => set("trailerPlate", e.target.value.toUpperCase())} required disabled={locked} placeholder="Ingrese placa de la carreta" /></label>
+          </Section>
+          <Section icon={<svg viewBox="0 0 24 24"><path d="M6 2h9l5 5v15a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V8h4.5zM8 12h8v1.6H8zm0 3.4h8V17H8z" /></svg>} title="DATOS DE LA VISITA">
+            <label className="reg-field">
+              Motivo de visita <i>*</i>
+              <select value={form.motiveId} onChange={(e) => set("motiveId", e.target.value)} required disabled={locked}>
+                <option value="">Seleccione una opción</option>
+                {options.motives.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </label>
+            <label className="reg-field">Código de equipo<input value={form.equipmentCode} onChange={(e) => set("equipmentCode", e.target.value)} disabled={locked} placeholder="Ingrese código de equipo" /></label>
+            {motive?.asksDetail ? (
+              <label className="reg-field reg-span">Detalle del motivo <i>*</i><input value={form.motiveDetail} onChange={(e) => set("motiveDetail", e.target.value)} disabled={locked} placeholder="Describe la visita" /></label>
+            ) : null}
+            <label className="reg-field reg-span">
+              Observaciones
+              <textarea value={form.observations} onChange={(e) => set("observations", e.target.value)} disabled={locked} placeholder="Ingrese observaciones si corresponde" rows={3} />
+            </label>
+            <label className="reg-field reg-span">
+              Foto de la unidad
+              <span className="reg-file">
+                {shownPhoto ? <img src={shownPhoto} alt="Vista previa de la unidad" /> : null}
+                <span>{photo?.name || (photoStatus === "visible" ? "Foto cargada" : "Opcional")}</span>
+                <input type="file" accept="image/*" capture="environment" disabled={locked} onChange={(e) => setPhoto(e.target.files?.[0] || null)} />
+              </span>
+            </label>
+          </Section>
+          <button className="reg-submit" type="submit" disabled={busy || locked}>
+            <span aria-hidden="true">▶</span> {busy ? "REGISTRANDO…" : token ? "GUARDAR CAMBIOS" : "REGISTRAR INGRESO"}
           </button>
+          <p className="reg-safe">La información será registrada de forma segura.</p>
         </div>
       </form>
-      <div className={`overlay ${preview ? "open" : ""}`} onClick={() => !busy && setPreview(false)}>
-        <div className="modal quote-modal" onClick={(e) => e.stopPropagation()}>
-          <div className="modal-head">
-            <b>Revisa tus datos</b>
-            <button type="button" className="modal-close" onClick={() => setPreview(false)} disabled={busy}>×</button>
-          </div>
-          <div className="modal-body single">
-            <PreviewList data={previewData} />
-            <div className="action-row" style={{ marginTop: 16 }}>
-              <button className="btn-ghost" type="button" disabled={busy} onClick={() => setPreview(false)}>Corregir</button>
-              <button className="btn-primary" type="button" disabled={busy} onClick={proceed}>{busy ? "Guardando…" : "Proceder"}</button>
-            </div>
-          </div>
-        </div>
-      </div>
       {lb.node}
     </div>
   );

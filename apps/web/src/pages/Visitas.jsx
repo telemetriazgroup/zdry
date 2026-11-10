@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api, apiUpload, apiUrl, publicUrl } from "../api.js";
+import { api, apiBlob, apiUpload, apiUrl, formatWhen, publicUrl } from "../api.js";
 import { hasRole, useAuth } from "../auth.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
 import { downloadVisitPdf, statusLabel } from "../visit-ticket.js";
@@ -42,6 +42,9 @@ export default function Visitas() {
   const [reply, setReply] = useState({ siteId: "", phone: "" });
   const [confirmText, setConfirmText] = useState("");
   const [locationText, setLocationText] = useState("");
+  const [query, setQuery] = useState("");
+  const [report, setReport] = useState(null);
+  const [importing, setImporting] = useState(false);
 
   async function load(next = status) {
     const list = await api(`/gate-visits?status=${encodeURIComponent(next)}`);
@@ -139,22 +142,45 @@ export default function Visitas() {
     }
   }
 
-  async function uploadExcel(file) {
-    if (!file) return;
+  async function downloadTemplate() {
     setError("");
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const report = await apiUpload("/gate-visits/import", fd);
-      setMsg(`Carga lista: ${report.created} nuevos, ${report.filled} completados, ${report.skipped?.length || 0} omitidos.`);
-      setSelected({ importReport: report });
-      await load(status);
+      const blob = await apiBlob("/gate-visits/template");
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "plantilla-registro-conductores.xlsx";
+      link.click();
+      URL.revokeObjectURL(url);
     } catch (e) {
       setError(e.message);
     }
   }
 
+  async function uploadExcel(file) {
+    if (!file) return;
+    setError("");
+    setImporting(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const result = await apiUpload("/gate-visits/import", fd);
+      setReport(result);
+      setMsg(`Asimilación lista: ${result.created} nuevos, ${result.filled} completados, ${result.skipped?.length || 0} omitidos.`);
+      await load(status);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setImporting(false);
+    }
+  }
+
   const qr = `${window.location.origin}${publicUrl("/visita")}`;
+  const needle = query.trim().toLowerCase();
+  const visible = needle
+    ? rows.filter((row) => [row.publicCode, row.driverName, row.tractorPlate, row.trailerPlate, row.company, row.siteName, row.motive]
+      .some((value) => String(value || "").toLowerCase().includes(needle)))
+    : rows;
 
   return (
     <div className="panel">
@@ -169,6 +195,7 @@ export default function Visitas() {
       {msg ? <div className="ok-msg">{msg}</div> : null}
       <div className="recv-actions">
         <button className={`btn-ghost ${view === "ingresos" ? "on" : ""}`} type="button" onClick={() => setView("ingresos")}>Ingresos</button>
+        {manage ? <button className={`btn-primary ${view === "asimilar" ? "on" : ""}`} type="button" onClick={() => setView("asimilar")}>Asimilar datos</button> : null}
         {manage ? <button className={`btn-ghost ${view === "menu" ? "on" : ""}`} type="button" onClick={() => { setView("menu"); loadMasters().catch((e) => setError(e.message)); }}>Menú</button> : null}
       </div>
 
@@ -179,23 +206,28 @@ export default function Visitas() {
               <button key={key} className={`btn-ghost ${status === key ? "on" : ""}`} type="button" onClick={() => { setStatus(key); load(key).catch((e) => setError(e.message)); }}>{label}</button>
             ))}
           </div>
+          <input className="drv-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar conductor, placa, código o empresa" />
           <div className="drv-split">
             <div>
-              {rows.map((row) => {
+              {visible.map((row) => {
                 const mark = pill(row.status);
                 return (
                   <button key={row.id} type="button" className={`drv-row ${selected?.id === row.id ? "on" : ""}`} onClick={() => open(row.id).catch((e) => setError(e.message))}>
-                    <b>{row.publicCode || row.tractorPlate}</b>
-                    <span>{row.siteName || "—"} · {row.driverName || "sin conductor"} · {row.tractorPlate}</span>
-                    <span className="badge-scope" style={{ background: mark.color }}>{mark.label}</span>
+                    <span className="drv-row-top">
+                      <b>{row.driverName || "Sin conductor"}</b>
+                      <span className="drv-pill" style={{ background: mark.color }}>{mark.label}</span>
+                    </span>
+                    <span className="drv-meta">{row.tractorPlate || "Sin placa"} · {row.siteName || "Sin sede"} · {row.motive || "Sin motivo"}</span>
+                    <span className="drv-meta">{row.publicCode || "Sin código"} · {formatWhen(row.visitAt)}</span>
                   </button>
                 );
               })}
-              {!rows.length ? <p className="section-sub">No hay ingresos en este estado.</p> : null}
+              {!visible.length ? <p className="section-sub">{rows.length ? "Ningún ingreso coincide con la búsqueda." : manage ? "No hay ingresos en este estado. En Asimilar datos puedes descargar la plantilla e importar el Excel." : "No hay ingresos en este estado."}</p> : null}
             </div>
             {selected?.id ? (
               <div className="drv-card">
-                <h4>{selected.publicCode}</h4>
+                <h4>{selected.driverName || selected.publicCode || selected.tractorPlate}</h4>
+                <p>{selected.publicCode || "Sin código"} · {formatWhen(selected.visitAt)}</p>
                 <p>{selected.siteName} · {selected.motive}{selected.motiveDetail ? ` — ${selected.motiveDetail}` : ""}</p>
                 <p>{selected.driverName} · {selected.company} · RUC {selected.ruc}</p>
                 <p>Tracto {selected.tractorPlate} · carreta {selected.trailerPlate} · {selected.phone}</p>
@@ -252,6 +284,37 @@ export default function Visitas() {
             ) : null}
           </div>
         </>
+      ) : null}
+
+      {view === "asimilar" ? (
+        <section className="drv-card drv-assimilate">
+          <h4>Asimilar registros</h4>
+          <ol className="drv-steps">
+            <li>Descarga la plantilla. La hoja REGISTROS entra como Lima y la hoja PIURA como Piura.</li>
+            <li>Una fila por ingreso. Borra la fila de ejemplo. El Excel histórico REGISTRO DE CONDUCTORES también se puede subir tal cual.</li>
+            <li>Importa el archivo. Si el id ya existe, solo se completan los datos vacíos. Esta carga no envía correo ni WhatsApp.</li>
+          </ol>
+          <div className="action-row">
+            <button className="btn-primary" type="button" onClick={downloadTemplate}>Descargar plantilla</button>
+            <label className="btn-ghost drv-file">
+              {importing ? "Importando…" : "Importar Excel"}
+              <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={importing} onChange={(e) => { uploadExcel(e.target.files?.[0]); e.target.value = ""; }} />
+            </label>
+          </div>
+          {report ? (
+            <div className="drv-report">
+              <p><b>{report.created}</b> nuevos · <b>{report.filled}</b> completados · <b>{report.skipped?.length || 0}</b> omitidos</p>
+              <p className="section-sub">Los registros históricos suelen quedar en FINALIZADO. Abre ese filtro en Ingresos para verlos.</p>
+              <button className="btn-ghost" type="button" onClick={() => { setStatus("FINALIZADO"); setView("ingresos"); load("FINALIZADO").catch((e) => setError(e.message)); }}>Ver finalizados</button>
+              {report.skipped?.length ? (
+                <ul className="drv-notes">
+                  {report.skipped.slice(0, 40).map((item, index) => <li key={`${item.id}-${index}`}>{item.id}: {item.reason}</li>)}
+                </ul>
+              ) : null}
+              {report.skipped?.length > 40 ? <p className="section-sub">Se muestran 40 de {report.skipped.length} omitidos.</p> : null}
+            </div>
+          ) : null}
+        </section>
       ) : null}
 
       {view === "menu" && masters ? (
@@ -348,16 +411,6 @@ export default function Visitas() {
             <h4>Plantilla de ubicación</h4>
             <textarea value={locationText} onChange={(e) => setLocationText(e.target.value)} rows={7} />
             <button className="btn-ghost" type="button" onClick={() => api("/gate-visits/templates", { method: "POST", body: { key: "location", value: locationText } }).then(() => setMsg("Plantilla de ubicación guardada.")).catch((e) => setError(e.message))}>Guardar ubicación</button>
-          </section>
-          <section>
-            <h4>Cargar Excel</h4>
-            <p className="section-sub">La hoja REGISTROS entra como Lima y la hoja PIURA como Piura. No se envían mensajes.</p>
-            <input type="file" accept=".xlsx" onChange={(e) => uploadExcel(e.target.files?.[0])} />
-            {selected?.importReport?.skipped?.length ? (
-              <ul className="drv-notes">
-                {selected.importReport.skipped.slice(0, 30).map((item) => <li key={`${item.id}-${item.reason}`}>{item.id}: {item.reason}</li>)}
-              </ul>
-            ) : null}
           </section>
         </div>
       ) : null}

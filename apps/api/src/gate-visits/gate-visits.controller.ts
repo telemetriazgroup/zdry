@@ -9,6 +9,7 @@ import { AuthUser } from "../auth/auth.types";
 import { GateVisitsService } from "./gate-visits.service";
 import { DriverRegistryService } from "./driver-registry.service";
 import { clientOrigin } from "../domain/client-origin";
+import { buildRegistryTemplate } from "../domain/driver-registry";
 import { MAX_INSPECTION_PHOTO_BYTES } from "../domain/inspection-media";
 
 type VisitBody = {
@@ -209,6 +210,15 @@ export class GateVisitsController {
     @Req() req: Request,
   ) {
     return this.registry.saveTemplate(body.key === "location" ? "location" : "confirm", body.value || "", user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
+  @Get("template")
+  template() {
+    return new StreamableFile(buildRegistryTemplate(), {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      disposition: 'attachment; filename="plantilla-registro-conductores.xlsx"',
+    });
   }
 
   @Roles("admin", "coordinador")

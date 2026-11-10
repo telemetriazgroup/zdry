@@ -140,6 +140,33 @@ export function excelDate(serial: string, fraction: string) {
   return new Date(wallMs + LIMA_OFFSET_MS);
 }
 
+export function parseVisitWhen(dateRaw: string, timeRaw: string): Date | null {
+  const date = String(dateRaw || "").trim();
+  const time = String(timeRaw || "").trim();
+  if (/^\d+(\.\d+)?$/.test(date)) {
+    const fraction = /^\d+(\.\d+)?$/.test(time) && Number(time) < 2 ? time : "0";
+    return excelDate(date, fraction);
+  }
+  const match = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(date);
+  if (!match) return null;
+  let hh = 0;
+  let mm = 0;
+  let ss = 0;
+  const clock = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(time);
+  if (clock) {
+    hh = Number(clock[1]);
+    mm = Number(clock[2]);
+    ss = Number(clock[3] || 0);
+  } else if (/^\d+(\.\d+)?$/.test(time) && Number(time) < 2) {
+    const total = Math.round(Number(time) * 86400);
+    hh = Math.floor(total / 3600);
+    mm = Math.floor((total % 3600) / 60);
+    ss = total % 60;
+  }
+  const wall = Date.UTC(Number(match[3]), Number(match[2]) - 1, Number(match[1]), hh, mm, ss);
+  return new Date(wall + LIMA_OFFSET_MS);
+}
+
 function esc(value: string) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -385,19 +412,35 @@ export function registrationRows(sheets: Array<{ name: string; rows: Record<stri
     const siteName = key === "REGISTROS" ? "Lima" : key === "PIURA" ? "Piura" : "";
     if (!siteName) continue;
     for (const row of sheet.rows) {
-      const id = String(row.A || "").trim();
-      if (!id.startsWith("ZG-")) continue;
+      const rawId = String(row.A || "").trim();
+      if (/^(id|fecha|empresa|registro)$/i.test(rawId)) continue;
+      if (rawId.toUpperCase().startsWith("ZG-EJEMPLO")) {
+        skipped.push({ id: rawId, reason: "Fila de ejemplo. Bórrala antes de asimilar." });
+        continue;
+      }
+      const tractorPlate = displayPlate(excelText(row.I || ""));
+      const visitAt = parseVisitWhen(row.B || "", row.C || "");
+      let id = rawId;
+      if (!id.startsWith("ZG-")) {
+        if (tractorPlate.length < 3 || !excelText(row.F || "")) continue;
+        if (!visitAt) {
+          skipped.push({ id: tractorPlate, reason: "Falta la fecha para asignar el id." });
+          continue;
+        }
+        id = formatPublicCode(visitAt);
+      }
       if (seen.has(id)) {
         skipped.push({ id, reason: "El id ya apareció en el archivo." });
         continue;
       }
       seen.add(id);
-      const status = normalizeStatus(row.M || "");
+      const typedStatus = String(row.M || "").trim();
+      let status = normalizeStatus(typedStatus);
+      if (!status && !typedStatus && !rawId.startsWith("ZG-")) status = "REGISTRADO";
       if (!status) {
         skipped.push({ id, reason: "El estado no es válido." });
         continue;
       }
-      const tractorPlate = displayPlate(excelText(row.I || ""));
       if (tractorPlate.length < 3) {
         skipped.push({ id, reason: "Falta la placa del tracto." });
         continue;
@@ -405,7 +448,7 @@ export function registrationRows(sheets: Array<{ name: string; rows: Record<stri
       rows.push({
         publicCode: id.slice(0, 40),
         siteName,
-        visitAt: excelDate(row.B || "", row.C || ""),
+        visitAt: visitAt || new Date(),
         company: excelText(row.D || "").slice(0, 160),
         ruc: digitsFromExcel(row.E || "").slice(0, 20),
         driverName: excelText(row.F || "").slice(0, 160),
@@ -421,4 +464,95 @@ export function registrationRows(sheets: Array<{ name: string; rows: Record<stri
     }
   }
   return { rows, skipped };
+}
+
+const TEMPLATE_HEADERS = [
+  "ID", "FECHA", "HORA", "EMPRESA", "RUC", "CONDUCTOR", "BREVETE", "TELEFONO",
+  "PLACA DE TRACTO", "PLACA DE CARRETA", "MOTIVO DE VISITA", "CODIGO DE EQUIPO", "ESTADO", "OBSERVACIONES",
+];
+
+function sheetXml(rows: string[][]) {
+  const body = rows.map((row, index) => {
+    const cells = row.map((value, col) => {
+      const ref = `${String.fromCharCode(65 + col)}${index + 1}`;
+      const text = value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      return `<c r="${ref}" t="inlineStr"><is><t>${text}</t></is></c>`;
+    }).join("");
+    return `<row r="${index + 1}">${cells}</row>`;
+  }).join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${body}</sheetData></worksheet>`;
+}
+
+function crc32(buf: Buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buf) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function zipStore(entries: Array<{ name: string; data: Buffer }>) {
+  const parts: Buffer[] = [];
+  const central: Buffer[] = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const name = Buffer.from(entry.name);
+    const crc = crc32(entry.data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(entry.data.length, 18);
+    local.writeUInt32LE(entry.data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    parts.push(local, name, entry.data);
+    const dir = Buffer.alloc(46);
+    dir.writeUInt32LE(0x02014b50, 0);
+    dir.writeUInt16LE(20, 4);
+    dir.writeUInt16LE(20, 6);
+    dir.writeUInt32LE(crc, 16);
+    dir.writeUInt32LE(entry.data.length, 20);
+    dir.writeUInt32LE(entry.data.length, 24);
+    dir.writeUInt16LE(name.length, 28);
+    dir.writeUInt32LE(offset, 42);
+    central.push(dir, name);
+    offset += local.length + name.length + entry.data.length;
+  }
+  const directory = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(directory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...parts, directory, end]);
+}
+
+export function buildRegistryTemplate() {
+  const lima = sheetXml([
+    ["REGISTRO DE CONDUCTORES", "LIMA"],
+    ["Una fila por ingreso. Borra la fila de ejemplo. Si el ID va vacío, ZDRY lo asigna con la fecha y la hora. Esta carga no envía correo ni WhatsApp."],
+    TEMPLATE_HEADERS,
+    ["ZG-EJEMPLO-000000", "10/11/2026", "09:56:08", "LH TRADE", "20545385296", "DOMINGO CHUCO CAPCHA", "21106707", "954124973", "CYB.476", "A8F974", "CARGAR CONTENEDOR", "", "FINALIZADO", ""],
+  ]);
+  const piura = sheetXml([
+    ["REGISTRO DE CONDUCTORES", "PIURA"],
+    ["Misma tabla que Lima. Esta hoja entra como sede Piura."],
+    TEMPLATE_HEADERS,
+  ]);
+  const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="REGISTROS" sheetId="1" r:id="rId1"/><sheet name="PIURA" sheetId="2" r:id="rId2"/></sheets></workbook>`;
+  const rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>`;
+  const root = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
+  const types = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`;
+  return zipStore([
+    { name: "[Content_Types].xml", data: Buffer.from(types) },
+    { name: "_rels/.rels", data: Buffer.from(root) },
+    { name: "xl/workbook.xml", data: Buffer.from(workbook) },
+    { name: "xl/_rels/workbook.xml.rels", data: Buffer.from(rels) },
+    { name: "xl/worksheets/sheet1.xml", data: Buffer.from(lima) },
+    { name: "xl/worksheets/sheet2.xml", data: Buffer.from(piura) },
+  ]);
 }

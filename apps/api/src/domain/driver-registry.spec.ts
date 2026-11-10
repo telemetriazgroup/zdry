@@ -2,12 +2,14 @@ import { canPublicEditVisit, visitIsLocked, visitPhotoStatus } from "./gate-visi
 import {
   digitsFromExcel,
   equipmentIsoWarning,
+  buildRegistryTemplate,
   excelDate,
   fillTemplate,
   formatLimaStamp,
   formatPublicCode,
   motiveForMessage,
   normalizeStatus,
+  readXlsxSheets,
   registrationRows,
   validatePublicInput,
 } from "./driver-registry";
@@ -95,5 +97,23 @@ describe("registro de conductores", () => {
     expect(parsed.rows[1].siteName).toBe("Piura");
     expect(parsed.rows[1].equipmentCode).toBe("1186682");
     expect(parsed.skipped[0].reason).toContain("estado");
+  });
+
+  it("la plantilla se lee y una fila sin id toma el código de la fecha", () => {
+    const fromFile = registrationRows(readXlsxSheets(buildRegistryTemplate()));
+    expect(fromFile.rows).toHaveLength(0);
+    expect(fromFile.skipped[0].reason).toContain("ejemplo");
+    const parsed = registrationRows([
+      {
+        name: "REGISTROS",
+        rows: [
+          { A: "", B: "10/11/2026", C: "09:56:08", D: "LH TRADE", E: "20545385296", F: "DOMINGO CHUCO", G: "21106707", H: "954124973", I: "CYB.476", J: "A8F974", K: "CARGAR CONTENEDOR", L: "", M: "", N: "" },
+        ],
+      },
+    ]);
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0].publicCode).toBe("ZG-20261110-095608");
+    expect(parsed.rows[0].status).toBe("REGISTRADO");
+    expect(parsed.rows[0].siteName).toBe("Lima");
   });
 });
