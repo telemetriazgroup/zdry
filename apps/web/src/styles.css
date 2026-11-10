@@ -1963,6 +1963,7 @@ button.tile.dry-click { display: block; }
 .stack-col { display: flex; flex-direction: column; gap: 3px; min-width: 58px; flex: 1; }
 .stack-col > span { font-size: 10px; font-weight: 700; color: #667085; text-align: center; }
 .yard-cell {
+  width: 100%; display: block; box-sizing: border-box;
   min-height: 26px; border: 1px solid #d0d5dd; border-radius: 4px; background: #f8fafc;
   color: #667085; font-size: 10px; font-weight: 800; cursor: pointer; padding: 2px 0;
 }
@@ -1973,7 +1974,7 @@ button.tile.dry-click { display: block; }
 .yard-slide span { flex: 1 1 180px; font-size: 13px; }
 .yard-slide .btn-primary, .yard-slide .btn-ghost { width: auto; min-height: 36px; }
 .yard-bay { display: flex; gap: 2px; min-width: 0; }
-.yard-bay .yard-cell { flex: 1 1 0; min-width: 0; padding: 2px 1px; }
+.yard-bay .yard-cell { width: auto; flex: 1 1 0; min-width: 0; padding: 2px 1px; }
 .yard-page { min-width: 0; max-width: 100%; }
 .yard-panel { min-width: 0; max-width: 100%; overflow: hidden; }
 .yard-table { max-width: 100%; }

@@ -76,8 +76,24 @@ function occupiesHalf(item, half) {
   return span === "full" || span === "center" || span === half;
 }
 
+function isExplicitGhost(ghost, all) {
+  if (ghost.code || ghost.typeCode || !ghost.half) return true;
+  return all.some(
+    (other) => other !== ghost
+      && other.zoneId === ghost.zoneId
+      && other.row === ghost.row
+      && other.col === ghost.col
+      && other.level === ghost.level
+      && !other.code
+      && !other.typeCode
+      && other.half
+      && other.half !== ghost.half,
+  );
+}
+
 function supportedGhosts(zones, units, ghosts) {
-  const next = (ghosts || []).map((ghost) => ({ ...ghost }));
+  const source = ghosts || [];
+  const next = source.filter((ghost) => isExplicitGhost(ghost, source)).map((ghost) => ({ ...ghost }));
   const columns = new Map();
   const remember = (zoneId, name, row, col) => columns.set(`${zoneId}:${row}:${col}`, { zoneId, name, row, col });
   for (const ghost of next) {
@@ -110,11 +126,8 @@ function supportedGhosts(zones, units, ghosts) {
         }
         return false;
       };
-      const needA = above("A") && !here.some((item) => occupiesHalf(item, "A"));
-      const needB = above("B") && !here.some((item) => occupiesHalf(item, "B"));
-      if (needA && needB) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level });
-      else if (needA) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level, half: "A" });
-      else if (needB) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level, half: "B" });
+      const blocked = here.some((item) => occupiesHalf(item, "A") || occupiesHalf(item, "B"));
+      if (!blocked && (above("A") || above("B"))) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level });
     }
   }
   return next;
@@ -181,6 +194,8 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
 
   const loose = layout.units.filter((unit) => !unit.lado && (layout.simulation || !LEFT.has(unit.status)));
   const ghosts = supportedGhosts(draft.zones, layout.units, draft.ghosts);
+  const incomingUnit = layout.units.find((unit) => unit.iso === (selectedIso || transferIso));
+  const incomingFeet = incomingUnit ? feetOf(incomingUnit.type) : guestCode.trim() ? feetOf(guestFeet) : 0;
   const needle = query.trim().toUpperCase();
   const looseShown = loose.filter((unit) => !needle || `${unit.iso} ${unit.typeLabel}`.toUpperCase().includes(needle)).slice(0, 30);
   const gridCols = Math.max(...draft.zones.map((zone) => Number(zone.gridCol) || 1));
@@ -245,6 +260,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       note: named
         ? `${ghost.note ? `${ghost.note}. ` : ""}Equipo ajeno a ZDRY, ${feetName(ghost.typeCode)}. ${access} ${cost}`
         : `Desconocido. ${access} ${cost}`,
+      splittable: !named && !ghost.half,
       ghost: above ? null : { zoneId: zone.id, row, col, level, ...(ghost.half ? { half: ghost.half } : {}) },
     };
   }
@@ -426,6 +442,21 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     }
   }
 
+  async function splitPicked() {
+    if (!picked?.ghost || picked.ghost.half) return;
+    setError("");
+    try {
+      await api("/yard/ghost", {
+        method: "POST",
+        body: { depotId: layout.depotId, ...picked.ghost, split: true, occupied: true },
+      });
+      setPicked(null);
+      await onReload();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   async function clearPicked() {
     if (!picked?.ghost) return;
     setError("");
@@ -466,6 +497,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               </div>
             );
           })()}
+          {picked.splittable ? <button className="btn-ghost" type="button" onClick={splitPicked}>Dividir en dos de 20</button> : null}
           {picked.ghost ? <button className="btn-ghost" type="button" onClick={clearPicked}>Liberar hueco</button> : null}
           {!picked.unknown && !picked.ghost && layout.units.some((unit) => unit.iso === picked.code) ? (
             <button className="btn-primary" type="button" onClick={() => setDetailIso(picked.code)}>Ver más información</button>
@@ -565,7 +597,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
           ) : (
             <>
           <p className="section-sub">
-            Elige un equipo de la lista y toca la altura. Los niveles de abajo quedan ocupados sin identificar, para que la ruma no flote. Ese hueco se reemplaza con un equipo disponible o con un código ajeno a ZDRY. Sin equipo elegido, el toque marca la celda como ocupada. Doble clic en un equipo lo devuelve a sin posición.
+            Elige un equipo de la lista y toca la altura. Un 40 ocupa A y B. Un 20 ocupa solo la mitad que toques, y al lado puede ir otro 20. Lo que queda debajo sin identificar se ve como un 40. Si esa fila son dos de 20, usa Dividir en dos de 20. Doble clic en un equipo lo devuelve a sin posición.
             {selectedIso ? ` Seleccionado: ${selectedIso}.` : ""}
           </p>
           <div className="guest-form">
@@ -644,13 +676,21 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
                                                 const span = baySpan(item.typeCode, item.half);
                                                 return span === "full" || span === "center";
                                               });
-                                              const slots = wideUnit || wideGhost
-                                                ? [{ half: "", occupant: wideUnit, ghost: wideGhost }]
-                                                : ["A", "B"].map((half) => ({
+                                              const hasHalf = hereUnits.some((unit) => {
+                                                const span = baySpan(unit.type, unit.bayHalf);
+                                                return span === "A" || span === "B";
+                                              }) || hereGhosts.some((item) => {
+                                                const span = baySpan(item.typeCode, item.half);
+                                                return span === "A" || span === "B";
+                                              });
+                                              const showHalves = hasHalf || (!wideUnit && !wideGhost && incomingFeet > 0 && incomingFeet < 40);
+                                              const slots = showHalves
+                                                ? ["A", "B"].map((half) => ({
                                                   half,
                                                   occupant: hereUnits.find((unit) => baySpan(unit.type, unit.bayHalf) === half),
                                                   ghost: hereGhosts.find((item) => baySpan(item.typeCode, item.half) === half),
-                                                }));
+                                                }))
+                                                : [{ half: "", occupant: wideUnit, ghost: wideGhost }];
                                               return (
                                                 <div className={slots.length > 1 ? "yard-bay" : undefined} key={level}>
                                                   {slots.map((slot) => {
@@ -683,7 +723,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
                                                           if (mode === "regularizar" && occupant) returnUnit(occupant.iso);
                                                         }}
                                                       >
-                                                        {occupant ? occupant.iso.slice(-4) : named ? ghost.code.slice(-4) : ghost ? "?" : slot.half || level}
+                                                        {occupant ? occupant.iso.slice(-4) : named ? ghost.code.slice(-4) : ghost ? (String(ghost.typeCode || "").startsWith("20") ? "20" : "?") : slot.half || (incomingFeet >= 40 ? "A+B" : level)}
                                                       </button>
                                                     );
                                                   })}
@@ -729,6 +769,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               loadHistory(picked.code);
             }}
             onSlide={(half) => slideTo(half)}
+            onSplit={() => splitPicked()}
             onPark={() => transferIso && parkUnit(transferIso)}
             onRelease={() => transferIso && returnUnit(transferIso)}
             onClose={() => { setPicked(null); setTransferIso(null); }}

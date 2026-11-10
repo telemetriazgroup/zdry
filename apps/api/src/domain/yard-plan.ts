@@ -198,9 +198,24 @@ function occupiesHalf(item: { type?: string | null; half?: string | null }, half
   return span === "full" || span === "center" || span === half;
 }
 
+function isExplicitGhost(ghost: YardGhost, all: YardGhost[]) {
+  if (ghost.code || ghost.typeCode || !ghost.half) return true;
+  return all.some(
+    (other) => other !== ghost
+      && other.zoneId === ghost.zoneId
+      && other.row === ghost.row
+      && other.col === ghost.col
+      && other.level === ghost.level
+      && !other.code
+      && !other.typeCode
+      && !!other.half
+      && other.half !== ghost.half,
+  );
+}
+
 /** Los niveles vacíos debajo de un equipo quedan ocupados sin identificar, para que la ruma no flote. */
 export function ghostsWithSupport(zones: YardZone[], ghosts: YardGhost[], occupied: StackCell[]): YardGhost[] {
-  const next = ghosts.map((ghost) => ({ ...ghost }));
+  const next = ghosts.filter((ghost) => isExplicitGhost(ghost, ghosts)).map((ghost) => ({ ...ghost }));
   const zoneByName = new Map(zones.map((zone) => [zone.name, zone]));
   const columns = new Map<string, { zoneId: string; row: number; col: number; name: string }>();
   const remember = (zoneId: string, name: string, row: number, col: number) => {
@@ -240,11 +255,8 @@ export function ghostsWithSupport(zones: YardZone[], ghosts: YardGhost[], occupi
         }
         return false;
       };
-      const needA = above("A") && !here.some((item) => occupiesHalf(item, "A"));
-      const needB = above("B") && !here.some((item) => occupiesHalf(item, "B"));
-      if (needA && needB) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level });
-      else if (needA) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level, half: "A" });
-      else if (needB) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level, half: "B" });
+      const blocked = here.some((item) => occupiesHalf(item, "A") || occupiesHalf(item, "B"));
+      if (!blocked && (above("A") || above("B"))) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level });
     }
   }
   return next;

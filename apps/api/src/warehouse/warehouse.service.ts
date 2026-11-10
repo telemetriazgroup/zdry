@@ -218,7 +218,7 @@ export class WarehouseService {
   }
 
   async setYardGhost(
-    input: { depotId?: string; zoneId?: string; row?: number; col?: number; level?: number; occupied?: boolean; code?: string; typeCode?: string; color?: string; note?: string; half?: string },
+    input: { depotId?: string; zoneId?: string; row?: number; col?: number; level?: number; occupied?: boolean; code?: string; typeCode?: string; color?: string; note?: string; half?: string; split?: boolean },
     user: AuthUser,
     ip?: string,
   ) {
@@ -274,6 +274,25 @@ export class WarehouseService {
       }
     }
     const half = span === "A" || span === "B" ? span : undefined;
+    if (input.split) {
+      const busy = positions.some((item) => sameLevel(item));
+      if (busy) throw new ConflictException("Esa altura ya tiene un equipo identificado.");
+      const cleared = plan.ghosts.filter(
+        (ghost) => !(ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level === level),
+      );
+      cleared.push(
+        { zoneId: zone.id, row, col, level, half: "A", typeCode: "20" },
+        { zoneId: zone.id, row, col, level, half: "B", typeCode: "20" },
+      );
+      const supported = ghostsWithSupport(
+        plan.zones,
+        cleared,
+        positions
+          .filter((item) => item.lado && item.ruma && item.columna && item.nivel)
+          .map((item) => ({ zoneName: item.lado || "", row: item.ruma || 0, col: item.columna || 0, level: item.nivel || 0, iso: item.iso, type: item.type, half: asBayHalf(item.bayHalf) })),
+      );
+      return this.saveYardPlan(depotId, { ...plan, ghosts: supported }, user, ip);
+    }
     const ghosts = plan.ghosts.filter(
       (ghost) => !(ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level === level && spansOverlap(baySpan(ghost.typeCode, ghost.half), span)),
     );

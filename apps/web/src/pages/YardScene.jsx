@@ -245,7 +245,9 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
             const named = Boolean(ghost?.code);
             const ownType = occupant?.type || (named ? ghost.typeCode : "");
             const type = inheritedType(zone, row, col, level, ownType, units, ghosts, piece.span === "full" ? "" : piece.span);
-            const natural = lengthOf(type || (piece.span === "full" ? "40" : "20"));
+            const natural = !occupant && ghost && !named && piece.span === "full"
+              ? lengthOf("40")
+              : lengthOf(type || (piece.span === "full" ? "40" : "20"));
             const length = piece.span === "A" || piece.span === "B" ? Math.min(natural, usable / 2 - 0.15) : natural;
             const height = BOX_H * highOf(type);
             const floor = piece.span === "B" ? floorB : piece.span === "A" ? floorA : Math.max(floorA, floorB);
@@ -275,6 +277,7 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
                 note: named
                   ? [ghost.note, "Equipo en el patio, fuera del inventario dry."].filter(Boolean).join(". ")
                   : "El espacio está ocupado. El equipo todavía no tiene código.",
+                splittable: !named && !ghost.half,
                 ghost: { zoneId: zone.id, row, col, level, ...(ghost.half ? { half: ghost.half } : {}) },
               };
             const edges = new THREE.LineSegments(
@@ -386,7 +389,7 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
   return root;
 }
 
-export default function YardScene({ zones, units, ghosts, typeColor, onPick, picked, onClose, targets, incomingType, transferring, onTransfer, onSlide, onPark, onRelease, history }) {
+export default function YardScene({ zones, units, ghosts, typeColor, onPick, picked, onClose, targets, incomingType, transferring, onTransfer, onSlide, onSplit, onPark, onRelease, history }) {
   const mountRef = useRef(null);
   const pickRef = useRef(onPick);
   const colorRef = useRef(typeColor);
@@ -699,6 +702,11 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
                 </>
               );
             })()}
+            {picked.splittable && onSplit ? (
+              <div className="yard-float-actions">
+                <button className="btn-ghost" type="button" onClick={onSplit}>Dividir en dos de 20</button>
+              </div>
+            ) : null}
             <div className="yard-float-actions">
               {detailCode ? (
                 <button className="btn-primary" type="button" onClick={() => setDetailIso(detailCode)}>Más información</button>

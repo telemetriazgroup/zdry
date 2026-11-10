@@ -21,7 +21,7 @@ export class YardController {
 
   @Post("ghost")
   ghost(
-    @Body() body: { depotId?: string; zoneId?: string; row?: number; col?: number; level?: number; occupied?: boolean; code?: string; typeCode?: string; color?: string; note?: string; half?: string },
+    @Body() body: { depotId?: string; zoneId?: string; row?: number; col?: number; level?: number; occupied?: boolean; code?: string; typeCode?: string; color?: string; note?: string; half?: string; split?: boolean },
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
