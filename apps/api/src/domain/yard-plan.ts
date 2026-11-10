@@ -121,7 +121,7 @@ export function normalizeYardPlan(raw: unknown): YardPlan {
     const typeCode = String(row.typeCode || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 12);
     const color = /^#[0-9a-fA-F]{6}$/.test(String(row.color || "")) ? String(row.color).toLowerCase() : "";
     const note = String(row.note || "").trim().slice(0, 120);
-    const half = row.half === "A" || row.half === "B" ? row.half : "";
+    const half: "A" | "B" | "" = row.half === "A" ? "A" : row.half === "B" ? "B" : "";
     const key = `${ghost.zoneId}:${ghost.row}:${ghost.col}:${ghost.level}:${half || "F"}`;
     if (ghostSeen.has(key)) return;
     ghostSeen.add(key);
@@ -177,6 +177,10 @@ export function baySpan(type?: string | null, half?: string | null): BaySpan {
   if (half === "A" || half === "B") return half;
   if (feet > 0) return "center";
   return "full";
+}
+
+export function asBayHalf(value?: string | null): "A" | "B" | null {
+  return value === "A" ? "A" : value === "B" ? "B" : null;
 }
 
 export function spansOverlap(left: BaySpan, right: BaySpan) {

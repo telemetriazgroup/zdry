@@ -64,7 +64,7 @@ import {
   posLabel,
   validateMove,
 } from "../domain/yard";
-import { AISLE_SIDE, baySpan, ghostsWithSupport, movesAbove, normalizeYardPlan, spansOverlap, stackLengthError, zoneSlotError, type YardPlan } from "../domain/yard-plan";
+import { AISLE_SIDE, asBayHalf, baySpan, ghostsWithSupport, movesAbove, normalizeYardPlan, spansOverlap, stackLengthError, zoneSlotError, type YardPlan } from "../domain/yard-plan";
 import { readMovementPolicy } from "../domain/freight-stub";
 import { PHOTO_STATUS_ACTIVE, PHOTO_STATUS_REJECTED } from "../domain/catalog-media";
 import { OdooClient } from "../odoo/odoo.client";
@@ -250,7 +250,7 @@ export class WarehouseService {
       const problem = stackLengthError(
         zone,
         plan.ghosts,
-        below.map((item) => ({ zoneName: zone.name, row, col, level: item.nivel || 0, type: item.type, half: item.bayHalf === "A" || item.bayHalf === "B" ? item.bayHalf : null, iso: item.iso })),
+        below.map((item) => ({ zoneName: zone.name, row, col, level: item.nivel || 0, type: item.type, half: asBayHalf(item.bayHalf), iso: item.iso })),
         typeCode,
         row,
         col,
@@ -291,7 +291,7 @@ export class WarehouseService {
       ghosts,
       stacked
         .filter((item) => item.lado && item.ruma && item.columna && item.nivel)
-        .map((item) => ({ zoneName: item.lado || "", row: item.ruma || 0, col: item.columna || 0, level: item.nivel || 0, iso: item.iso, type: item.type, half: item.bayHalf === "A" || item.bayHalf === "B" ? item.bayHalf : null })),
+        .map((item) => ({ zoneName: item.lado || "", row: item.ruma || 0, col: item.columna || 0, level: item.nivel || 0, iso: item.iso, type: item.type, half: asBayHalf(item.bayHalf) })),
     );
     return this.saveYardPlan(depotId, { ...plan, ghosts: supported }, user, ip);
   }
@@ -2194,7 +2194,7 @@ export class WarehouseService {
             return Number.isInteger(n) && n > 0 ? n : null;
           };
           const aisle = lado === AISLE_SIDE;
-          const half = raw.half === "A" || raw.half === "B" ? raw.half : null;
+          const half: "A" | "B" | null = raw.half === "A" ? "A" : raw.half === "B" ? "B" : null;
           return [{ iso, lado, ruma: aisle ? null : num("ruma"), columna: aisle ? null : num("columna"), nivel: aisle ? null : num("nivel"), half }];
         })
       : [];
@@ -2260,7 +2260,7 @@ export class WarehouseService {
       const previous = sim.placements.find((item) => item.iso === iso);
       const others = sim.placements.filter((item) => item.iso !== iso);
       const span = baySpan(unit.type, half);
-      const storedHalf = span === "full" ? null : span;
+      const storedHalf = span === "A" || span === "B" ? span : null;
       const typed = others.length
         ? await this.prisma.container.findMany({ where: { iso: { in: others.map((item) => item.iso) } }, select: { iso: true, type: true } })
         : [];
@@ -2414,7 +2414,7 @@ export class WarehouseService {
         col: item.columna || 0,
         level: item.nivel || 0,
         type: item.type,
-        half: item.bayHalf === "A" || item.bayHalf === "B" ? item.bayHalf : null,
+        half: asBayHalf(item.bayHalf),
         iso: item.iso,
       }));
     const plan = { ...storedPlan, ghosts: ghostsWithSupport(storedPlan.zones, storedPlan.ghosts, stacked) };
@@ -2529,7 +2529,7 @@ export class WarehouseService {
             })
           ).map(toYardUnit);
           const span = baySpan(unit.type, half);
-          const storedHalf = span === "full" ? null : span;
+          const storedHalf = span === "A" || span === "B" ? span : null;
           const taken = occupants.find(
             (item) => item.iso !== unit.iso && item.lado === lado && item.ruma === ruma && item.columna === columna && item.nivel === nivel
               && spansOverlap(baySpan(item.type, item.bayHalf), span),
@@ -2543,7 +2543,7 @@ export class WarehouseService {
                 col: item.columna || 0,
                 level: item.nivel || 0,
                 type: item.type,
-                half: item.bayHalf === "A" || item.bayHalf === "B" ? item.bayHalf : null,
+                half: asBayHalf(item.bayHalf),
                 iso: item.iso,
               }));
             const problem = stackLengthError(zone, plan.ghosts, stacked, unit.type, ruma, columna, nivel, storedHalf);
@@ -2601,7 +2601,7 @@ export class WarehouseService {
                 col: item.columna || 0,
                 level: item.nivel || 0,
                 type: item.type,
-                half: item.bayHalf === "A" || item.bayHalf === "B" ? item.bayHalf : null,
+                half: asBayHalf(item.bayHalf),
                 iso: item.iso,
               }));
             column.push({ zoneName: lado, row: ruma, col: columna, level: nivel, type: unit.type, half: storedHalf, iso: unit.iso });
@@ -2762,7 +2762,7 @@ export class WarehouseService {
               col: unit.columna || 0,
               level: item.nivel || 0,
               type: item.type,
-              half: item.bayHalf === "A" || item.bayHalf === "B" ? item.bayHalf : null,
+              half: asBayHalf(item.bayHalf),
               iso: item.iso,
             }));
           const above = zone
@@ -2791,7 +2791,7 @@ export class WarehouseService {
             col: item.columna || 0,
             level: item.nivel || 0,
             type: item.type,
-            half: item.bayHalf === "A" || item.bayHalf === "B" ? item.bayHalf : null,
+            half: asBayHalf(item.bayHalf),
             iso: item.iso,
           }));
         await tx.appSetting.upsert({
