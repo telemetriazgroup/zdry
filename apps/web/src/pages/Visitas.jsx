@@ -19,6 +19,37 @@ function pill(status) {
   return { label: hit ? hit[1] : statusLabel(status), color: hit ? hit[2] : "#5c6370" };
 }
 
+const STAGE_FLOW = [
+  ["REGISTRADO", "Registrado"],
+  ["EN ATENCION", "En atención"],
+  ["FINALIZADO", "Finalizado"],
+];
+
+function StageTrack({ status, events }) {
+  const stopped = status === "CANCELADO" || status === "ANULADO";
+  const left = stopped
+    ? [...(events || [])].reverse().find((event) => event.toStatus === status)?.fromStatus || "REGISTRADO"
+    : status;
+  const at = Math.max(0, STAGE_FLOW.findIndex(([key]) => key === left));
+  const steps = stopped ? [...STAGE_FLOW.slice(0, at + 1), [status, statusLabel(status)]] : STAGE_FLOW;
+  return (
+    <ol className="drv-stage">
+      {steps.map(([key, label], index) => {
+        const current = index === (stopped ? steps.length - 1 : at);
+        const mark = current ? (stopped ? "now stop" : "now") : index < at || stopped ? "done" : "";
+        return <li key={`${key}-${index}`} className={mark}><i /><span>{label}</span></li>;
+      })}
+    </ol>
+  );
+}
+
+function noteTitle(note) {
+  if (note.kind === "ubicacion") return "Ubicación";
+  if (note.kind === "confirmacion") return "Confirmación";
+  if (note.kind === "registro") return "Aviso de registro";
+  return "Mensaje de WhatsApp";
+}
+
 function isoNote(value) {
   const compact = String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (!compact) return "";
@@ -43,6 +74,9 @@ export default function Visitas() {
   const [msg, setMsg] = useState("");
   const [sendConfirm, setSendConfirm] = useState(false);
   const [placeId, setPlaceId] = useState("");
+  const [sure, setSure] = useState(null);
+  const [moreNotices, setMoreNotices] = useState(false);
+  const [openNote, setOpenNote] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editOptions, setEditOptions] = useState({ sites: [], motives: [] });
   const [edit, setEdit] = useState(null);
@@ -73,6 +107,8 @@ export default function Visitas() {
     setSelected(detail);
     setFormOpen(false);
     setSendConfirm(false);
+    setMoreNotices(false);
+    setOpenNote(null);
     return detail;
   }
 
@@ -198,20 +234,62 @@ export default function Visitas() {
     }
   }, [focusId]);
 
-  async function changeStatus(next) {
+  async function changeStatus(next, withConfirm = false) {
     if (!selected) return;
     setError("");
     try {
       const detail = await api(`/gate-visits/${selected.id}/status`, {
         method: "POST",
-        body: { status: next, sendConfirm: next === "EN ATENCION" && sendConfirm },
+        body: { status: next, sendConfirm: next === "EN ATENCION" && withConfirm },
       });
       setSelected(detail);
-      setMsg(next === "EN ATENCION" && sendConfirm ? "Estado actualizado y confirmación enviada al conductor." : "Estado actualizado.");
+      setMsg(next === "EN ATENCION" && withConfirm ? "Pasó a EN ATENCIÓN y la confirmación quedó enviada." : "Estado actualizado.");
       await load(status);
     } catch (e) {
       setError(e.message);
+      api(`/gate-visits/${selected.id}`).then(setSelected).catch(() => {});
     }
+  }
+
+  function askStatus(next) {
+    if (next === "EN ATENCION" && sendConfirm && selected?.status !== "EN ATENCION") {
+      setSure({
+        title: "Pasar a en atención",
+        text: `¿Estás seguro de pasar a EN ATENCIÓN y enviar la confirmación a ${selected.driverName || "el transportista"}?`,
+        run: () => changeStatus(next, true),
+      });
+      return;
+    }
+    changeStatus(next, false);
+  }
+
+  function askConfirm() {
+    if (selected?.status !== "EN ATENCION") {
+      setError("La confirmación se envía cuando el ingreso está en atención.");
+      return;
+    }
+    setSure({
+      title: "Enviar confirmación",
+      text: `¿Estás seguro de enviar la confirmación a ${selected.driverName || "el transportista"}?`,
+      run: () => sendDriver("confirmacion"),
+    });
+  }
+
+  function askPlace() {
+    if (selected?.status !== "EN ATENCION") {
+      setError("La ubicación se envía cuando el ingreso está en atención.");
+      return;
+    }
+    const place = (selected.warehouses || []).find((item) => item.id === placeId);
+    if (!place) {
+      setError("Elige el almacén al que irá el conductor.");
+      return;
+    }
+    setSure({
+      title: "Enviar ubicación",
+      text: `¿Estás seguro de enviar la ubicación de ${place.siteName ? `${place.siteName} · ` : ""}${place.name} al transportista?`,
+      run: () => sendDriver("ubicacion", place.id),
+    });
   }
 
   async function openForm() {
@@ -414,6 +492,19 @@ export default function Visitas() {
             {selected?.id ? (
               <div className="drv-card">
                 <h4>{selected.driverName || selected.publicCode || selected.tractorPlate}</h4>
+                <StageTrack status={selected.status} events={selected.statusEvents} />
+                <ol className="drv-time">
+                  <li>
+                    <b>Registrado</b>
+                    <span>{formatWhen(selected.visitAt || selected.createdAt)}</span>
+                  </li>
+                  {(selected.statusEvents || []).slice().reverse().map((event) => (
+                    <li key={event.id}>
+                      <b>{statusLabel(event.toStatus)}</b>
+                      <span>{formatWhen(event.createdAt)}{event.byName ? ` · ${event.byName}` : ""}</span>
+                    </li>
+                  ))}
+                </ol>
                 <p>{selected.publicCode || "Sin código"} · {formatWhen(selected.visitAt)}</p>
                 <p>{selected.siteName} · {selected.motive}{selected.motiveDetail ? ` — ${selected.motiveDetail}` : ""}</p>
                 <p>{selected.driverName} · {selected.company} · RUC {selected.ruc}</p>
@@ -440,42 +531,55 @@ export default function Visitas() {
                     </label>
                     <div className="recv-actions">
                       {STATUSES.filter(([key]) => key !== "ANULADO").map(([key, label, color]) => (
-                        <button key={key} className="btn-ghost" type="button" style={{ borderColor: color }} onClick={() => changeStatus(key)}>{label}</button>
+                        <button key={key} className="btn-ghost" type="button" style={{ borderColor: color, background: selected.status === key ? color : undefined, color: selected.status === key ? "#fff" : undefined }} onClick={() => askStatus(key)}>{label}</button>
                       ))}
                     </div>
                     <div className="action-row">
-                      <button className="btn-primary" type="button" onClick={() => sendDriver("confirmacion")}>Enviar confirmación</button>
+                      <button className="btn-primary" type="button" disabled={selected.status !== "EN ATENCION"} onClick={askConfirm}>Enviar confirmación</button>
                     </div>
                     <div className="drv-place">
                       <span>Ubicación del almacén</span>
-                      <p className="section-sub">Elige a cuál irá el conductor y envía el mensaje a su WhatsApp{selected.phone ? ` +51 ${localPhone(selected.phone)}` : ""}.</p>
+                      <p className="section-sub">{selected.status === "EN ATENCION" ? `Elige el almacén y envía el mapa al WhatsApp del transportista${selected.phone ? ` +51 ${localPhone(selected.phone)}` : ""}.` : "La confirmación y la ubicación se habilitan cuando el ingreso está en atención."}</p>
                       {(selected.warehouses || []).length ? (
                         <div className="drv-add">
                           <label>
                             <span>Almacén</span>
-                            <select value={placeId} onChange={(e) => setPlaceId(e.target.value)}>
+                            <select value={placeId} onChange={(e) => setPlaceId(e.target.value)} disabled={selected.status !== "EN ATENCION"}>
                               <option value="">Elige un almacén</option>
                               {selected.warehouses.map((item) => (
                                 <option key={item.id} value={item.id}>{item.siteName ? `${item.siteName} · ${item.name}` : item.name}</option>
                               ))}
                             </select>
                           </label>
-                          <button className="btn-primary" type="button" disabled={!placeId || !selected.phone} onClick={() => sendDriver("ubicacion", placeId)}>Enviar ubicación</button>
+                          <button className="btn-primary" type="button" disabled={selected.status !== "EN ATENCION" || !placeId || !selected.phone} onClick={askPlace}>Enviar ubicación</button>
                         </div>
                       ) : <p className="section-sub">No hay almacenes. Agrégalos en Menú, Almacén y mapa.</p>}
                       {!selected.phone ? <p className="section-sub">Este ingreso no tiene teléfono del conductor.</p> : null}
                     </div>
                     {(selected.notices || []).length ? (
-                      <ul className="drv-notes">
-                        {selected.notices.map((note) => (
-                          <li key={note.id}>
-                            {note.channel} · {note.destination} · {note.status} {note.detail ? `· ${note.detail}` : ""}
-                            {note.status !== "en_cola" && note.channel !== "interno" ? (
-                              <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/${selected.id}/notices/${note.id}/retry`, { method: "POST" }).then(setSelected).catch((e) => setError(e.message))}>Reenviar</button>
-                            ) : null}
-                          </li>
-                        ))}
-                      </ul>
+                      <>
+                        <ul className="drv-notes">
+                          {(moreNotices ? selected.notices : selected.notices.slice(0, 3)).map((note) => (
+                            <li key={note.id}>
+                              <span>{note.channel} · {note.destination} · {note.status}{note.detail ? ` · ${note.detail}` : ""}</span>
+                              <span className="drv-note-actions">
+                                {note.channel === "whatsapp" ? (
+                                  <button className="btn-ghost" type="button" onClick={() => setOpenNote(note)}>Ver mensaje</button>
+                                ) : null}
+                                {note.status !== "en_cola" && note.channel !== "interno" ? (
+                                  <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/${selected.id}/notices/${note.id}/retry`, { method: "POST" }).then(setSelected).catch((e) => setError(e.message))}>Reenviar</button>
+                                ) : null}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                        {selected.notices.length > 3 ? (
+                          <button className="btn-ghost" type="button" onClick={() => setMoreNotices((open) => !open)}>
+                            {moreNotices ? "Ver menos" : `Ver más (${selected.notices.length - 3})`}
+                          </button>
+                        ) : null}
+                        {moreNotices && selected.notices.length >= 40 ? <p className="section-sub">Se muestran los 40 más recientes.</p> : null}
+                      </>
                     ) : null}
                   </>
                 ) : null}
@@ -632,6 +736,38 @@ export default function Visitas() {
               <button className="btn-ghost drv-danger" type="button" onClick={resetModule}>Reiniciar módulo</button>
             </section>
           ) : null}
+        </div>
+      ) : null}
+      {openNote ? (
+        <div className="overlay open" role="presentation" onClick={() => setOpenNote(null)}>
+          <div className="modal drv-reg-modal" role="dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <h3>{noteTitle(openNote)}</h3>
+              <button className="modal-close" type="button" onClick={() => setOpenNote(null)} aria-label="Cerrar">×</button>
+            </div>
+            <div className="modal-body single">
+              <p className="section-sub">{openNote.destination} · {formatWhen(openNote.createdAt)}</p>
+              <p className="drv-note-body">{openNote.message || "Este envío no guardó el texto."}</p>
+              {openNote.message && openNote.messageSaved === false && openNote.kind !== "ubicacion" ? <p className="section-sub">Este envío no guardó el texto. Se muestra con los datos de ahora.</p> : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {sure ? (
+        <div className="overlay open" role="presentation" onClick={() => setSure(null)}>
+          <div className="modal drv-reg-modal" role="dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <h3>{sure.title}</h3>
+              <button className="modal-close" type="button" onClick={() => setSure(null)} aria-label="Cerrar">×</button>
+            </div>
+            <div className="modal-body single">
+              <p>{sure.text}</p>
+              <div className="action-row">
+                <button className="btn-primary" type="button" onClick={() => { const run = sure.run; setSure(null); run(); }}>Sí, enviar</button>
+                <button className="btn-ghost" type="button" onClick={() => setSure(null)}>Cancelar</button>
+              </div>
+            </div>
+          </div>
         </div>
       ) : null}
       {formOpen && edit ? (

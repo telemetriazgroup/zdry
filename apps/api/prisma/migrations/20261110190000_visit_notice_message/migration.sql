@@ -1,0 +1,1 @@
+ALTER TABLE "VisitNotice" ADD COLUMN "message" TEXT NOT NULL DEFAULT '';

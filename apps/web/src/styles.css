@@ -2197,6 +2197,23 @@ button.drv-row { display: block; cursor: pointer; }
 .drv-iso.ok { color: #2f9e44; }
 .drv-field { display: grid; gap: 6px; margin: 0 0 12px; }
 .drv-field > span { font-size: 12px; font-weight: 800; color: #314055; }
+.drv-stage { display: flex; gap: 0; list-style: none; margin: 12px 0 8px; padding: 0; }
+.drv-stage li { flex: 1; text-align: center; position: relative; }
+.drv-stage li i { display: block; width: 14px; height: 14px; border-radius: 50%; margin: 0 auto 6px; background: #d5deea; position: relative; z-index: 1; }
+.drv-stage li span { font-size: 11px; font-weight: 800; color: #8b95a5; }
+.drv-stage li.done i, .drv-stage li.now i { background: #1d6fbf; }
+.drv-stage li.now i { box-shadow: 0 0 0 4px rgba(29, 111, 191, .22); }
+.drv-stage li.done span, .drv-stage li.now span { color: #1a2b4a; }
+.drv-stage li.stop i { background: #c92a2a; box-shadow: 0 0 0 4px rgba(201, 42, 42, .18); }
+.drv-stage li.stop span { color: #c92a2a; }
+.drv-stage li:not(:first-child)::before { content: ""; position: absolute; top: 6px; left: -50%; right: 50%; height: 2px; background: #d5deea; }
+.drv-stage li.done::before, .drv-stage li.now::before { background: #1d6fbf; }
+.drv-stage li.stop::before { background: #c92a2a; }
+.drv-time { list-style: none; margin: 0 0 12px; padding: 0 0 0 14px; border-left: 2px solid #d5deea; display: grid; gap: 8px; }
+.drv-time li { position: relative; }
+.drv-time li::before { content: ""; position: absolute; left: -18px; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: #1d6fbf; }
+.drv-time b { display: block; font-size: 13px; }
+.drv-time span { color: #5c6370; font-size: 12px; }
 .drv-place { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line, #e2e4ea); }
 .drv-place > span { font-size: 13px; font-weight: 800; }
 .drv-add select { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #d5deea; border-radius: 8px; background: #fff; font: 400 14px/1.3 inherit; }
@@ -2214,7 +2231,10 @@ button.drv-row { display: block; cursor: pointer; }
 .drv-file { position: relative; overflow: hidden; }
 .drv-file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .drv-report { display: grid; gap: 8px; margin-top: 12px; }
-.drv-notes { display: grid; gap: 6px; padding: 0; list-style: none; }
+.drv-notes { display: grid; gap: 8px; padding: 0; list-style: none; margin: 12px 0; }
+.drv-notes li { display: grid; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid #e6ebf2; }
+.drv-note-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.drv-note-body { white-space: pre-wrap; margin: 0; font: 400 14px/1.45 inherit; }
 .drv-menu { display: grid; gap: 22px; }
 .drv-menu textarea, .visita-public textarea { width: 100%; }
 @media (max-width: 800px) {

@@ -24,6 +24,7 @@ import {
   peruReplyPhone,
   readXlsxSheets,
   registrationCard,
+  registrationPreview,
   registrationRequest,
   registrationRows,
   validatePublicInput,
@@ -221,16 +222,17 @@ export class DriverRegistryService implements OnModuleInit {
   ) {
     const contacto = whatsappDigits(replyPhone);
     const replyOk = contacto.length >= 8 && contacto.length <= 15;
-    const items: Array<{ channel: string; destination: string; status: string; detail: string }> = [];
+    const preview = registrationPreview(card);
+    const items: Array<{ channel: string; destination: string; status: string; detail: string; message: string }> = [];
     const waReady = replyOk ? phones.map((phone) => ({ destination: phone, telefono: whatsappDigits(phone) })) : [];
     if (!replyOk) {
       for (const destination of phones) {
-        items.push({ channel: "whatsapp", destination, status: "omitido", detail: "Falta el número de respuesta de la sede." });
+        items.push({ channel: "whatsapp", destination, status: "omitido", detail: "Falta el número de respuesta de la sede.", message: preview });
       }
     }
     if (!cfg.clave) {
-      for (const item of waReady) items.push({ channel: "whatsapp", destination: item.destination, status: "error", detail: "Falta la clave de salida." });
-      for (const destination of emails) items.push({ channel: "correo", destination, status: "error", detail: "Falta la clave de salida." });
+      for (const item of waReady) items.push({ channel: "whatsapp", destination: item.destination, status: "error", detail: "Falta la clave de salida.", message: preview });
+      for (const destination of emails) items.push({ channel: "correo", destination, status: "error", detail: "Falta la clave de salida.", message: "" });
       return { ok: false, detail: "Falta la clave de salida.", items };
     }
     const body = registrationRequest(
@@ -249,6 +251,7 @@ export class DriverRegistryService implements OnModuleInit {
         destination: item.destination,
         status: hit ? String(hit.estado || "error") : "error",
         detail: hit ? String(hit.motivo || result.detail || "") : (result.detail || "La salida no confirmó el WhatsApp."),
+        message: preview,
       });
     });
     emails.forEach((destination, index) => {
@@ -258,6 +261,7 @@ export class DriverRegistryService implements OnModuleInit {
         destination,
         status: hit ? String(hit.estado || "error") : "error",
         detail: hit ? String(hit.motivo || result.detail || "") : (result.detail || "La salida no confirmó el correo."),
+        message: "",
       });
     });
     const detail = items.map((item) => {
@@ -287,6 +291,7 @@ export class DriverRegistryService implements OnModuleInit {
         kind,
         status: "omitido",
         detail: "Falta el número de respuesta de la sede.",
+        message,
       })));
       return;
     }
@@ -298,6 +303,7 @@ export class DriverRegistryService implements OnModuleInit {
         kind,
         status: "error",
         detail: "Falta la clave de salida.",
+        message,
       })));
       return;
     }
@@ -314,6 +320,7 @@ export class DriverRegistryService implements OnModuleInit {
         kind,
         status: hit ? String(hit.estado || "error") : "error",
         detail: hit ? String(hit.motivo || result.detail || "") : (result.detail || "La salida no confirmó el WhatsApp."),
+        message,
       };
     }));
   }
@@ -325,9 +332,21 @@ export class DriverRegistryService implements OnModuleInit {
     kind: string;
     status: string;
     detail: string;
+    message?: string;
   }>) {
     if (!rows.length) return;
-    await this.prisma.visitNotice.createMany({ data: rows.map((row) => ({ visitId, ...row, detail: row.detail.slice(0, 300) })) });
+    await this.prisma.visitNotice.createMany({
+      data: rows.map((row) => ({
+        visitId,
+        channel: row.channel,
+        audience: row.audience,
+        destination: row.destination,
+        kind: row.kind,
+        status: row.status,
+        detail: row.detail.slice(0, 300),
+        message: (row.message || "").slice(0, 4000),
+      })),
+    });
   }
 
   private async postSalida(url: string, clave: string, body: Record<string, unknown>) {
@@ -372,6 +391,9 @@ export class DriverRegistryService implements OnModuleInit {
     const site = visit.siteId ? await this.prisma.visitSite.findUnique({ where: { id: visit.siteId } }) : null;
     const cfg = await this.salida.read();
     if (notice.audience === "conductor" && notice.channel === "whatsapp") {
+      if (visit.status !== "EN ATENCION") {
+        throw new BadRequestException("La confirmación se reenvía cuando el ingreso está en atención.");
+      }
       const text = await this.driverText(visit, notice.kind === "ubicacion" ? "ubicacion" : "confirmacion", "");
       await this.sendWhatsapps(visit, [notice.destination], site?.replyPhone || "", text, notice.kind, notice.audience, cfg);
     } else if (notice.channel === "correo" || notice.channel === "whatsapp") {
@@ -411,6 +433,9 @@ export class DriverRegistryService implements OnModuleInit {
     if (!manages(user.role)) throw new ForbiddenException("Sin acceso.");
     const visit = await this.prisma.gateVisit.findUnique({ where: { id } });
     if (!visit) throw new NotFoundException("Ingreso no encontrado.");
+    if (visit.status !== "EN ATENCION") {
+      throw new BadRequestException("La confirmación y la ubicación se envían cuando el ingreso está en atención.");
+    }
     const site = visit.siteId ? await this.prisma.visitSite.findUnique({ where: { id: visit.siteId } }) : null;
     const message = await this.driverText(visit, kind, warehouseId);
     const cfg = await this.salida.read();
@@ -453,6 +478,20 @@ export class DriverRegistryService implements OnModuleInit {
       },
     });
     if (!visit) throw new NotFoundException("Ingreso no encontrado.");
+    const needsConfirm = visit.notices.some((note) => note.channel === "whatsapp" && !note.message && note.kind === "confirmacion");
+    const needsCard = visit.notices.some((note) => note.channel === "whatsapp" && !note.message && note.kind === "registro");
+    const confirmText = needsConfirm ? await this.driverText(visit, "confirmacion", "") : "";
+    const cardText = needsCard ? registrationPreview(this.registrationOf(visit)) : "";
+    const notices = visit.notices.map((note) => {
+      if (note.channel !== "whatsapp") return { ...note, messageSaved: false };
+      if (note.message) return { ...note, messageSaved: true };
+      if (note.kind === "confirmacion") return { ...note, message: confirmText, messageSaved: false };
+      if (note.kind === "registro") return { ...note, message: cardText, messageSaved: false };
+      if (note.kind === "ubicacion") {
+        return { ...note, message: "Este envío no guardó el texto de la ubicación.", messageSaved: false };
+      }
+      return { ...note, messageSaved: false };
+    });
     const photoStatus = visitPhotoStatus(visit);
     const own = visit.site?.warehouses || [];
     const warehouses = own.length
@@ -465,6 +504,7 @@ export class DriverRegistryService implements OnModuleInit {
           .map((item) => ({ ...item, siteName: item.site.name }));
     return {
       ...visit,
+      notices,
       unitPhotoKey: undefined,
       unitPhotoMime: undefined,
       photoStatus,

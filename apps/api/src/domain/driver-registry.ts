@@ -300,6 +300,25 @@ export function registrationCard(input: {
   };
 }
 
+export function registrationPreview(card: RegistrationCard) {
+  return [
+    card.id ? `Registro ${card.id}` : "Registro",
+    `Sede: ${card.sede}`,
+    `Motivo: ${card.motivo}`,
+    `Fecha: ${card.fecha} ${card.hora}`,
+    `Conductor: ${card.conductor}`,
+    `Empresa: ${card.empresa}`,
+    `RUC: ${card.ruc}`,
+    `Tracto: ${card.placaTracto}`,
+    `Carreta: ${card.placaCarreta}`,
+    `Teléfono: ${card.telefono}`,
+    `Brevete: ${card.brevete}`,
+    `Código: ${card.codigoEquipo}`,
+    `Estado: ${card.estado}`,
+    `Observaciones: ${card.observaciones}`,
+  ].join("\n");
+}
+
 export function registrationRequest(
   card: RegistrationCard,
   whatsapp: Array<{ telefono: string; contacto: string }>,
