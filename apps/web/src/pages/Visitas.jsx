@@ -19,6 +19,12 @@ function pill(status) {
   return { label: hit ? hit[1] : statusLabel(status), color: hit ? hit[2] : "#5c6370" };
 }
 
+function isoNote(value) {
+  const compact = String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!compact) return "";
+  return /^[A-Z]{4}\d{7}$/.test(compact) ? "" : "No cumple la norma ISO. Se puede guardar igual.";
+}
+
 export default function Visitas() {
   const { user } = useAuth();
   const lb = useLightbox();
@@ -36,11 +42,16 @@ export default function Visitas() {
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [sendConfirm, setSendConfirm] = useState(false);
-  const [code, setCode] = useState("");
+  const [placeId, setPlaceId] = useState("");
+  const [formOpen, setFormOpen] = useState(false);
+  const [editOptions, setEditOptions] = useState({ sites: [], motives: [] });
+  const [edit, setEdit] = useState(null);
+  const [savingForm, setSavingForm] = useState(false);
   const [siteName, setSiteName] = useState("");
   const [motiveName, setMotiveName] = useState("");
   const [asksDetail, setAsksDetail] = useState(false);
-  const [recipient, setRecipient] = useState({ siteId: "", kind: "correo", destination: "" });
+  const [mailDraft, setMailDraft] = useState({});
+  const [phoneDraft, setPhoneDraft] = useState({});
   const [warehouse, setWarehouse] = useState({ siteId: "", name: "", mapUrl: "" });
   const [reply, setReply] = useState({ siteId: "", phone: "" });
   const [confirmText, setConfirmText] = useState("");
@@ -60,7 +71,7 @@ export default function Visitas() {
   async function open(id) {
     const detail = await api(`/gate-visits/${id}`);
     setSelected(detail);
-    setCode(detail.equipmentCode || "");
+    setFormOpen(false);
     setSendConfirm(false);
     return detail;
   }
@@ -71,13 +82,42 @@ export default function Visitas() {
     setConfirmText(data.confirmTemplate || "");
     setLocationText(data.locationTemplate || "");
     const first = data.sites?.[0]?.id || "";
-    setRecipient((current) => ({ ...current, siteId: current.siteId || first }));
     setWarehouse((current) => ({ ...current, siteId: current.siteId || first }));
     setReply((current) => {
       const siteId = current.siteId || first;
       const site = (data.sites || []).find((item) => item.id === siteId) || data.sites?.[0];
       return { siteId: site?.id || "", phone: localPhone(site?.replyPhone) };
     });
+  }
+
+  async function addMail(siteId) {
+    const destination = String(mailDraft[siteId] || "").trim();
+    setError("");
+    try {
+      await api("/gate-visits/recipients", { method: "POST", body: { siteId, kind: "correo", destination } });
+      setMailDraft((current) => ({ ...current, [siteId]: "" }));
+      setMsg("Correo agregado. Recibirá el aviso cuando un conductor se registre.");
+      await loadMasters();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function addPhone(siteId) {
+    const local = localPhone(phoneDraft[siteId] || "");
+    setError("");
+    if (local.length !== 9) {
+      setError("El WhatsApp son 9 dígitos después del 51.");
+      return;
+    }
+    try {
+      await api("/gate-visits/recipients", { method: "POST", body: { siteId, kind: "whatsapp", destination: `51${local}` } });
+      setPhoneDraft((current) => ({ ...current, [siteId]: "" }));
+      setMsg("WhatsApp agregado. Recibirá el aviso cuando un conductor se registre.");
+      await loadMasters();
+    } catch (e) {
+      setError(e.message);
+    }
   }
 
   async function testSite(siteId) {
@@ -174,24 +214,81 @@ export default function Visitas() {
     }
   }
 
-  async function saveCode() {
+  async function openForm() {
+    if (!selected) return;
     setError("");
     try {
-      await api(`/gate-visits/${selected.id}`, { method: "PATCH", body: { equipmentCode: code } });
-      setMsg("Código de equipo actualizado.");
-      await open(selected.id);
-      await load(status);
+      const options = await api("/gate-visits/public/options");
+      const sites = options.sites || [];
+      const motives = options.motives || [];
+      const site = sites.find((item) => item.id === selected.siteId) || sites.find((item) => item.name === selected.siteName);
+      const motive = motives.find((item) => item.name.toLowerCase() === String(selected.motive || "").toLowerCase());
+      setEditOptions({ sites, motives });
+      setEdit({
+        siteId: site?.id || "",
+        motiveId: motive?.id || "",
+        motiveDetail: selected.motiveDetail || "",
+        company: selected.company || "",
+        ruc: selected.ruc || "",
+        driverName: selected.driverName || "",
+        license: selected.license || "",
+        phone: localPhone(selected.phone),
+        tractorPlate: selected.tractorPlate || "",
+        trailerPlate: selected.trailerPlate || "",
+        equipmentCode: selected.equipmentCode || "",
+        observations: selected.observations || "",
+      });
+      setFormOpen(true);
     } catch (e) {
       setError(e.message);
     }
   }
 
+  async function saveForm(event) {
+    event.preventDefault();
+    if (!selected || !edit || !manage) return;
+    setSavingForm(true);
+    setError("");
+    try {
+      const motive = editOptions.motives.find((item) => item.id === edit.motiveId);
+      const detail = await api(`/gate-visits/${selected.id}`, {
+        method: "PATCH",
+        body: {
+          ...edit,
+          motive: motive?.name || selected.motive,
+          phone: localPhone(edit.phone),
+          siteId: edit.siteId || undefined,
+        },
+      });
+      setSelected(detail);
+      setFormOpen(false);
+      setMsg("Registro actualizado.");
+      await load(status);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSavingForm(false);
+    }
+  }
+
   async function sendDriver(kind, warehouseId) {
     setError("");
+    if (kind === "ubicacion" && !warehouseId) {
+      setError("Elige el almacén al que irá el conductor.");
+      return;
+    }
     try {
       const detail = await api(`/gate-visits/${selected.id}/driver`, { method: "POST", body: { kind, warehouseId } });
       setSelected(detail);
-      setMsg(kind === "ubicacion" ? "Ubicación enviada al conductor." : "Confirmación enviada al conductor.");
+      const last = (detail.notices || [])[0];
+      if (last && last.status !== "en_cola" && last.status !== "en_espera") {
+        setError(last.detail || "El WhatsApp no quedó en cola.");
+        return;
+      }
+      const place = (detail.warehouses || []).find((item) => item.id === warehouseId);
+      setMsg(kind === "ubicacion"
+        ? `Ubicación de ${place?.name || "el almacén"} enviada al WhatsApp del conductor.`
+        : "Confirmación enviada al conductor.");
     } catch (e) {
       setError(e.message);
     }
@@ -293,7 +390,10 @@ export default function Visitas() {
               <button key={key} className={status === key ? "on" : ""} type="button" onClick={() => { setStatus(key); load(key).catch((e) => setError(e.message)); }}>{label}</button>
             ))}
           </div>
-          <input className="drv-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar conductor, placa, código o empresa" />
+          <label className="drv-field">
+            <span>Buscar conductor</span>
+            <input className="drv-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Nombre, placa, código o empresa" />
+          </label>
           <div className="drv-split">
             <div>
               {visible.map((row) => {
@@ -319,13 +419,8 @@ export default function Visitas() {
                 <p>{selected.driverName} · {selected.company} · RUC {selected.ruc}</p>
                 <p>Tracto {selected.tractorPlate} · carreta {selected.trailerPlate} · {selected.phone}</p>
                 <p>Brevete {selected.license || "—"} · {selected.observations || "Sin observaciones"}</p>
-                {selected.isoWarning ? <p className="err">{selected.isoWarning}</p> : null}
-                {manage ? (
-                  <div className="action-row">
-                    <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Código de equipo" />
-                    <button className="btn-ghost" type="button" onClick={saveCode}>Guardar código</button>
-                  </div>
-                ) : null}
+                <p>Código {selected.equipmentCode || "sin código"}{selected.isoWarning ? ` · ${selected.isoWarning}. Se guarda igual.` : selected.equipmentCode ? " · cumple la norma ISO." : ""}</p>
+                <button className="btn-primary" type="button" onClick={openForm}>{manage ? "Ver y editar registro" : "Ver registro"}</button>
                 {selected.hasPhoto ? (
                   <button type="button" className="visit-photo-btn" onClick={() => lb.open([{ src: apiUrl(`/gate-visits/${selected.id}/photo`), type: "image", label: "Foto de la unidad" }])}>
                     <img className="visit-photo-preview" src={apiUrl(`/gate-visits/${selected.id}/photo`)} alt="Foto de la unidad" />
@@ -350,9 +445,25 @@ export default function Visitas() {
                     </div>
                     <div className="action-row">
                       <button className="btn-primary" type="button" onClick={() => sendDriver("confirmacion")}>Enviar confirmación</button>
-                      {(selected.warehouses || []).map((item) => (
-                        <button key={item.id} className="btn-ghost" type="button" onClick={() => sendDriver("ubicacion", item.id)}>{item.name}</button>
-                      ))}
+                    </div>
+                    <div className="drv-place">
+                      <span>Ubicación del almacén</span>
+                      <p className="section-sub">Elige a cuál irá el conductor y envía el mensaje a su WhatsApp{selected.phone ? ` +51 ${localPhone(selected.phone)}` : ""}.</p>
+                      {(selected.warehouses || []).length ? (
+                        <div className="drv-add">
+                          <label>
+                            <span>Almacén</span>
+                            <select value={placeId} onChange={(e) => setPlaceId(e.target.value)}>
+                              <option value="">Elige un almacén</option>
+                              {selected.warehouses.map((item) => (
+                                <option key={item.id} value={item.id}>{item.siteName ? `${item.siteName} · ${item.name}` : item.name}</option>
+                              ))}
+                            </select>
+                          </label>
+                          <button className="btn-primary" type="button" disabled={!placeId || !selected.phone} onClick={() => sendDriver("ubicacion", placeId)}>Enviar ubicación</button>
+                        </div>
+                      ) : <p className="section-sub">No hay almacenes. Agrégalos en Menú, Almacén y mapa.</p>}
+                      {!selected.phone ? <p className="section-sub">Este ingreso no tiene teléfono del conductor.</p> : null}
                     </div>
                     {(selected.notices || []).length ? (
                       <ul className="drv-notes">
@@ -410,20 +521,37 @@ export default function Visitas() {
         <div className="drv-menu">
           {menuTab === "sedes" ? <section>
             <h4>Sedes</h4>
-            <div className="action-row">
-              <input value={siteName} onChange={(e) => setSiteName(e.target.value)} placeholder="Nueva sede" />
+            <div className="drv-add">
+              <label>
+                <span>Nueva sede</span>
+                <input value={siteName} onChange={(e) => setSiteName(e.target.value)} placeholder="Nombre de la sede" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); api("/gate-visits/sites", { method: "POST", body: { name: siteName } }).then(() => { setSiteName(""); return loadMasters(); }).catch((err) => setError(err.message)); } }} />
+              </label>
               <button className="btn-primary" type="button" onClick={() => api("/gate-visits/sites", { method: "POST", body: { name: siteName } }).then(() => { setSiteName(""); return loadMasters(); }).catch((e) => setError(e.message))}>Agregar</button>
             </div>
             {masters.sites.map((site) => (
               <div key={site.id} className="drv-block">
                 <b>{site.name}</b>
                 <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/sites/${site.id}`, { method: "PATCH", body: { active: !site.active } }).then(loadMasters).catch((e) => setError(e.message))}>{site.active ? "Ocultar del formulario" : "Publicar"}</button>
-                <p className="section-sub">Correos y WhatsApp</p>
+                <p className="section-sub">Correos que reciben el aviso</p>
                 <ul>
-                  {(site.recipients || []).map((item) => (
-                    <li key={item.id}>{item.kind}: {item.destination} <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/recipients/${item.id}`, { method: "DELETE" }).then(loadMasters).catch((e) => setError(e.message))}>Quitar</button></li>
+                  {(site.recipients || []).filter((item) => item.kind === "correo").map((item) => (
+                    <li key={item.id}>{item.destination} <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/recipients/${item.id}`, { method: "DELETE" }).then(loadMasters).catch((e) => setError(e.message))}>Quitar</button></li>
                   ))}
                 </ul>
+                <div className="action-row">
+                  <input value={mailDraft[site.id] || ""} onChange={(e) => setMailDraft({ ...mailDraft, [site.id]: e.target.value })} placeholder="correo@empresa.com" />
+                  <button className="btn-primary" type="button" onClick={() => addMail(site.id)}>Agregar correo</button>
+                </div>
+                <p className="section-sub">WhatsApp que reciben el aviso</p>
+                <ul>
+                  {(site.recipients || []).filter((item) => item.kind === "whatsapp").map((item) => (
+                    <li key={item.id}>+51 {localPhone(item.destination)} <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/recipients/${item.id}`, { method: "DELETE" }).then(loadMasters).catch((e) => setError(e.message))}>Quitar</button></li>
+                  ))}
+                </ul>
+                <div className="action-row">
+                  <PeruPhone value={phoneDraft[site.id] || ""} onChange={(phone) => setPhoneDraft({ ...phoneDraft, [site.id]: phone })} placeholder="9 dígitos" />
+                  <button className="btn-primary" type="button" onClick={() => addPhone(site.id)}>Agregar WhatsApp</button>
+                </div>
                 <p className="section-sub">WhatsApp de respuesta: {site.replyPhone ? `+51 ${localPhone(site.replyPhone)}` : "sin número"}</p>
                 <button className="btn-ghost" type="button" disabled={testing === site.id} onClick={() => testSite(site.id)}>{testing === site.id ? "Enviando prueba…" : "Enviar prueba"}</button>
                 {testReport?.siteId === site.id ? (
@@ -437,33 +565,13 @@ export default function Visitas() {
             ))}
             <div className="form-grid">
               <div>
-                <label>Agregar destino</label>
-                <select value={recipient.siteId} onChange={(e) => setRecipient({ ...recipient, siteId: e.target.value })}>
-                  {masters.sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label>Canal</label>
-                <select value={recipient.kind} onChange={(e) => setRecipient({ ...recipient, kind: e.target.value })}>
-                  <option value="correo">Correo</option>
-                  <option value="whatsapp">WhatsApp</option>
-                </select>
-              </div>
-              <div>
-                <label>Destino</label>
-                <input value={recipient.destination} onChange={(e) => setRecipient({ ...recipient, destination: e.target.value })} placeholder="correo o número" />
-              </div>
-            </div>
-            <button className="btn-primary" type="button" onClick={() => api("/gate-visits/recipients", { method: "POST", body: recipient }).then(() => { setRecipient({ ...recipient, destination: "" }); return loadMasters(); }).catch((e) => setError(e.message))}>Agregar destino</button>
-            <div className="form-grid">
-              <div>
                 <label>Sede del número de respuesta</label>
                 <select value={reply.siteId} onChange={(e) => pickReplySite(e.target.value)}>
                   {masters.sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
                 </select>
               </div>
               <div>
-                <label>WhatsApp de respuesta</label>
+                <label>WhatsApp de respuesta, si contestan el aviso</label>
                 <PeruPhone value={reply.phone} onChange={(phone) => setReply({ ...reply, phone })} placeholder="9 dígitos" />
               </div>
             </div>
@@ -471,8 +579,11 @@ export default function Visitas() {
           </section> : null}
           {menuTab === "motivos" ? <section>
             <h4>Motivos</h4>
-            <div className="action-row">
-              <input value={motiveName} onChange={(e) => setMotiveName(e.target.value)} placeholder="Nuevo motivo" />
+            <div className="drv-add">
+              <label>
+                <span>Nuevo motivo</span>
+                <input value={motiveName} onChange={(e) => setMotiveName(e.target.value)} placeholder="Nombre del motivo" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); api("/gate-visits/motives", { method: "POST", body: { name: motiveName, asksDetail } }).then(() => { setMotiveName(""); return loadMasters(); }).catch((err) => setError(err.message)); } }} />
+              </label>
               <label className="check-line"><input type="checkbox" checked={asksDetail} onChange={(e) => setAsksDetail(e.target.checked)} /> Pide detalle</label>
               <button className="btn-primary" type="button" onClick={() => api("/gate-visits/motives", { method: "POST", body: { name: motiveName, asksDetail } }).then(() => { setMotiveName(""); return loadMasters(); }).catch((e) => setError(e.message))}>Agregar</button>
             </div>
@@ -521,6 +632,65 @@ export default function Visitas() {
               <button className="btn-ghost drv-danger" type="button" onClick={resetModule}>Reiniciar módulo</button>
             </section>
           ) : null}
+        </div>
+      ) : null}
+      {formOpen && edit ? (
+        <div className="overlay open" role="presentation" onClick={() => setFormOpen(false)}>
+          <form className="modal drv-reg-modal" role="dialog" aria-labelledby="drv-reg-title" onClick={(event) => event.stopPropagation()} onSubmit={saveForm}>
+            <div className="modal-head">
+              <h3 id="drv-reg-title">Registro del conductor</h3>
+              <button className="modal-close" type="button" onClick={() => setFormOpen(false)} aria-label="Cerrar">×</button>
+            </div>
+            <div className="modal-body single drv-modal-grid">
+              <label>Sede
+                <select value={edit.siteId} disabled={!manage} onChange={(e) => setEdit({ ...edit, siteId: e.target.value })}>
+                  <option value="">{selected?.siteName || "Sin sede"}</option>
+                  {editOptions.sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
+                </select>
+              </label>
+              <label>Motivo
+                <select value={edit.motiveId} disabled={!manage} onChange={(e) => setEdit({ ...edit, motiveId: e.target.value })}>
+                  <option value="">{selected?.motive || "Sin motivo"}</option>
+                  {editOptions.motives.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </label>
+              <label>Detalle
+                <input value={edit.motiveDetail} disabled={!manage} onChange={(e) => setEdit({ ...edit, motiveDetail: e.target.value })} />
+              </label>
+              <label>Empresa
+                <input value={edit.company} disabled={!manage} onChange={(e) => setEdit({ ...edit, company: e.target.value })} />
+              </label>
+              <label>RUC
+                <input value={edit.ruc} disabled={!manage} onChange={(e) => setEdit({ ...edit, ruc: e.target.value.replace(/\D/g, "").slice(0, 11) })} />
+              </label>
+              <label>Conductor
+                <input value={edit.driverName} disabled={!manage} onChange={(e) => setEdit({ ...edit, driverName: e.target.value })} />
+              </label>
+              <label>Brevete
+                <input value={edit.license} disabled={!manage} onChange={(e) => setEdit({ ...edit, license: e.target.value })} />
+              </label>
+              <label className="drv-span">Teléfono
+                <PeruPhone value={edit.phone} disabled={!manage} onChange={(phone) => setEdit({ ...edit, phone })} />
+              </label>
+              <label>Placa tracto
+                <input value={edit.tractorPlate} disabled={!manage} onChange={(e) => setEdit({ ...edit, tractorPlate: e.target.value.toUpperCase() })} />
+              </label>
+              <label>Placa carreta
+                <input value={edit.trailerPlate} disabled={!manage} onChange={(e) => setEdit({ ...edit, trailerPlate: e.target.value.toUpperCase() })} />
+              </label>
+              <label className="drv-span">Código de equipo
+                <input value={edit.equipmentCode} disabled={!manage} onChange={(e) => setEdit({ ...edit, equipmentCode: e.target.value })} placeholder="4 letras y 7 dígitos" />
+                <small className={isoNote(edit.equipmentCode) ? "drv-iso" : "drv-iso ok"}>{isoNote(edit.equipmentCode) || (edit.equipmentCode ? "Cumple la norma ISO." : "Si lo dejas vacío, no se evalúa.")}</small>
+              </label>
+              <label className="drv-span">Observaciones
+                <textarea value={edit.observations} disabled={!manage} rows={3} onChange={(e) => setEdit({ ...edit, observations: e.target.value })} />
+              </label>
+              <div className="drv-span action-row">
+                {manage ? <button className="btn-primary" type="submit" disabled={savingForm}>{savingForm ? "Guardando…" : "Guardar registro"}</button> : null}
+                <button className="btn-ghost" type="button" onClick={() => setFormOpen(false)}>Cerrar</button>
+              </div>
+            </div>
+          </form>
         </div>
       ) : null}
       {lb.node}

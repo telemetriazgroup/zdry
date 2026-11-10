@@ -454,6 +454,15 @@ export class DriverRegistryService implements OnModuleInit {
     });
     if (!visit) throw new NotFoundException("Ingreso no encontrado.");
     const photoStatus = visitPhotoStatus(visit);
+    const own = visit.site?.warehouses || [];
+    const warehouses = own.length
+      ? own.map((item) => ({ ...item, siteName: visit.site?.name || "" }))
+      : (await this.prisma.visitWarehouse.findMany({
+          where: { active: true },
+          orderBy: [{ sortOrder: "asc" }],
+          include: { site: { select: { name: true, sortOrder: true } } },
+        })).sort((a, b) => (a.site.sortOrder - b.site.sortOrder) || (a.sortOrder - b.sortOrder))
+          .map((item) => ({ ...item, siteName: item.site.name }));
     return {
       ...visit,
       unitPhotoKey: undefined,
@@ -463,7 +472,7 @@ export class DriverRegistryService implements OnModuleInit {
       photoArchived: photoStatus === "archived",
       isoWarning: equipmentIsoWarning(visit.equipmentCode || ""),
       locked: visit.status !== "REGISTRADO" || !!visit.archivedAt,
-      warehouses: visit.site?.warehouses || [],
+      warehouses,
     };
   }
 
@@ -561,11 +570,22 @@ export class DriverRegistryService implements OnModuleInit {
     if (!manages(user.role)) throw new ForbiddenException("Sin acceso.");
     const channel = kind === "whatsapp" ? "whatsapp" : kind === "correo" ? "correo" : "";
     if (!channel) throw new BadRequestException("Elige correo o WhatsApp.");
-    const dest = channel === "correo" ? String(destination || "").trim().toLowerCase() : whatsappDigits(destination);
-    if (channel === "correo" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(dest)) throw new BadRequestException("El correo no es válido.");
-    if (channel === "whatsapp" && (dest.length < 8 || dest.length > 15)) throw new BadRequestException("El número de WhatsApp no es válido.");
+    let dest = "";
+    if (channel === "correo") {
+      dest = String(destination || "").trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(dest)) throw new BadRequestException("El correo no es válido.");
+    } else {
+      const phone = peruReplyPhone(destination);
+      if (!phone) throw new BadRequestException("El WhatsApp son 9 dígitos después del 51.");
+      dest = phone;
+    }
     const row = await this.prisma.visitRecipient.create({
       data: { siteId, kind: channel, destination: dest, label: String(label || dest).trim().slice(0, 80) },
+    }).catch((error: unknown) => {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        throw new BadRequestException(channel === "correo" ? "Ese correo ya está en la sede." : "Ese WhatsApp ya está en la sede.");
+      }
+      throw error;
     });
     await this.audit.log({ user, action: "create", entity: "VisitRecipient", entityId: row.id, ip });
     return row;

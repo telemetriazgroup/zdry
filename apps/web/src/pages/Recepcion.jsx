@@ -376,6 +376,9 @@ export default function Recepcion() {
   const [pickedAtt, setPickedAtt] = useState(null);
   const [assigning, setAssigning] = useState(false);
   const [visits, setVisits] = useState([]);
+  const [visitQuery, setVisitQuery] = useState("");
+  const [visitHits, setVisitHits] = useState([]);
+  const [visitSearched, setVisitSearched] = useState(false);
   const [patioChoice, setPatioChoice] = useState("");
   const [filterType, setFilterType] = useState("");
   const [filterDepot, setFilterDepot] = useState("");
@@ -417,7 +420,7 @@ export default function Recepcion() {
 
   async function loadVisits() {
     if (!canCoord) return;
-    const list = await api("/gate-visits?filter=all");
+    const list = await api("/gate-visits/arrivals");
     setVisits(list);
   }
 
@@ -825,6 +828,25 @@ export default function Recepcion() {
       setUnit(next);
       if (next.visit) setVisitForm(visitToForm(next.visit));
       await loadVisits();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function searchDoorVisits() {
+    const term = visitQuery.trim();
+    setError("");
+    if (term.length < 3) {
+      setVisitSearched(false);
+      setVisitHits([]);
+      setError("Escribe al menos 3 caracteres para buscar otro registro.");
+      return;
+    }
+    try {
+      const found = await api(`/gate-visits/lookup?q=${encodeURIComponent(term)}`);
+      setVisitHits(found.visits || []);
+      setVisitSearched(true);
+      setPickVisitId("");
     } catch (e) {
       setError(e.message);
     }
@@ -1342,16 +1364,22 @@ export default function Recepcion() {
                 {visitMode === "pick" && !unit.visit ? (
                   <div className="form-grid" style={{ marginTop: 8 }}>
                     <div>
-                      <label>Visita disponible</label>
+                      <label>Registrados hoy</label>
+                      <p className="section-sub">Para otro día escribe al menos 3 caracteres. No aparecen cancelados ni anulados.</p>
+                      <div className="action-row">
+                        <input value={visitQuery} onChange={(e) => { setVisitQuery(e.target.value); setVisitSearched(false); }} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); searchDoorVisits(); } }} placeholder="Conductor, placa, RUC o código" />
+                        <button className="btn-ghost" type="button" onClick={searchDoorVisits}>Buscar</button>
+                      </div>
                       <select value={pickVisitId} onChange={(e) => setPickVisitId(e.target.value)}>
-                        <option value="">Elegir visita…</option>
-                        {visits.filter((v) => !v.locked || v.containerIso === unit.iso).map((v) => (
+                        <option value="">{visitSearched ? "Resultados de la búsqueda" : "Elegir un registro de hoy…"}</option>
+                        {(visitSearched ? visitHits : visits).map((v) => (
                           <option key={v.id} value={v.id}>
-                            {v.tractorPlate} · {v.driverName || "sin conductor"} · {v.motive}
-                            {v.containerIso ? ` · ${v.containerIso}` : ""}
+                            {v.driverName || "sin conductor"} · {v.tractorPlate} · {v.siteName || "sin sede"} · {v.motive}
+                            {v.publicCode ? ` · ${v.publicCode}` : ""}
                           </option>
                         ))}
                       </select>
+                      {visitSearched && !visitHits.length ? <p className="section-sub">Sin coincidencias fuera de los cancelados y anulados.</p> : null}
                     </div>
                     <div className="action-row" style={{ alignItems: "end" }}>
                       <button className="btn-primary" type="button" onClick={linkPickedVisit} disabled={!pickVisitId}>Vincular a esta unidad</button>

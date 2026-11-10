@@ -285,13 +285,14 @@ export class GateVisitsService {
   }
 
   async arrivals() {
-    const { start } = limaDayRange();
+    const { start, end } = limaDayRange();
     const rows = await this.prisma.gateVisit.findMany({
       where: {
-        OR: [{ linkedAt: null }, { linkedAt: { gte: start } }],
+        visitAt: { gte: start, lte: end },
         archivedAt: null,
+        status: { notIn: ["CANCELADO", "ANULADO"] },
       },
-      orderBy: { updatedAt: "desc" },
+      orderBy: { visitAt: "desc" },
       take: 200,
     });
     return rows.map((r) => this.present(r));
@@ -302,25 +303,32 @@ export class GateVisitsService {
     if (raw.length < 3) throw new BadRequestException("Escribe al menos 3 caracteres (placa o ISO).");
     const plate = normalizePlate(raw);
     const isoNeedle = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
-    const visitWhere =
-      plate.length >= 3
-        ? {
-            OR: [
-              { tractorPlate: { contains: plate, mode: "insensitive" as const } },
-              { trailerPlate: { contains: plate, mode: "insensitive" as const } },
-              { driverName: { contains: raw, mode: "insensitive" as const } },
-              { containerIso: { contains: isoNeedle, mode: "insensitive" as const } },
-              { equipmentCode: { contains: isoNeedle, mode: "insensitive" as const } },
-            ],
-          }
-        : {
-            OR: [
-              { containerIso: { contains: isoNeedle, mode: "insensitive" as const } },
-              { equipmentCode: { contains: isoNeedle, mode: "insensitive" as const } },
-            ],
-          };
+    const text = { contains: raw, mode: "insensitive" as const };
+    const ors: Prisma.GateVisitWhereInput[] = [
+      { driverName: text },
+      { company: text },
+      { publicCode: text },
+      { license: text },
+    ];
+    if (plate.length >= 3) {
+      ors.push(
+        { tractorPlate: { contains: plate, mode: "insensitive" } },
+        { trailerPlate: { contains: plate, mode: "insensitive" } },
+        { ruc: { contains: plate } },
+        { phone: { contains: plate } },
+      );
+    }
+    if (isoNeedle.length >= 3) {
+      ors.push(
+        { containerIso: { contains: isoNeedle, mode: "insensitive" } },
+        { equipmentCode: { contains: isoNeedle, mode: "insensitive" } },
+      );
+    }
+    const visitWhere = { OR: ors };
     const visits = await this.prisma.gateVisit.findMany({
-      where: { AND: [visitWhere, { archivedAt: null }] },
+      where: {
+        AND: [visitWhere, { archivedAt: null, status: { notIn: ["CANCELADO", "ANULADO"] } }],
+      },
       orderBy: { updatedAt: "desc" },
       take: 40,
     });
@@ -419,6 +427,7 @@ export class GateVisitsService {
       equipmentCode?: string;
       observations?: string;
       motiveDetail?: string;
+      siteId?: string;
       iso?: string;
     },
     user: AuthUser,
@@ -439,10 +448,17 @@ export class GateVisitsService {
       phone: body.phone ?? visit.phone,
       equipmentCode: body.equipmentCode ?? visit.equipmentCode ?? "",
     });
+    let sitePatch: { siteId: string; siteName: string } | undefined;
+    if (body.siteId) {
+      const site = await this.prisma.visitSite.findUnique({ where: { id: body.siteId } });
+      if (!site) throw new BadRequestException("La sede no existe.");
+      sitePatch = { siteId: site.id, siteName: site.name };
+    }
     const row = await this.prisma.gateVisit.update({
       where: { id },
       data: {
         ...data,
+        ...sitePatch,
         observations: body.observations != null ? String(body.observations).trim().slice(0, 500) : visit.observations,
         motiveDetail: body.motiveDetail != null ? String(body.motiveDetail).trim().slice(0, 160) : visit.motiveDetail,
       },

@@ -182,7 +182,7 @@ export default function PatioCampo() {
     setLooked(true);
     if (term.length < 3) {
       setLookup(null);
-      await loadList(term);
+      setError("Escribe al menos 3 caracteres para buscar otro registro.");
       return;
     }
     try {
@@ -464,17 +464,17 @@ export default function PatioCampo() {
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
 
-      {arrivals.length ? (
-        <section className="campo-section">
-          <h3>Equipos registrados en visita</h3>
-          <p className="section-sub">Toca una fila. Si ya tiene DRY, entras a la evaluación. Si no, busca el contenedor o abre emergencia.</p>
+      <section className="campo-section">
+        <h3>Registrados hoy</h3>
+        <p className="section-sub">Son los ingresos de hoy, sin cancelados ni anulados. Toca una fila para vincular el contenedor. Para otro día usa la búsqueda, desde 3 caracteres.</p>
+        {arrivals.length ? (
           <div className="campo-stack">
             {arrivals.map((v) => (
               <VisitItem key={v.id} visit={v} showPendingPhoto={canReview} onClick={() => openArrival(v)} />
             ))}
           </div>
-        </section>
-      ) : null}
+        ) : <p className="section-sub">Hoy no hay ingresos para vincular.</p>}
+      </section>
 
       <div className="tile-row campo-daily">
         <div className="tile">
@@ -529,7 +529,7 @@ export default function PatioCampo() {
             value={q}
             onChange={(e) => { setQ(e.target.value); setPage(1); setLooked(false); }}
             onKeyDown={(e) => { if (e.key === "Enter") searchVisits(); }}
-            placeholder="Buscar placa, conductor o ISO…"
+            placeholder="Desde 3 caracteres: conductor, placa o código"
           />
           <button className="btn-ghost" type="button" onClick={searchVisits}>Buscar</button>
           <button className="btn-primary" type="button" onClick={() => setEmergency((e) => ({ ...e, open: true, iso: q.trim().toUpperCase() }))}>
