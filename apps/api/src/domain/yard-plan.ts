@@ -341,12 +341,12 @@ export function stackLengthError(
     if (fullSupport != null && fullSupport >= incoming) continue;
     if (span === "center") {
       if (feetA != null && feetB != null && feetA >= incoming && feetB >= incoming) continue;
-      if (centerFeet != null && incoming > centerFeet) {
-        return `Un equipo de ${incoming} pies no puede ir encima de uno de ${centerFeet} pies.`;
+      if (centerFeet != null && centerFeet >= incoming) continue;
+      if (centerFeet != null) {
+        return `Un equipo de ${incoming} pies no puede ir encima de uno de ${centerFeet} pies que está al centro.`;
       }
-      const sideFeet = feetA ?? feetB;
-      if (sideFeet != null && incoming > sideFeet) {
-        return `Un equipo de ${incoming} pies no puede ir encima de uno de ${sideFeet} pies.`;
+      if ((feetA != null || feetB != null) && (feetA == null || feetB == null || feetA < incoming || feetB < incoming)) {
+        return `Un equipo de ${incoming} pies en el centro necesita un 40 debajo, o un 20 en cada mitad.`;
       }
       continue;
     }

@@ -218,7 +218,7 @@ export class WarehouseService {
   }
 
   async setYardGhost(
-    input: { depotId?: string; zoneId?: string; row?: number; col?: number; level?: number; occupied?: boolean; code?: string; typeCode?: string; color?: string; note?: string; half?: string; split?: boolean },
+    input: { depotId?: string; zoneId?: string; row?: number; col?: number; level?: number; occupied?: boolean; code?: string; typeCode?: string; color?: string; note?: string; half?: string; split?: boolean; merge?: boolean },
     user: AuthUser,
     ip?: string,
   ) {
@@ -274,6 +274,26 @@ export class WarehouseService {
       }
     }
     const half = span === "A" || span === "B" ? span : undefined;
+    if (input.merge) {
+      const atCell = (ghost: { zoneId: string; row: number; col: number; level: number }) =>
+        ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level === level;
+      const named = plan.ghosts.some((ghost) => atCell(ghost) && ghost.code);
+      const sideA = plan.ghosts.some((ghost) => atCell(ghost) && !ghost.code && ghost.half === "A");
+      const sideB = plan.ghosts.some((ghost) => atCell(ghost) && !ghost.code && ghost.half === "B");
+      if (positions.some((item) => sameLevel(item)) || named || !sideA || !sideB) {
+        throw new ConflictException("Solo se fusionan dos desconocidos, uno en cada mitad. Un equipo identificado no se fusiona.");
+      }
+      const cleared = plan.ghosts.filter((ghost) => !atCell(ghost));
+      cleared.push({ zoneId: zone.id, row, col, level });
+      const supported = ghostsWithSupport(
+        plan.zones,
+        cleared,
+        positions
+          .filter((item) => item.lado && item.ruma && item.columna && item.nivel)
+          .map((item) => ({ zoneName: item.lado || "", row: item.ruma || 0, col: item.columna || 0, level: item.nivel || 0, iso: item.iso, type: item.type, half: asBayHalf(item.bayHalf) })),
+      );
+      return this.saveYardPlan(depotId, { ...plan, ghosts: supported }, user, ip);
+    }
     if (input.split) {
       const busy = positions.some((item) => sameLevel(item));
       if (busy) throw new ConflictException("Esa altura ya tiene un equipo identificado.");

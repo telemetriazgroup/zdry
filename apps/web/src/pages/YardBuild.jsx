@@ -170,10 +170,18 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   const [transferIso, setTransferIso] = useState(null);
   const [history, setHistory] = useState([]);
   const [detailIso, setDetailIso] = useState("");
+  const [menu, setMenu] = useState(null);
 
   useEffect(() => {
     setDraft(withSeats(layout.plan?.zones?.length ? layout.plan : FALLBACK_PLAN));
   }, [layout.depotId, layout.plan]);
+
+  useEffect(() => {
+    if (!menu) return undefined;
+    const close = () => setMenu(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [menu]);
 
   const types = useMemo(
     () => (layout.types || []).filter((type) => !type.archivedAt),
@@ -266,7 +274,8 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   }
 
   function clickedHalf(typeCode, half) {
-    return feetOf(typeCode) >= 40 ? undefined : half;
+    if (feetOf(typeCode) >= 40 || half === "center") return undefined;
+    return half;
   }
 
   async function onCell(zone, row, col, level, occupant, ghost, half) {
@@ -378,12 +387,14 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   }
 
   async function slideTo(half) {
-    if (half !== "A" && half !== "B") return;
+    const centering = half === "center";
+    if (!centering && half !== "A" && half !== "B") return;
     setError("");
     try {
       if (picked?.ghost) {
         const ghost = ghosts.find((item) => item.zoneId === picked.ghost.zoneId && item.row === picked.ghost.row && item.col === picked.ghost.col && item.level === picked.ghost.level && (item.half || "") === (picked.ghost.half || ""));
-        if (!ghost?.code || feetOf(ghost.typeCode) <= 0 || feetOf(ghost.typeCode) >= 40 || ghost.half === half) return;
+        if (!ghost?.code || feetOf(ghost.typeCode) <= 0 || feetOf(ghost.typeCode) >= 40) return;
+        if (centering ? !ghost.half : ghost.half === half) return;
         await api("/yard/ghost", {
           method: "POST",
           body: {
@@ -397,13 +408,14 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             typeCode: ghost.typeCode,
             ...(ghost.color ? { color: ghost.color } : {}),
             ...(ghost.note ? { note: ghost.note } : {}),
-            half,
+            ...(centering ? {} : { half }),
           },
         });
       } else {
         const unit = layout.units.find((item) => item.iso === picked?.code);
         if (!unit?.lado || unit.lado === "PASILLO" || !unit.ruma || !unit.columna || !unit.nivel) return;
-        if (feetOf(unit.type) <= 0 || feetOf(unit.type) >= 40 || unit.bayHalf === half) return;
+        if (feetOf(unit.type) <= 0 || feetOf(unit.type) >= 40) return;
+        if (centering ? !unit.bayHalf : unit.bayHalf === half) return;
         await api("/yard/place", {
           method: "POST",
           body: {
@@ -414,15 +426,15 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             columna: unit.columna,
             nivel: unit.nivel,
             regularize: true,
-            half,
+            ...(centering ? {} : { half }),
           },
         });
         await loadHistory(unit.iso);
       }
       setPicked((current) => (current ? {
         ...current,
-        where: String(current.where || "").replace(/ · (mitad [AB]|al centro)$/, "") + ` · mitad ${half}`,
-        ghost: current.ghost ? { ...current.ghost, half } : current.ghost,
+        where: String(current.where || "").replace(/ · (mitad [AB]|al centro)$/, "") + (centering ? " · al centro" : ` · mitad ${half}`),
+        ghost: current.ghost ? { ...current.ghost, half: centering ? undefined : half } : current.ghost,
       } : current));
       await onReload();
     } catch (e) {
@@ -437,6 +449,54 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       setTransferIso(null);
       await onReload();
       await loadHistory(iso);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  function cellActions(zone, row, col, level, occupant, ghost) {
+    if (occupant || ghost?.code) return [];
+    const span = baySpan(ghost?.typeCode, ghost?.half);
+    const hereGhosts = ghosts.filter((item) => item.zoneId === zone.id && item.row === row && item.col === col && item.level === level);
+    const hereUnits = layout.units.filter((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel === level);
+    if (!ghost?.half && span === "full") return [{ id: "split", label: "Dividir en dos de 20" }];
+    if (span !== "A" && span !== "B") return [];
+    const other = span === "A" ? "B" : "A";
+    const otherGhost = hereGhosts.find((item) => !item.code && baySpan(item.typeCode, item.half) === other);
+    const otherUnit = hereUnits.find((unit) => {
+      const side = baySpan(unit.type, unit.bayHalf);
+      return side === other || side === "full" || side === "center";
+    });
+    return otherGhost && !otherUnit ? [{ id: "merge", label: "Fusionar en un 40" }] : [];
+  }
+
+  function openCellMenu(event, zone, row, col, level, occupant, ghost) {
+    event.preventDefault();
+    const actions = cellActions(zone, row, col, level, occupant, ghost);
+    if (!actions.length) {
+      setMenu(null);
+      return;
+    }
+    setMenu({
+      x: event.clientX,
+      y: event.clientY,
+      actions,
+      ghost: { zoneId: zone.id, row, col, level, ...(ghost?.half ? { half: ghost.half } : {}) },
+    });
+  }
+
+  async function runMenu(action) {
+    const target = menu?.ghost;
+    setMenu(null);
+    if (!target) return;
+    setError("");
+    try {
+      await api("/yard/ghost", {
+        method: "POST",
+        body: { depotId: layout.depotId, ...target, occupied: true, ...(action === "split" ? { split: true } : { merge: true }) },
+      });
+      setPicked(null);
+      await onReload();
     } catch (e) {
       setError(e.message);
     }
@@ -491,8 +551,9 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             const side = unit?.bayHalf || ghost?.half || "";
             return (
               <div className="yard-slide">
-                <span>{side ? `Está en la mitad ${side}.` : "Está al centro. Muévelo a un lado para dejar espacio a otro de 20 pies."}</span>
+                <span>{side ? `Está en la mitad ${side}. El otro lado queda libre.` : "Está al centro y ocupa A y B. Arriba no puede ir un 40."}</span>
                 <button className={side === "A" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => slideTo("A")}>A la izquierda</button>
+                <button className={!side ? "btn-primary" : "btn-ghost"} type="button" onClick={() => slideTo("center")}>Al centro</button>
                 <button className={side === "B" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => slideTo("B")}>A la derecha</button>
               </div>
             );
@@ -684,13 +745,22 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
                                                 return span === "A" || span === "B";
                                               });
                                               const showHalves = hasHalf || (!wideUnit && !wideGhost && incomingFeet > 0 && incomingFeet < 40);
+                                              const halfSlot = (half) => ({
+                                                half,
+                                                occupant: hereUnits.find((unit) => baySpan(unit.type, unit.bayHalf) === half),
+                                                ghost: hereGhosts.find((item) => baySpan(item.typeCode, item.half) === half),
+                                              });
                                               const slots = showHalves
-                                                ? ["A", "B"].map((half) => ({
-                                                  half,
-                                                  occupant: hereUnits.find((unit) => baySpan(unit.type, unit.bayHalf) === half),
-                                                  ghost: hereGhosts.find((item) => baySpan(item.typeCode, item.half) === half),
-                                                }))
-                                                : [{ half: "", occupant: wideUnit, ghost: wideGhost }];
+                                                ? (hasHalf ? ["A", "B"].map(halfSlot) : ["A", "center", "B"].map((half) => (half === "center" ? { half, occupant: null, ghost: null } : halfSlot(half))))
+                                                : [{
+                                                  half: "",
+                                                  occupant: wideUnit,
+                                                  ghost: wideGhost,
+                                                  span: true,
+                                                  center: wideUnit
+                                                    ? baySpan(wideUnit.type, wideUnit.bayHalf) === "center"
+                                                    : baySpan(wideGhost?.typeCode, wideGhost?.half) === "center",
+                                                }];
                                               return (
                                                 <div className={slots.length > 1 ? "yard-bay" : undefined} key={level}>
                                                   {slots.map((slot) => {
@@ -703,7 +773,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
                                                       <button
                                                         key={slot.half || "F"}
                                                         type="button"
-                                                        className={`yard-cell${occupant || named ? " full" : ""}${ghost && !occupant && !named ? " ghost" : ""}${key && picked?.key === key ? " on" : ""}`}
+                                                        className={`yard-cell${slot.span ? " span-bay" : ""}${occupant || named ? " full" : ""}${ghost && !occupant && !named ? " ghost" : ""}${key && picked?.key === key ? " on" : ""}`}
                                                         style={color ? { background: color } : undefined}
                                                         aria-label={`${zone.name} fila ${row} columna ${col} altura ${level}${slot.half ? ` mitad ${slot.half}` : ""}`}
                                                         onClick={() => {
@@ -719,11 +789,13 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
                                                           }
                                                           onCell(zone, row, col, level, occupant, ghost, slot.half || undefined);
                                                         }}
+                                                        onContextMenu={(event) => openCellMenu(event, zone, row, col, level, occupant, ghost)}
                                                         onDoubleClick={() => {
                                                           if (mode === "regularizar" && occupant) returnUnit(occupant.iso);
                                                         }}
                                                       >
-                                                        {occupant ? occupant.iso.slice(-4) : named ? ghost.code.slice(-4) : ghost ? (String(ghost.typeCode || "").startsWith("20") ? "20" : "?") : slot.half || (incomingFeet >= 40 ? "A+B" : level)}
+                                                        {occupant ? occupant.iso.slice(-4) : named ? ghost.code.slice(-4) : ghost ? (String(ghost.typeCode || "").startsWith("20") ? "20" : "?") : slot.half === "center" ? "Medio" : slot.half || (incomingFeet >= 40 ? "A+B" : level)}
+                                                        {slot.span ? <small>{slot.center ? "centro" : "A+B"}</small> : null}
                                                       </button>
                                                     );
                                                   })}
@@ -770,6 +842,16 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             }}
             onSlide={(half) => slideTo(half)}
             onSplit={() => splitPicked()}
+            onContextMenu={(pick, x, y) => {
+              if (!pick?.ghost) return;
+              const zone = draft.zones.find((entry) => entry.id === pick.ghost.zoneId);
+              if (!zone) return;
+              const ghost = ghosts.find((entry) => entry.zoneId === pick.ghost.zoneId && entry.row === pick.ghost.row && entry.col === pick.ghost.col && entry.level === pick.ghost.level && (entry.half || "") === (pick.ghost.half || ""));
+              const occupant = layout.units.find((unit) => unit.lado === zone.name && unit.ruma === pick.ghost.row && unit.columna === pick.ghost.col && unit.nivel === pick.ghost.level && baySpan(unit.type, unit.bayHalf) !== "A" && baySpan(unit.type, unit.bayHalf) !== "B");
+              const actions = cellActions(zone, pick.ghost.row, pick.ghost.col, pick.ghost.level, occupant, ghost);
+              if (!actions.length) return;
+              setMenu({ x, y, actions, ghost: pick.ghost });
+            }}
             onPark={() => transferIso && parkUnit(transferIso)}
             onRelease={() => transferIso && returnUnit(transferIso)}
             onClose={() => { setPicked(null); setTransferIso(null); }}
@@ -795,6 +877,13 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         </>
       )}
       {detailIso ? <YardUnitDetail iso={detailIso} onClose={() => setDetailIso("")} /> : null}
+      {menu ? (
+        <div className="yard-menu" style={{ left: menu.x, top: menu.y }}>
+          {menu.actions.map((action) => (
+            <button key={action.id} type="button" onClick={() => runMenu(action.id)}>{action.label}</button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

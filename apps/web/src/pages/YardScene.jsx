@@ -69,6 +69,12 @@ function columnAllows(zone, row, col, level, incomingType, units, ghosts, half) 
     const feetB = typed("B");
     const centered = items.filter((item) => baySpan(item.type, item.half) === "center" && feetOf(item.type) > 0);
     const centerFeet = centered.length ? Math.max(...centered.map((item) => feetOf(item.type))) : null;
+    if (span === "center") {
+      const pair = feetA != null && feetB != null && feetA >= incoming && feetB >= incoming;
+      const onCenter = centerFeet != null && centerFeet >= incoming;
+      const onFull = items.some((item) => baySpan(item.type, item.half) === "full" && feetOf(item.type) >= incoming);
+      if (!pair && !onCenter && !onFull && (feetA != null || feetB != null || centerFeet != null)) return false;
+    }
     if ((span === "full" || span === "center") && centerFeet != null && incoming > centerFeet) return false;
     if ((span === "A" || span === "B") && centerFeet != null && (span === "A" ? feetA : feetB) == null) return false;
     if (span === "full" && feetA != null && feetB != null && feetA >= 20 && feetB >= 20 && incoming <= 40) continue;
@@ -183,7 +189,7 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
       for (let col = 1; col <= zone.cols; col += 1) {
         let floorA = 0.04;
         let floorB = 0.04;
-        const offered = { A: false, B: false, full: false };
+        const offered = { A: false, B: false, full: false, center: false };
         const slotX = originX + (col - 1) * PITCH_X;
         const usable = PITCH_X - 0.7;
         const z = originZ + (row - 1) * PITCH_Z + BOX_W / 2;
@@ -212,13 +218,18 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
           if (options.targets) {
             const incomingSpan = baySpan(options.incomingType, null);
             const free = wideSpan ? [] : ["A", "B"].filter((span) => !pieces.some((piece) => piece.span === span));
-            const hints = incomingSpan === "full" ? (free.length === 2 ? ["full"] : []) : free;
+            const hints = incomingSpan === "full" ? (free.length === 2 ? ["full"] : []) : free.length === 2 ? ["A", "center", "B"] : free;
             hints.forEach((span) => {
               const floor = span === "B" ? floorB : span === "A" ? floorA : Math.max(floorA, floorB);
               if (offered[span]) return;
-              if (!columnAllows(zone, row, col, level, options.incomingType, stackedUnits, ghosts, span === "full" ? null : span)) return;
+              if (!columnAllows(zone, row, col, level, options.incomingType, stackedUnits, ghosts, span === "A" || span === "B" ? span : span === "center" ? "center" : null)) return;
                 offered[span] = true;
-                const length = span === "full" ? lengthOf(options.incomingType) : Math.min(lengthOf(options.incomingType), usable / 2 - 0.15);
+                const trio = hints.includes("center");
+                const length = span === "A" || span === "B"
+                  ? (trio ? usable * 0.28 : Math.min(lengthOf(options.incomingType), usable / 2 - 0.15))
+                  : span === "center"
+                    ? usable * 0.28
+                    : lengthOf(options.incomingType);
                 const height = BOX_H * highOf(options.incomingType);
                 const hint = new THREE.Mesh(
                   new THREE.BoxGeometry(length, height * 0.35, BOX_W),
@@ -232,7 +243,7 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
                   row,
                   col,
                   level,
-                  ...(span === "A" || span === "B" ? { half: span } : {}),
+                  ...(span === "A" || span === "B" || span === "center" ? { half: span } : {}),
                 };
                 root.add(hint);
                 disposables.push(hint.geometry, hint.material);
@@ -389,9 +400,10 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
   return root;
 }
 
-export default function YardScene({ zones, units, ghosts, typeColor, onPick, picked, onClose, targets, incomingType, transferring, onTransfer, onSlide, onSplit, onPark, onRelease, history }) {
+export default function YardScene({ zones, units, ghosts, typeColor, onPick, picked, onClose, targets, incomingType, transferring, onTransfer, onSlide, onSplit, onContextMenu, onPark, onRelease, history }) {
   const mountRef = useRef(null);
   const pickRef = useRef(onPick);
+  const menuRef = useRef(onContextMenu);
   const colorRef = useRef(typeColor);
   const viewRef = useRef(null);
   const yardRoot = useRef(null);
@@ -399,6 +411,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
   const dataRef = useRef({ zones, units, ghosts, targets, incomingType });
   const [detailIso, setDetailIso] = useState("");
   pickRef.current = onPick;
+  menuRef.current = onContextMenu;
   colorRef.current = typeColor;
   selectedRef.current = picked && !picked.empty ? (picked.key || "") : "";
   dataRef.current = { zones, units, ghosts, targets, incomingType };
@@ -595,7 +608,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
       if (pointers.size) return;
       const moved = drag.moved;
       drag.moved = false;
-      if (moved || !content) return;
+      if (moved || !content || event.target !== renderer.domElement) return;
       const rect = renderer.domElement.getBoundingClientRect();
       const pointer = new THREE.Vector2(
         ((event.clientX - rect.left) / rect.width) * 2 - 1,
@@ -614,7 +627,22 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
       view.dist = Math.min(160, Math.max(6, view.dist * (event.deltaY > 0 ? 1.08 : 0.92)));
       placeCamera();
     };
+    const onContext = (event) => {
+      event.preventDefault();
+      if (!content) return;
+      const rect = renderer.domElement.getBoundingClientRect();
+      const pointer = new THREE.Vector2(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(pointer, camera);
+      const hit = ray.intersectObjects(content.children, true).find((item) => item.object.userData.pick || item.object.parent?.userData?.pick);
+      const pick = hit?.object.userData.pick || hit?.object.parent?.userData?.pick;
+      if (pick) menuRef.current?.(pick, event.clientX, event.clientY);
+    };
     renderer.domElement.addEventListener("pointerdown", onDown);
+    renderer.domElement.addEventListener("contextmenu", onContext);
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
@@ -634,6 +662,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
       cancelAnimationFrame(frame);
       observer.disconnect();
       renderer.domElement.removeEventListener("pointerdown", onDown);
+      renderer.domElement.removeEventListener("contextmenu", onContext);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       renderer.domElement.removeEventListener("wheel", onWheel);
@@ -694,9 +723,10 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
               const side = pickedUnit?.bayHalf || pickedGhost?.half || "";
               return (
                 <>
-                  <p>{side ? `Está en la mitad ${side}. El otro lado queda libre.` : "Está al centro. Muévelo a un lado para dejar espacio a otro de 20 pies."}</p>
+                  <p>{side ? `Está en la mitad ${side}. El otro lado queda libre.` : "Está al centro y ocupa A y B. Arriba no puede ir un 40."}</p>
                   <div className="yard-float-actions">
                     <button className={side === "A" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => onSlide("A")}>A la izquierda</button>
+                    <button className={!side ? "btn-primary" : "btn-ghost"} type="button" onClick={() => onSlide("center")}>Al centro</button>
                     <button className={side === "B" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => onSlide("B")}>A la derecha</button>
                   </div>
                 </>
