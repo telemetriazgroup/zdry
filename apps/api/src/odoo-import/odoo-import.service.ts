@@ -404,15 +404,15 @@ export class OdooImportService {
     const productIds = products.map((p) => Number(p.id));
     if (!productIds.length) {
       const empty = loaded.missingCategory
-        ? "Odoo no tiene la categoría de producto Contenedor Dry."
-        : "La categoría Contenedor Dry no tiene productos.";
+        ? "Odoo no tiene la categoría Contenedor Dry ni productos con DRY en el nombre."
+        : "No hay productos en Contenedor Dry ni con DRY en el nombre.";
       await this.logs.add(runId, { level: "warn", step: "lotes", message: empty });
       await this.logs.finish(runId, empty);
       await this.writeProgress({ status: "done", step: "listo", current: 5, total: 5, message: empty });
       return;
     }
     const productMap = new Map(products.map((p) => [Number(p.id), p]));
-    await this.logs.add(runId, { level: "ok", step: "lotes", message: `Categoría Contenedor Dry: ${products.length} productos.` });
+    await this.logs.add(runId, { level: "ok", step: "lotes", message: `Productos dry: ${products.length} (categoría Contenedor Dry y nombre con DRY).` });
 
     const quants = await this.searchAll("stock.quant", [
       ["product_id", "in", productIds],
@@ -651,15 +651,15 @@ export class OdooImportService {
       const productIds = products.map((p) => Number(p.id));
       if (!productIds.length) {
         const empty = loaded.missingCategory
-          ? "Odoo no tiene la categoría de producto Contenedor Dry."
-          : "La categoría Contenedor Dry no tiene productos.";
+          ? "Odoo no tiene la categoría Contenedor Dry ni productos con DRY en el nombre."
+          : "No hay productos en Contenedor Dry ni con DRY en el nombre.";
         await this.prisma.odooAssimilateRun.delete({ where: { id: runId } }).catch(() => undefined);
         await this.writeProgress({ status: "idle", step: "", current: 0, total: 0, iso: "", message: empty });
         await this.touchWatch({ lastRunAt: new Date().toISOString(), lastMessage: empty, lastNew: 0, lastAssimilated: 0 });
         return;
       }
       const productMap = new Map(products.map((p) => [Number(p.id), p]));
-      await this.logs.add(runId, { level: "ok", step: "lotes", message: `Categoría Contenedor Dry: ${products.length} productos.` });
+      await this.logs.add(runId, { level: "ok", step: "lotes", message: `Productos dry: ${products.length} (categoría Contenedor Dry y nombre con DRY).` });
       const quants = await this.searchAll(
         "stock.quant",
         [["product_id", "in", productIds], ["quantity", ">", 0], ["lot_id", "!=", false], ["location_id.usage", "=", "internal"]],
@@ -4242,7 +4242,7 @@ export class OdooImportService {
     return out;
   }
 
-  /** Productos de la categoría Odoo «Contenedor Dry», incluidos flat rack y medidas sin tipo. */
+  /** Categoría «Contenedor Dry» y cualquier producto cuyo nombre lleve DRY, aunque la categoría sea otra. */
   private async loadDryProducts() {
     const categories = await this.odoo.searchRead(
       "product.category",
@@ -4251,19 +4251,22 @@ export class OdooImportService {
       { limit: 20 },
     );
     const ids = categories.map((row) => Number(row.id)).filter((id) => id > 0);
-    if (!ids.length) return { products: [] as Record<string, unknown>[], missingCategory: true };
     const products: Record<string, unknown>[] = [];
     const seen = new Set<number>();
-    for (const id of ids) {
-      const rows = await this.searchAll("product.product", [["categ_id", "child_of", id]], ["id", "name", "default_code", "categ_id"]);
+    const fields = ["id", "name", "default_code", "categ_id"];
+    const push = (rows: Record<string, unknown>[]) => {
       for (const row of rows) {
         const productId = Number(row.id);
         if (!productId || seen.has(productId)) continue;
         seen.add(productId);
         products.push(row);
       }
+    };
+    for (const id of ids) {
+      push(await this.searchAll("product.product", [["categ_id", "child_of", id]], fields));
     }
-    return { products, missingCategory: false };
+    push(await this.searchAll("product.product", [["name", "ilike", "dry"]], fields));
+    return { products, missingCategory: !ids.length && products.length === 0 };
   }
 
   private async ensureOtherType() {

@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
+import { isSuperadmin, useAuth } from "../auth.jsx";
 import YardBuild from "./YardBuild.jsx";
 
 export default function Patio() {
+  const { user } = useAuth();
   const [params, setParams] = useSearchParams();
   const [layout, setLayout] = useState(null);
   const [selectedIso, setSelectedIso] = useState(null);
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const depotId = params.get("depotId") || layout?.depotId || "";
 
@@ -49,6 +52,24 @@ export default function Patio() {
 
   const placed = layout.units.filter((unit) => unit.lado);
 
+  async function resetDepot() {
+    const text = layout.simulation
+      ? "Reiniciar el depósito demo: los equipos de la simulación vuelven a sin posición y se borran los huecos desconocidos. El plano de zonas se conserva. El patio real no cambia."
+      : `Devolver a sin posición todos los equipos de ${layout.depotName}. El plano de zonas se conserva.`;
+    if (!window.confirm(text)) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api("/yard/reset", { method: "POST", body: { depotId: layout.depotId } });
+      setSelectedIso(null);
+      await load(layout.depotId);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       <h2 className="section-title">Patio</h2>
@@ -68,7 +89,15 @@ export default function Patio() {
             Cancelar selección ({selectedIso})
           </button>
         ) : null}
+        {isSuperadmin(user) ? (
+          <button className="btn-ghost" type="button" disabled={busy} onClick={resetDepot}>
+            {layout.simulation ? "Reiniciar simulación" : "Devolver todo a sin posición"}
+          </button>
+        ) : null}
       </div>
+      {layout.simulation ? (
+        <p className="section-sub">Depósito demo. Aquí están todos los equipos para probar cómo armar el patio. Lo que coloques no mueve el depósito real.</p>
+      ) : null}
       {error ? <div className="err">{error}</div> : null}
       <YardBuild
         layout={layout}

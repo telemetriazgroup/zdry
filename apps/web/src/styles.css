@@ -1988,6 +1988,46 @@ button.tile.dry-click { display: block; }
   width: 44px; height: 44px; border: 0; border-radius: 50%; background: #fff; color: #1c2433;
   font-size: 24px; font-weight: 700; line-height: 1; cursor: pointer; box-shadow: 0 6px 16px rgba(0,0,0,.28);
 }
+.yard-detail-overlay { z-index: 80; }
+.yard-detail-body { max-height: min(78vh, 820px); overflow: auto; }
+.yard-detail-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 22px; }
+.yard-detail-grid h3 { margin: 16px 0 8px; font-size: 16px; }
+.yard-detail-grid h3:first-child { margin-top: 0; }
+.yard-detail-dl { display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: 6px 10px; margin: 0; }
+.yard-detail-dl dt { color: #667085; font-size: 12px; font-weight: 700; }
+.yard-detail-dl dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.yard-detail-photos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.yard-detail-slot {
+  display: flex; flex-direction: column; gap: 4px; min-height: 96px;
+  border: 1px dashed #c5ccd6; border-radius: 8px; padding: 8px; cursor: pointer; background: #f8fafc;
+}
+.yard-detail-slot.has { border-style: solid; border-color: #d0d5dd; background: #fff; }
+.yard-detail-slot img { width: 100%; height: 92px; object-fit: cover; border-radius: 6px; }
+.yard-detail-slot .n { font-size: 22px; font-weight: 800; color: #98a2b3; }
+.yard-detail-slot span:last-child { font-size: 12px; font-weight: 700; }
 @media (max-width: 960px) {
   .zone-card, .guest-form { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 760px) {
+  .yard-scene-tools { flex-direction: column; align-items: stretch; }
+  .yard-scene-tools span { display: none; }
+  .yard-viewport { height: min(68dvh, 560px); }
+  .yard-float {
+    top: auto; left: 8px; right: 62px; bottom: 8px; width: auto;
+    max-height: 46%; overflow: auto;
+  }
+  .yard-zoom { right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); }
+  .yard-zoom button { width: 48px; height: 48px; }
+  .yard-modes { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .yard-modes .btn-primary, .yard-modes .btn-ghost { width: auto; flex: 0 0 auto; }
+  .yard-float .action-row .btn-primary, .yard-float .action-row .btn-ghost,
+  .yard-float > .btn-primary { width: 100%; }
+  .zone-card, .guest-form { grid-template-columns: 1fr; }
+  .yard-cell { min-height: 42px; font-size: 12px; }
+  .stack-col { min-width: 52px; }
+  .yard-info { align-items: stretch; }
+  .yard-info .btn-primary, .yard-info .btn-ghost { width: 100%; }
+  .yard-detail-body { max-height: none; }
+  .yard-detail-grid, .yard-detail-dl { grid-template-columns: 1fr; }
+  .yard-detail-dl dt { margin-top: 6px; }
 }

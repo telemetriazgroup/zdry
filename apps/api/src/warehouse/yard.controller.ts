@@ -47,8 +47,8 @@ export class YardController {
   }
 
   @Get("history/:iso")
-  history(@Param("iso") iso: string) {
-    return this.warehouse.movementHistory(iso);
+  history(@Param("iso") iso: string, @Query("depotId") depotId?: string) {
+    return this.warehouse.movementHistory(iso, depotId || "");
   }
 
   @Post("place")
@@ -65,13 +65,18 @@ export class YardController {
     return this.warehouse.compact(body.depotId || "", user, req.ip);
   }
 
+  @Post("reset")
+  reset(@Body() body: { depotId?: string }, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.warehouse.resetDepot(body.depotId || "", user, req.ip);
+  }
+
   @Get(":depotId/suggest")
   suggest(@Param("depotId") depotId: string, @Query("iso") iso: string) {
     return this.warehouse.suggest(depotId, iso || "");
   }
 
   @Get(":depotId")
-  layout(@Param("depotId") depotId: string) {
-    return this.warehouse.yardLayout(depotId);
+  layout(@Param("depotId") depotId: string, @CurrentUser() user: AuthUser) {
+    return this.warehouse.yardLayout(depotId, user);
   }
 }

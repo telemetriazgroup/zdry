@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import YardUnitDetail from "./YardUnitDetail.jsx";
 
 const TEU = 6.1;
 const BOX_W = 2.44;
@@ -106,7 +107,7 @@ function groundLabel(text) {
 }
 
 function buildYard(zones, units, ghosts, typeColor, options = {}) {
-  const stackedUnits = (units || []).filter((unit) => !unit.onAisle && unit.lado !== "PASILLO");
+  const stackedUnits = (units || []).filter((unit) => unit.lado && !unit.onAisle && unit.lado !== "PASILLO");
   const held = (units || []).filter((unit) => unit.onAisle || unit.lado === "PASILLO");
   const root = new THREE.Group();
   const disposables = [];
@@ -317,9 +318,19 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
   const viewRef = useRef(null);
   const yardRoot = useRef(null);
   const selectedRef = useRef("");
+  const dataRef = useRef({ zones, units, ghosts, targets, incomingType });
+  const [detailIso, setDetailIso] = useState("");
   pickRef.current = onPick;
   colorRef.current = typeColor;
-  selectedRef.current = picked?.key || "";
+  selectedRef.current = picked && !picked.empty ? (picked.key || "") : "";
+  dataRef.current = { zones, units, ghosts, targets, incomingType };
+  const yardKey = JSON.stringify({
+    zones: (zones || []).map((zone) => [zone.id, zone.name, zone.rows, zone.cols, zone.levels, zone.gridRow, zone.gridCol]),
+    units: (units || []).map((unit) => [unit.iso, unit.lado, unit.ruma, unit.columna, unit.nivel, unit.type, unit.onAisle]),
+    ghosts: (ghosts || []).map((ghost) => [ghost.zoneId, ghost.row, ghost.col, ghost.level, ghost.code || "", ghost.typeCode || ""]),
+    targets: Boolean(targets),
+    incomingType: incomingType || "",
+  });
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -342,7 +353,9 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
 
     const camera = new THREE.PerspectiveCamera(42, mount.clientWidth / Math.max(mount.clientHeight, 1), 0.1, 800);
     const view = { yaw: 0.55, pitch: 1.08, dist: 26, target: new THREE.Vector3() };
-    viewRef.current = view;
+    let content = null;
+    let booted = false;
+    let idle = 0;
 
     const placeCamera = () => {
       const { yaw, pitch, dist, target } = view;
@@ -365,8 +378,44 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
       sun.shadow.camera.updateProjectionMatrix();
     };
 
-    let content = null;
-    const show = () => {
+    const frameOverview = () => {
+      if (!content) return;
+      view.yaw = 0.55;
+      view.pitch = 1.08;
+      view.target.copy(content.userData.center);
+      view.dist = Math.max(content.userData.radius * 2.4, 16);
+      placeCamera();
+    };
+
+    const frameSelection = (key) => {
+      if (!content || !key) return false;
+      let mesh = null;
+      content.traverse((node) => {
+        if (!mesh && node.userData?.pick?.key === key) mesh = node;
+      });
+      if (!mesh) return false;
+      const box = new THREE.Box3().setFromObject(mesh);
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      view.target.copy(center);
+      view.dist = Math.min(28, Math.max(size.length() * 2.2, 7));
+      view.pitch = 1.02;
+      placeCamera();
+      return true;
+    };
+
+    const armIdle = () => {
+      window.clearTimeout(idle);
+      idle = window.setTimeout(() => {
+        if (selectedRef.current) return;
+        frameOverview();
+      }, 120000);
+    };
+
+    const rebuild = (mode) => {
+      const first = !booted;
+      booted = true;
+      const prev = { yaw: view.yaw, pitch: view.pitch, dist: view.dist, target: view.target.clone() };
       if (content) {
         content.traverse((node) => {
           if (node.geometry) node.geometry.dispose?.();
@@ -374,14 +423,21 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
         (content.userData.disposables || []).forEach((item) => item?.dispose?.());
         scene.remove(content);
       }
-      content = buildYard(zones, units, ghosts, colorRef.current, { targets, incomingType });
+      const data = dataRef.current;
+      content = buildYard(data.zones, data.units, data.ghosts, colorRef.current, { targets: data.targets, incomingType: data.incomingType });
       yardRoot.current = content;
       scene.add(content);
-      view.target.copy(content.userData.center);
-      view.dist = Math.max(content.userData.radius * 2.4, 16);
-      placeCamera();
+      const next = first || mode === "overview" ? "overview" : mode;
+      if (next === "overview") frameOverview();
+      else {
+        view.yaw = prev.yaw;
+        view.pitch = prev.pitch;
+        view.dist = prev.dist;
+        view.target.copy(prev.target);
+        if (next === "selection" && selectedRef.current) frameSelection(selectedRef.current);
+        else placeCamera();
+      }
     };
-    show();
 
     let frame = 0;
     const loop = () => {
@@ -407,15 +463,31 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
     const observer = new ResizeObserver(resize);
     observer.observe(mount);
 
-    const drag = { active: false, x: 0, y: 0, moved: false };
+    const pointers = new Map();
+    const drag = { x: 0, y: 0, moved: false };
+    let pinch = 0;
     const onDown = (event) => {
-      drag.active = true;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       drag.x = event.clientX;
       drag.y = event.clientY;
-      drag.moved = false;
+      if (pointers.size === 1) drag.moved = false;
+      armIdle();
     };
     const onMove = (event) => {
-      if (!drag.active) return;
+      if (!pointers.has(event.pointerId)) return;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      armIdle();
+      if (pointers.size >= 2) {
+        const [a, b] = [...pointers.values()];
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        if (pinch) {
+          view.dist = Math.min(160, Math.max(6, view.dist * (pinch / Math.max(dist, 1))));
+          placeCamera();
+        }
+        pinch = dist;
+        drag.moved = true;
+        return;
+      }
       const dx = event.clientX - drag.x;
       const dy = event.clientY - drag.y;
       if (Math.hypot(dx, dy) > 4) drag.moved = true;
@@ -426,8 +498,11 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
       placeCamera();
     };
     const onUp = (event) => {
+      pointers.delete(event.pointerId);
+      pinch = 0;
+      if (pointers.size) return;
       const moved = drag.moved;
-      drag.active = false;
+      drag.moved = false;
       if (moved || !content) return;
       const rect = renderer.domElement.getBoundingClientRect();
       const pointer = new THREE.Vector2(
@@ -442,21 +517,27 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
     };
     const onWheel = (event) => {
       event.preventDefault();
-      view.dist = Math.min(160, Math.max(12, view.dist * (event.deltaY > 0 ? 1.08 : 0.92)));
+      armIdle();
+      view.dist = Math.min(160, Math.max(6, view.dist * (event.deltaY > 0 ? 1.08 : 0.92)));
       placeCamera();
     };
     renderer.domElement.addEventListener("pointerdown", onDown);
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
+    armIdle();
 
     viewRef.current = {
-      closer: () => { view.dist = Math.max(12, view.dist * 0.82); placeCamera(); },
-      farther: () => { view.dist = Math.min(160, view.dist * 1.18); placeCamera(); },
-      reset: () => { view.yaw = 0.55; view.pitch = 1.08; show(); },
+      closer: () => { armIdle(); view.dist = Math.max(6, view.dist * 0.82); placeCamera(); },
+      farther: () => { armIdle(); view.dist = Math.min(160, view.dist * 1.18); placeCamera(); },
+      reset: () => { armIdle(); frameOverview(); },
+      rebuild,
+      frameSelection,
+      armIdle,
     };
 
     return () => {
+      window.clearTimeout(idle);
       cancelAnimationFrame(frame);
       observer.disconnect();
       renderer.domElement.removeEventListener("pointerdown", onDown);
@@ -468,12 +549,29 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
       mount.removeChild(renderer.domElement);
       viewRef.current = null;
     };
-  }, [zones, units, ghosts, targets, incomingType]);
+  }, []);
+
+  useEffect(() => {
+    viewRef.current?.rebuild(selectedRef.current ? "selection" : "keep");
+  }, [yardKey]);
+
+  const focusKey = picked && !picked.empty ? (picked.key || "") : "";
+  useEffect(() => {
+    if (focusKey) {
+      viewRef.current?.frameSelection(focusKey);
+      return;
+    }
+    viewRef.current?.armIdle();
+  }, [focusKey]);
+
+  const detailCode = picked && !picked.unknown && !picked.empty
+    ? (units || []).find((unit) => unit.iso === (picked.code || picked.key))?.iso
+    : "";
 
   return (
     <div className="yard-scene">
       <div className="yard-scene-tools">
-        <span>Arrastra para girar. La rueda y los botones acercan. Un 40 pies mide el doble que un 20, y el desconocido de abajo copia ese largo.</span>
+        <span>Arrastra para girar. Pellizca o usa los botones para acercar. Un 40 pies mide el doble que un 20.</span>
         <button className="btn-ghost" type="button" onClick={() => viewRef.current?.reset()}>Restablecer vista</button>
       </div>
       <div className="yard-viewport" ref={mountRef}>
@@ -490,6 +588,9 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
             <p>{picked.access}</p>
             <p>{picked.cost}</p>
             {picked.unknown ? <p>Este hueco no está en el catálogo.</p> : <p>Esa referencia de movimientos queda en el catálogo comercial.</p>}
+            {detailCode ? (
+              <button className="btn-primary" type="button" onClick={() => setDetailIso(detailCode)}>Ver más información</button>
+            ) : null}
             {!picked.unknown && !picked.empty && onTransfer ? (
               <div className="action-row">
                 <button className="btn-primary" type="button" onClick={onTransfer}>{transferring ? "Eligiendo destino" : "Trasladar"}</button>
@@ -510,6 +611,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
           <button type="button" aria-label="Alejar" onClick={() => viewRef.current?.farther()}>−</button>
         </div>
       </div>
+      {detailIso ? <YardUnitDetail iso={detailIso} onClose={() => setDetailIso("")} /> : null}
     </div>
   );
 }

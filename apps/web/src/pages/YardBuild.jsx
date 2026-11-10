@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import YardScene from "./YardScene.jsx";
+import YardUnitDetail from "./YardUnitDetail.jsx";
 
 const LEFT = new Set(["Vendido", "Alquilado", "Retirado por cliente"]);
 const FALLBACK_PLAN = {
@@ -100,6 +101,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   const [picked, setPicked] = useState(null);
   const [transferIso, setTransferIso] = useState(null);
   const [history, setHistory] = useState([]);
+  const [detailIso, setDetailIso] = useState("");
 
   useEffect(() => {
     setDraft(withSeats(layout.plan?.zones?.length ? layout.plan : FALLBACK_PLAN));
@@ -115,7 +117,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
 
   if (!draft?.zones?.length) return null;
 
-  const loose = layout.units.filter((unit) => !unit.lado && !LEFT.has(unit.status));
+  const loose = layout.units.filter((unit) => !unit.lado && (layout.simulation || !LEFT.has(unit.status)));
   const ghosts = supportedGhosts(draft.zones, layout.units, draft.ghosts);
   const needle = query.trim().toUpperCase();
   const looseShown = loose.filter((unit) => !needle || `${unit.iso} ${unit.typeLabel}`.toUpperCase().includes(needle)).slice(0, 30);
@@ -238,7 +240,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   async function loadHistory(iso) {
     if (!iso) { setHistory([]); return; }
     try {
-      setHistory(await api(`/yard/history/${iso}`));
+      setHistory(await api(`/yard/history/${encodeURIComponent(iso)}?depotId=${encodeURIComponent(layout.depotId)}`));
     } catch {
       setHistory([]);
     }
@@ -310,6 +312,9 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
           <div>{picked.where}</div>
           <div>{picked.note}</div>
           {picked.ghost ? <button className="btn-ghost" type="button" onClick={clearPicked}>Liberar hueco</button> : null}
+          {!picked.unknown && !picked.ghost && layout.units.some((unit) => unit.iso === picked.code) ? (
+            <button className="btn-primary" type="button" onClick={() => setDetailIso(picked.code)}>Ver más información</button>
+          ) : null}
         </>
       ) : <span>Toca un contenedor para ver el código y el tipo.</span>}
     </div>
@@ -317,7 +322,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
 
   return (
     <div className="panel" style={{ marginTop: 14 }}>
-      <div className="action-row">
+      <div className="action-row yard-modes">
         <b>Plano del almacén</b>
         <button className={mode === "3d" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("3d")}>Vista del operario</button>
         <button className={mode === "armar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("armar")}>Armar zonas</button>
@@ -561,6 +566,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
           />
         </>
       )}
+      {detailIso ? <YardUnitDetail iso={detailIso} onClose={() => setDetailIso("")} /> : null}
     </div>
   );
 }
