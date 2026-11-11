@@ -165,3 +165,103 @@ export async function downloadVisitPdf(visit, photoUrl) {
 
   doc.save(`registro-${visit.publicCode || visit.tractorPlate || code}.pdf`);
 }
+
+const REPORT_HEADERS = ["Código", "Fecha", "Conductor", "Tracto", "Carreta", "Sede", "Motivo", "Empresa", "RUC", "Teléfono", "Brevete", "Código de equipo", "Observaciones", "Foto"];
+
+function reportCells(row) {
+  return [
+    row.publicCode || "—",
+    formatVisitWhen(row.visitAt || row.createdAt),
+    row.driverName || "—",
+    row.tractorPlate || "—",
+    row.trailerPlate || "—",
+    row.siteName || "—",
+    motiveLabel(row.motive),
+    row.company || "—",
+    row.ruc || "—",
+    visitFieldValue("phone", row),
+    row.license || "—",
+    row.equipmentCode || "—",
+    row.observations || "—",
+    row.hasPhoto ? "Sí" : "No",
+  ];
+}
+
+function xmlEsc(value) {
+  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+export function downloadStatusWorkbook(status, rows) {
+  const head = REPORT_HEADERS.map((cell) => `<Cell><Data ss:Type="String">${xmlEsc(cell)}</Data></Cell>`).join("");
+  const body = rows.map((row) => `<Row>${reportCells(row).map((cell) => `<Cell><Data ss:Type="String">${xmlEsc(cell)}</Data></Cell>`).join("")}</Row>`).join("");
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+<Worksheet ss:Name="${xmlEsc(statusLabel(status).slice(0, 31))}"><Table><Row>${head}</Row>${body}</Table></Worksheet>
+</Workbook>`;
+  const url = URL.createObjectURL(new Blob([xml], { type: "application/vnd.ms-excel" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `conductores-${status || "estado"}.xls`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+export function downloadStatusPdf(status, rows) {
+  const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
+  const title = `${statusLabel(status)} · ${rows.length} ingresos`;
+  const columns = [
+    ["Código", 22],
+    ["Fecha", 32],
+    ["Conductor", 38],
+    ["Tracto", 24],
+    ["Sede", 28],
+    ["Motivo", 32],
+    ["Empresa", 42],
+    ["Teléfono", 28],
+  ];
+  const keys = [0, 1, 2, 3, 5, 6, 7, 9];
+  const paintHead = () => {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.setTextColor(18, 32, 58);
+    doc.text(title, 10, 12);
+    doc.setFontSize(8);
+    let x = 10;
+    const y = 18;
+    doc.setFillColor(18, 32, 58);
+    doc.rect(10, 14, 277, 7, "F");
+    doc.setTextColor(255, 255, 255);
+    columns.forEach(([label, width]) => {
+      doc.text(label, x + 1, y);
+      x += width;
+    });
+  };
+  paintHead();
+  let y = 25;
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(30, 36, 46);
+  rows.forEach((row, index) => {
+    if (y > 198) {
+      doc.addPage();
+      paintHead();
+      y = 25;
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(30, 36, 46);
+    }
+    if (index % 2 === 0) {
+      doc.setFillColor(245, 247, 250);
+      doc.rect(10, y - 4, 277, 6, "F");
+    }
+    const cells = reportCells(row);
+    let x = 10;
+    keys.forEach((cell, column) => {
+      const width = columns[column][1];
+      const text = String(cells[cell] || "—").replace(/\s+/g, " ");
+      doc.text(text.length > 22 ? `${text.slice(0, 21)}…` : text, x + 1, y);
+      x += width;
+    });
+    y += 6;
+  });
+  doc.save(`conductores-${status || "estado"}.pdf`);
+}

@@ -44,6 +44,16 @@ function Section({ icon, title, children }) {
   );
 }
 
+function siteByName(sites, name) {
+  const wanted = String(name || "").trim().toLowerCase();
+  if (!wanted) return null;
+  return (sites || []).find((site) => String(site.name || "").trim().toLowerCase() === wanted) || null;
+}
+
+function isVisitToken(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ""));
+}
+
 function PreviewList({ data }) {
   return (
     <dl className="visita-preview-dl">
@@ -59,6 +69,8 @@ function PreviewList({ data }) {
 
 export default function VisitaPublica() {
   const { token } = useParams();
+  const visitToken = isVisitToken(token) ? token : "";
+  const siteSlug = visitToken ? "" : String(token || "").trim();
   const [params] = useSearchParams();
   const nav = useNavigate();
   const { user, ready } = useAuth();
@@ -105,14 +117,17 @@ export default function VisitaPublica() {
     api("/gate-visits/public/options")
       .then((data) => {
         setOptions({ sites: data.sites || [], motives: data.motives || [] });
+        const sites = data.sites || [];
+        const picked = siteByName(sites, siteSlug) || siteByName(sites, "Piura") || sites[0];
+        if (siteSlug && !siteByName(sites, siteSlug)) setError(`No hay una sede ${siteSlug}. Quedó Piura.`);
         setForm((current) => ({
           ...current,
-          siteId: current.siteId || data.sites?.[0]?.id || "",
+          siteId: current.siteId || picked?.id || "",
           motiveId: current.motiveId || data.motives?.[0]?.id || "",
         }));
       })
       .catch((e) => setError(e instanceof ApiError ? e.message : e.message));
-  }, []);
+  }, [siteSlug]);
 
   useEffect(() => {
     if (!photo) {
@@ -125,9 +140,9 @@ export default function VisitaPublica() {
   }, [photo]);
 
   useEffect(() => {
-    if (!token) return undefined;
+    if (!visitToken) return undefined;
     let cancelled = false;
-    api(`/gate-visits/ticket/${token}`)
+    api(`/gate-visits/ticket/${visitToken}`)
       .then((d) => {
         if (cancelled || !d.visit) return;
         const motives = options.motives;
@@ -141,12 +156,12 @@ export default function VisitaPublica() {
         if (!cancelled) setError(e instanceof ApiError ? e.message : e.message);
       });
     return () => { cancelled = true; };
-  }, [token, options.motives]);
+  }, [visitToken, options.motives]);
 
   useEffect(() => {
-    if (!ready || !token || !ticket || showReceipt || forceEdit) return;
+    if (!ready || !visitToken || !ticket || showReceipt || forceEdit) return;
     if (staffVisitas) nav(`/app/almacen/visitas?visita=${encodeURIComponent(ticket.id)}`, { replace: true });
-  }, [ready, token, ticket, showReceipt, forceEdit, staffVisitas, nav]);
+  }, [ready, visitToken, ticket, showReceipt, forceEdit, staffVisitas, nav]);
 
   useEffect(() => {
     if (!ticket?.publicToken) {
@@ -183,7 +198,7 @@ export default function VisitaPublica() {
     setError("");
     setMsg("");
     try {
-      const body = token ? { ...form, publicToken: token } : form;
+      const body = visitToken ? { ...form, publicToken: visitToken } : form;
       const out = await api("/gate-visits/public", { method: "POST", body });
       const v = out.visit;
       let next = v;
@@ -207,8 +222,8 @@ export default function VisitaPublica() {
     }
   }
 
-  const photoSrc = token && photoStatus === "visible"
-    ? `${apiUrl(`/gate-visits/ticket/${token}/photo`)}?t=${photoBust}`
+  const photoSrc = visitToken && photoStatus === "visible"
+    ? `${apiUrl(`/gate-visits/ticket/${visitToken}/photo`)}?t=${photoBust}`
     : "";
   const shownPhoto = photoLocal || photoSrc;
   const pdfPhoto = photoLocal || (ticket?.hasPhoto ? photoSrc : "");
@@ -339,7 +354,7 @@ export default function VisitaPublica() {
             </label>
           </Section>
           <button className="reg-submit" type="submit" disabled={busy || locked}>
-            <span aria-hidden="true">▶</span> {busy ? "REGISTRANDO…" : token ? "GUARDAR CAMBIOS" : "REGISTRAR INGRESO"}
+            <span aria-hidden="true">▶</span> {busy ? "REGISTRANDO…" : visitToken ? "GUARDAR CAMBIOS" : "REGISTRAR INGRESO"}
           </button>
           <p className="reg-safe">La información será registrada de forma segura.</p>
         </div>

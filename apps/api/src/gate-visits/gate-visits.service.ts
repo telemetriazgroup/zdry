@@ -265,9 +265,9 @@ export class GateVisitsService {
     return { ok: true, visit: this.present(row), saved: true, editable: true };
   }
 
-  async list(filter: "pending" | "linked" | "all" | "archived" = "pending", status = "") {
+  async list(filter: "pending" | "linked" | "all" | "archived" = "pending", status = "", skip = 0, take = 20, q = "") {
     const asked = String(status || "").trim().toUpperCase().replace("EN ATENCIÓN", "EN ATENCION");
-    const where: Prisma.GateVisitWhereInput = asked
+    const whereBase: Prisma.GateVisitWhereInput = asked
       ? { status: asked, archivedAt: null }
       : filter === "archived"
         ? { archivedAt: { not: null } }
@@ -276,12 +276,86 @@ export class GateVisitsService {
           : filter === "linked"
             ? { linkedAt: { not: null }, archivedAt: null }
             : { archivedAt: null };
-    const rows = await this.prisma.gateVisit.findMany({
-      where,
-      orderBy: { visitAt: "desc" },
-      take: 400,
-    });
-    return rows.map((r) => this.present(r, true));
+    const needle = String(q || "").trim();
+    const where: Prisma.GateVisitWhereInput = needle
+      ? { AND: [whereBase, { OR: listSearch(needle) }] }
+      : whereBase;
+    const page = Math.min(20, Math.max(1, Math.trunc(Number(take)) || 20));
+    const from = Math.min(10000, Math.max(0, Math.trunc(Number(skip)) || 0));
+    const [grouped, total, rows] = await Promise.all([
+      this.prisma.gateVisit.groupBy({
+        by: ["status"],
+        where: { archivedAt: null },
+        _count: { _all: true },
+      }),
+      this.prisma.gateVisit.count({ where }),
+      this.prisma.gateVisit.findMany({
+        where,
+        orderBy: [{ visitAt: "desc" }, { id: "desc" }],
+        skip: from,
+        take: page,
+        select: {
+          id: true,
+          publicCode: true,
+          siteName: true,
+          status: true,
+          tractorPlate: true,
+          trailerPlate: true,
+          driverName: true,
+          company: true,
+          ruc: true,
+          phone: true,
+          motive: true,
+          motiveDetail: true,
+          license: true,
+          equipmentCode: true,
+          observations: true,
+          visitAt: true,
+          createdAt: true,
+          unitPhotoKey: true,
+          unitPhotoArchivedAt: true,
+          unitPhotoRejectedAt: true,
+        },
+      }),
+    ]);
+    const counts: Record<string, number> = {
+      REGISTRADO: 0,
+      "EN ATENCION": 0,
+      FINALIZADO: 0,
+      CANCELADO: 0,
+      ANULADO: 0,
+    };
+    for (const row of grouped) counts[row.status] = row._count._all;
+    return {
+      items: rows.map((row) => {
+        const photoStatus = visitPhotoStatus(row);
+        return {
+          id: row.id,
+          publicCode: row.publicCode,
+          siteName: row.siteName,
+          status: row.status,
+          tractorPlate: row.tractorPlate,
+          trailerPlate: row.trailerPlate,
+          driverName: row.driverName,
+          company: row.company,
+          ruc: row.ruc,
+          phone: row.phone,
+          motive: row.motive,
+          motiveDetail: row.motiveDetail,
+          license: row.license,
+          equipmentCode: row.equipmentCode,
+          observations: row.observations,
+          visitAt: row.visitAt,
+          createdAt: row.createdAt,
+          hasPhoto: photoStatus === "visible",
+          photoArchived: photoStatus === "archived",
+        };
+      }),
+      total,
+      counts,
+      skip: from,
+      take: page,
+    };
   }
 
   async arrivals() {
@@ -824,4 +898,27 @@ export class GateVisitsService {
       },
     }).catch(() => undefined);
   }
+}
+
+function listSearch(raw: string): Prisma.GateVisitWhereInput[] {
+  const text = { contains: raw, mode: "insensitive" as const };
+  const plate = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const ors: Prisma.GateVisitWhereInput[] = [
+    { driverName: text },
+    { company: text },
+    { publicCode: text },
+    { siteName: text },
+    { motive: text },
+    { license: text },
+  ];
+  if (plate.length >= 2) {
+    ors.push(
+      { tractorPlate: { contains: plate, mode: "insensitive" } },
+      { trailerPlate: { contains: plate, mode: "insensitive" } },
+      { ruc: { contains: plate } },
+      { phone: { contains: plate } },
+      { equipmentCode: { contains: plate, mode: "insensitive" } },
+    );
+  }
+  return ors;
 }

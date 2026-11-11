@@ -4,7 +4,7 @@ import { api, apiBlob, apiUpload, apiUrl, formatWhen, publicUrl } from "../api.j
 import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
 import { localPhone, PeruPhone } from "../peru-phone.jsx";
 import { useLightbox } from "../media-lightbox.jsx";
-import { downloadVisitPdf, statusLabel } from "../visit-ticket.js";
+import { downloadStatusPdf, downloadStatusWorkbook, downloadVisitPdf, statusLabel } from "../visit-ticket.js";
 
 const STATUSES = [
   ["REGISTRADO", "REGISTRADO", "#2f9e44"],
@@ -103,19 +103,123 @@ export default function Visitas() {
   const [confirmText, setConfirmText] = useState("");
   const [locationText, setLocationText] = useState("");
   const [query, setQuery] = useState("");
+  const [counts, setCounts] = useState({});
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [exporting, setExporting] = useState("");
+  const [photoMiss, setPhotoMiss] = useState(false);
+  const statusRef = useRef("REGISTRADO");
+  const queryRef = useRef("");
+  const searchTimer = useRef(0);
+  const listGen = useRef(0);
   const [report, setReport] = useState(null);
   const [importing, setImporting] = useState(false);
   const [testing, setTesting] = useState("");
   const [testReport, setTestReport] = useState(null);
 
-  async function load(next = status) {
-    const list = await api(`/gate-visits?status=${encodeURIComponent(next)}`);
-    setRows(list);
-    return list;
+  const PAGE = 10;
+  const BATCH = 20;
+  statusRef.current = status;
+  queryRef.current = query;
+
+  async function fetchBatch(nextStatus, skip, q) {
+    const params = new URLSearchParams({ status: nextStatus, skip: String(skip), take: String(BATCH) });
+    if (q) params.set("q", q);
+    return api(`/gate-visits?${params}`);
+  }
+
+  async function load(next = status, q = query) {
+    window.clearTimeout(searchTimer.current);
+    const gen = ++listGen.current;
+    const data = await fetchBatch(next, 0, String(q || "").trim());
+    if (gen !== listGen.current) return data.items || [];
+    setRows(data.items || []);
+    setTotal(data.total || 0);
+    setCounts(data.counts || {});
+    setPage(1);
+    return data.items || [];
+  }
+
+  function queueSearch(value) {
+    window.clearTimeout(searchTimer.current);
+    searchTimer.current = window.setTimeout(() => {
+      load(statusRef.current, value).catch((e) => setError(e.message));
+    }, 300);
+  }
+
+  async function goPage(target) {
+    const pages = Math.max(1, Math.ceil(total / PAGE));
+    const next = Math.min(pages, Math.max(1, target));
+    const need = next * PAGE;
+    if (need <= rows.length || rows.length >= total) {
+      setPage(next);
+      return;
+    }
+    setLoadingMore(true);
+    const gen = listGen.current;
+    try {
+      let acc = rows.slice();
+      let expected = total;
+      while (acc.length < need && acc.length < expected) {
+        const data = await fetchBatch(status, acc.length, query.trim());
+        if (gen !== listGen.current) return;
+        expected = data.total || 0;
+        setCounts(data.counts || {});
+        setTotal(expected);
+        if (!data.items?.length) break;
+        acc = acc.concat(data.items);
+      }
+      if (gen !== listGen.current) return;
+      setRows(acc);
+      setPage(next);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  async function collectReport(label) {
+    const gen = listGen.current;
+    const current = status;
+    const q = query.trim();
+    const acc = [];
+    let expected = Math.max(total, 1);
+    while (acc.length < expected) {
+      const data = await fetchBatch(current, acc.length, q);
+      if (gen !== listGen.current) return null;
+      expected = data.total || 0;
+      setCounts(data.counts || {});
+      setTotal(expected);
+      if (!data.items?.length) break;
+      acc.push(...data.items);
+      setExporting(`${label} ${acc.length} de ${expected}`);
+      if (data.items.length < BATCH) break;
+    }
+    return acc;
+  }
+
+  async function exportReport(kind) {
+    if (!total || exporting) return;
+    setError("");
+    setExporting(kind === "pdf" ? "PDF" : "Excel");
+    try {
+      const all = await collectReport(kind === "pdf" ? "PDF" : "Excel");
+      if (!all) return;
+      if (kind === "pdf") downloadStatusPdf(status, all);
+      else downloadStatusWorkbook(status, all);
+      setMsg(`Listo el ${kind === "pdf" ? "PDF" : "Excel"} de ${statusLabel(status)} con ${all.length} ingresos.`);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setExporting("");
+    }
   }
 
   async function open(id) {
     const detail = await api(`/gate-visits/${id}`);
+    setPhotoMiss(false);
     setSelected(detail);
     setFormOpen(false);
     setSendConfirm(false);
@@ -257,13 +361,19 @@ export default function Visitas() {
   }
 
   useEffect(() => {
-    load(focusId ? "" : "REGISTRADO").catch((e) => setError(e.message));
-    if (focusId) {
-      api("/gate-visits?filter=all").then(async (list) => {
-        setRows(list);
-        if (list.some((row) => row.id === focusId)) await open(focusId);
-      }).catch((e) => setError(e.message));
-    }
+    let gone = false;
+    (async () => {
+      if (!focusId) {
+        await load("REGISTRADO", "");
+        return;
+      }
+      const detail = await open(focusId);
+      if (gone) return;
+      const next = detail?.status || "REGISTRADO";
+      setStatus(next);
+      await load(next, "");
+    })().catch((e) => { if (!gone) setError(e.message); });
+    return () => { gone = true; };
   }, [focusId]);
 
   useEffect(() => {
@@ -497,11 +607,12 @@ export default function Visitas() {
   }
 
   const qr = `${window.location.origin}${publicUrl("/visita")}`;
-  const needle = query.trim().toLowerCase();
-  const visible = needle
-    ? rows.filter((row) => [row.publicCode, row.driverName, row.tractorPlate, row.trailerPlate, row.company, row.siteName, row.motive]
-      .some((value) => String(value || "").toLowerCase().includes(needle)))
-    : rows;
+  const qrLima = `${window.location.origin}${publicUrl("/visita/Lima")}`;
+  const start = (page - 1) * PAGE;
+  const pageRows = rows.slice(start, start + PAGE);
+  const pages = Math.max(1, Math.ceil(total / PAGE));
+  const from = total ? start + 1 : 0;
+  const to = Math.min(start + pageRows.length, total);
 
   return (
     <div className="panel">
@@ -510,7 +621,10 @@ export default function Visitas() {
       </div>
       <h3>Registro de conductores</h3>
       <p className="section-sub">
-        Formulario público: <a href={qr} target="_blank" rel="noreferrer">{qr}</a>
+        Piura: <a href={qr} target="_blank" rel="noreferrer">{qr}</a>
+      </p>
+      <p className="section-sub">
+        Lima: <a href={qrLima} target="_blank" rel="noreferrer">{qrLima}</a>
       </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
@@ -531,19 +645,26 @@ export default function Visitas() {
 
       {view === "ingresos" ? (
         <>
-          <div className="drv-filters">
+          <div className="drv-filters" role="tablist">
             <span>Estado</span>
             {STATUSES.map(([key, label]) => (
-              <button key={key} className={status === key ? "on" : ""} type="button" onClick={() => { setStatus(key); load(key).catch((e) => setError(e.message)); }}>{label}</button>
+              <button key={key} className={status === key ? "on" : ""} type="button" onClick={() => { window.clearTimeout(searchTimer.current); setStatus(key); load(key, queryRef.current).catch((e) => setError(e.message)); }}>
+                {label}-{counts[key] ?? "…"}
+              </button>
             ))}
           </div>
           <label className="drv-field">
             <span>Buscar conductor</span>
-            <input className="drv-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Nombre, placa, código o empresa" />
+            <input className="drv-search" value={query} onChange={(e) => { setQuery(e.target.value); queueSearch(e.target.value); }} placeholder="Nombre, placa, código o empresa" />
           </label>
-          <div className="drv-split">
-            <div>
-              {visible.map((row) => {
+          <div className="drv-export">
+            <button className="btn-ghost" type="button" disabled={!total || !!exporting} onClick={() => exportReport("excel")}>{exporting && exporting.startsWith("Excel") ? exporting : "Descargar Excel"}</button>
+            <button className="btn-ghost" type="button" disabled={!total || !!exporting} onClick={() => exportReport("pdf")}>{exporting && exporting.startsWith("PDF") ? exporting : "Descargar PDF"}</button>
+            <span>{query.trim() ? `El archivo trae los ${total} que coinciden, de 20 en 20.` : `El archivo trae los ${total} de este estado, de 20 en 20.`}</span>
+          </div>
+          <div className={`drv-split ${selected?.id ? "has-card" : ""}`}>
+            <div className="drv-list">
+              {pageRows.map((row) => {
                 const mark = pill(row.status);
                 return (
                   <button key={row.id} type="button" className={`drv-row ${selected?.id === row.id ? "on" : ""}`} onClick={() => open(row.id).catch((e) => setError(e.message))}>
@@ -556,10 +677,18 @@ export default function Visitas() {
                   </button>
                 );
               })}
-              {!visible.length ? <p className="section-sub">{rows.length ? "Ningún ingreso coincide con la búsqueda." : manage ? "No hay ingresos en este estado. En Asimilar datos puedes descargar la plantilla e importar el Excel." : "No hay ingresos en este estado."}</p> : null}
+              {!pageRows.length ? <p className="section-sub">{query.trim() ? "Ningún ingreso coincide con la búsqueda." : manage ? "No hay ingresos en este estado. En Asimilar datos puedes descargar la plantilla e importar el Excel." : "No hay ingresos en este estado."}</p> : null}
+              {total > PAGE ? (
+                <div className="drv-pager">
+                  <button className="btn-ghost" type="button" disabled={page <= 1 || loadingMore} onClick={() => goPage(page - 1)}>Anterior</button>
+                  <span>{from}-{to} de {total}</span>
+                  <button className="btn-ghost" type="button" disabled={page >= pages || loadingMore} onClick={() => goPage(page + 1)}>{loadingMore ? "Cargando…" : "Siguiente"}</button>
+                </div>
+              ) : null}
             </div>
             {selected?.id ? (
               <div className="drv-card">
+                <button className="btn-ghost drv-back" type="button" onClick={() => setSelected(null)}>Volver a la lista</button>
                 <h4>{selected.driverName || selected.publicCode || selected.tractorPlate}</h4>
                 <StageTrack status={selected.status} events={selected.statusEvents} />
                 <ol className="drv-time">
@@ -581,11 +710,11 @@ export default function Visitas() {
                 <p>Brevete {selected.license || "—"} · {selected.observations || "Sin observaciones"}</p>
                 <p>Código {selected.equipmentCode || "sin código"}{selected.isoWarning ? ` · ${selected.isoWarning}. Se guarda igual.` : selected.equipmentCode ? " · cumple la norma ISO." : ""}</p>
                 <button className="btn-primary" type="button" onClick={openForm}>{manage ? "Ver y editar registro" : "Ver registro"}</button>
-                {selected.hasPhoto ? (
+                {selected.hasPhoto && !photoMiss ? (
                   <button type="button" className="visit-photo-btn" onClick={() => lb.open([{ src: apiUrl(`/gate-visits/${selected.id}/photo`), type: "image", label: "Foto de la unidad" }])}>
-                    <img className="visit-photo-preview" src={apiUrl(`/gate-visits/${selected.id}/photo`)} alt="Foto de la unidad" />
+                    <img className="visit-photo-preview" src={apiUrl(`/gate-visits/${selected.id}/photo`)} alt="Foto de la unidad" onError={() => setPhotoMiss(true)} />
                   </button>
-                ) : <p className="section-sub">{selected.photoArchived ? "La foto está archivada." : "Sin foto."}</p>}
+                ) : <p className="section-sub">{photoMiss ? "No se pudo cargar la foto." : selected.photoArchived ? "La foto está archivada." : "Sin foto."}</p>}
                 {manage && selected.hasPhoto ? <button className="btn-ghost" type="button" onClick={archivePhoto}>Archivar foto</button> : null}
                 {canRestorePhoto && selected.photoArchived ? <button className="btn-ghost" type="button" onClick={restorePhoto}>Volver a mostrar la foto</button> : null}
                 <div className="action-row">
@@ -677,7 +806,7 @@ export default function Visitas() {
             <div className="drv-report">
               <p><b>{report.created}</b> nuevos · <b>{report.filled}</b> completados · <b>{report.skipped?.length || 0}</b> omitidos</p>
               <p className="section-sub">Los registros históricos suelen quedar en FINALIZADO. Abre ese filtro en Ingresos para verlos.</p>
-              <button className="btn-ghost" type="button" onClick={() => { setStatus("FINALIZADO"); setView("ingresos"); load("FINALIZADO").catch((e) => setError(e.message)); }}>Ver finalizados</button>
+              <button className="btn-ghost" type="button" onClick={() => { setStatus("FINALIZADO"); setView("ingresos"); load("FINALIZADO", "").catch((e) => setError(e.message)); }}>Ver finalizados</button>
               {report.skipped?.length ? (
                 <ul className="drv-notes">
                   {report.skipped.slice(0, 40).map((item, index) => <li key={`${item.id}-${index}`}>{item.id}: {item.reason}</li>)}

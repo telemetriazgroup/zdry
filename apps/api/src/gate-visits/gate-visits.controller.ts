@@ -103,8 +103,14 @@ export class GateVisitsController {
 
   @Roles("admin", "almacen", "coordinador")
   @Get()
-  list(@Query("filter") filter?: "pending" | "linked" | "all" | "archived", @Query("status") status?: string) {
-    return this.visits.list(filter || "pending", status || "");
+  list(
+    @Query("filter") filter?: "pending" | "linked" | "all" | "archived",
+    @Query("status") status?: string,
+    @Query("skip") skip?: string,
+    @Query("take") take?: string,
+    @Query("q") q?: string,
+  ) {
+    return this.visits.list(filter || "pending", status || "", Number(skip) || 0, Number(take) || 20, q || "");
   }
 
   @Roles("admin", "coordinador")
