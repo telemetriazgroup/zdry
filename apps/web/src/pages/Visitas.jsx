@@ -440,6 +440,8 @@ export default function Visitas() {
       setNoticeModal({ title: "WhatsApp del conductor", text: e.message });
     }
   }
+
+  async function archivePhoto() {
     setError("");
     try {
       await api(`/gate-visits/${selected.id}/photo/archive`, { method: "POST" });
