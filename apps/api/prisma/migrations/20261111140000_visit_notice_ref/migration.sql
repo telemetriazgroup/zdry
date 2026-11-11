@@ -1,0 +1,1 @@
+ALTER TABLE "VisitNotice" ADD COLUMN "externalRef" TEXT NOT NULL DEFAULT '';

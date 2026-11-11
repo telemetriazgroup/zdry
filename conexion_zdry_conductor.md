@@ -26,19 +26,17 @@ El bot manda un aviso a la vez, con 5 segundos entre uno y otro. Si uno falla, l
 
 ## Qué hace ZDRY
 
-Sin cambiar SGIT:
-
-- `en_cola` se muestra como “quedó en la cola”. No se dice que el conductor ya lo recibió.
-- `en_espera` se muestra como error, con el motivo de SGIT. No se carga otro.
-- Durante 3 minutos, el mismo ingreso no vuelve a pedir confirmación ni ubicación si el último WhatsApp al conductor está `en_cola`, `en_espera` o `ya_enviado`.
-- Reenviar no aparece en `en_cola`, `en_espera` ni `ya_enviado`. Sigue disponible si el aviso quedó en error u omitido.
-- Cada confirmación manda `referencia` `zdry:visita:{id}:confirmacion`. Cada ubicación manda `zdry:visita:{id}:ubicacion`. El aviso interno manda una referencia por número, `zdry:visita:{id}:registro:{telefono}`, para que cada WhatsApp de la sede reciba el suyo.
+- `en_cola` se muestra como “quedó en la cola”. Cuando la consulta dice que SGIT ya lo envió, pasa a `enviado`.
+- `en_espera` y el aviso de 2 mensajes pendientes se muestran en un modal.
+- Reenviar no aparece en `en_cola`, `en_espera`, `enviado` ni `ya_enviado`. Sigue disponible si el aviso quedó en error u omitido.
+- Cada confirmación y cada ubicación llevan una `referencia` propia, `zdry:visita:{id}:confirmacion:{n}` o `zdry:visita:{id}:ubicacion:{n}`. Se pueden dejar **2** en cola para el mismo ingreso. A partir de la tercera, ZDRY avisa en un modal que hay mensajes pendientes.
+- Cada 30 segundos, si hay avisos en cola, ZDRY consulta `POST /servicio/salida/estado` y pasa el aviso a `enviado` cuando SGIT ya lo mandó. Si pasan 5 minutos y sigue sin salir, avisa en un modal que no se llegó a enviar el mensaje a ese conductor.
 
 La ficha interna del registro sigue en `POST /servicio/salida-registro`. Esa ruta arma el texto. La confirmación y la ubicación siguen en `POST /servicio/salida` porque llevan un texto propio.
 
 ## Cambio en SGIT
 
-`tomarAviso` salta los avisos cuyo `no_enviar_antes` todavía no llega y toma el siguiente que ya está en hora. La pausa de 5 segundos entre envíos se mantiene. El candado por teléfono se mantiene: un número con un aviso `pendiente` sigue respondiendo `en_espera` y no recibe otro, sea enlace de catálogo o mensaje de conductor.
+`tomarAviso` salta los avisos cuyo `no_enviar_antes` todavía no llega y toma el siguiente que ya está en hora. La pausa de 5 segundos entre envíos se mantiene. El candado por teléfono se mantiene para el resto de avisos: un solo pendiente. Una referencia `zdry:` puede dejar hasta 2 pendientes en ese número. El tercero responde `en_espera`.
 
 Un enlace en reintento deja pasar la confirmación de otro número, y al revés. Siguen saliendo por el mismo WhatsApp.
 
@@ -50,8 +48,30 @@ El campo ya se guarda. ZDRY puede mandarlo en el ítem de `POST /SGIT/salida` y 
 
 | Campo | Regla |
 |---|---|
-| `referencia` | Opcional. Hasta 80 caracteres. Confirmación: `zdry:visita:{id}:confirmacion`. Ubicación: `zdry:visita:{id}:ubicacion`. Aviso interno, una por número: `zdry:visita:{id}:registro:{telefono}`. |
+| `referencia` | Opcional. Hasta 80 caracteres. Confirmación: `zdry:visita:{id}:confirmacion:{n}`. Ubicación: `zdry:visita:{id}:ubicacion:{n}`. Aviso interno, una por número: `zdry:visita:{id}:registro:{telefono}`. |
 
 Si llega `referencia` y ya hay un aviso `pendiente` con esa misma referencia, la respuesta es el aviso existente, `estado: "en_espera"`, motivo `Ese envío ya está en la cola.`, sin insertar otro. Si esa referencia ya salió (`aviso: "enviado"`) hace menos de 3 minutos, la respuesta es `estado: "ya_enviado"`, motivo `Ese envío ya salió.`, y tampoco se inserta otro. Pasados esos 3 minutos, una llamada nueva sí crea otro aviso: es un reenvío pedido a propósito.
 
-`telefono`, `mensaje` y `contacto` no cambian. Un ítem sin `referencia` sigue como hoy.
+`telefono`, `mensaje` y `contacto` no cambian. Un ítem sin `referencia` sigue como hoy. Un número sin referencia de ZDRY sigue aceptando un solo pendiente. Una referencia que empieza por `zdry:` puede dejar hasta 2 pendientes en ese número. El tercero responde `en_espera`.
+
+## Consulta de estado
+
+No envía nada y no toca los demás avisos de SGIT. ZDRY la llama cada 30 segundos solo cuando tiene WhatsApp de conductor en cola.
+
+`POST /servicio/salida/estado` con el mismo header `x-salida-clave`.
+
+```json
+{ "referencias": ["zdry:visita:{id}:confirmacion:1"] }
+```
+
+Hasta 30 referencias. La respuesta trae el último aviso de cada una:
+
+```json
+{
+  "avisos": [
+    { "referencia": "zdry:visita:{id}:confirmacion:1", "estado": "enviado", "enviadoEn": "2026-11-11T13:13:00.000Z", "motivo": "" }
+  ]
+}
+```
+
+`estado` del aviso es `pendiente`, `enviado` o `cerrado`. Si la referencia no existe, no viene en la lista.

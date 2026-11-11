@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, apiBlob, apiUpload, apiUrl, formatWhen, publicUrl } from "../api.js";
 import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
@@ -84,6 +84,8 @@ export default function Visitas() {
   const [sendConfirm, setSendConfirm] = useState(false);
   const [placeId, setPlaceId] = useState("");
   const [sure, setSure] = useState(null);
+  const [noticeModal, setNoticeModal] = useState(null);
+  const seenAlerts = useRef(new Set());
   const [moreNotices, setMoreNotices] = useState(false);
   const [openNote, setOpenNote] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
@@ -264,6 +266,33 @@ export default function Visitas() {
     }
   }, [focusId]);
 
+  useEffect(() => {
+    if (view !== "ingresos" || !manage) return undefined;
+    const tick = () => {
+      api("/gate-visits/salida-sync", { method: "POST" }).then(async (result) => {
+        const late = (result.alerts || []).find((item) => !seenAlerts.current.has(item.id));
+        if (late) {
+          seenAlerts.current.add(late.id);
+          setNoticeModal({ title: "Mensaje no enviado", text: late.text });
+        }
+        setSelected((current) => {
+          if (!current?.id) return current;
+          api(`/gate-visits/${current.id}`).then((detail) => {
+            setSelected(detail);
+            const note = (detail.notices || []).find((item) => item.status === "sin_enviar" && !seenAlerts.current.has(item.id));
+            if (note) {
+              seenAlerts.current.add(note.id);
+              setNoticeModal({ title: "Mensaje no enviado", text: note.detail || "No se llegó a enviar el mensaje." });
+            }
+          }).catch(() => {});
+          return current;
+        });
+      }).catch(() => {});
+    };
+    const timer = setInterval(tick, 30000);
+    return () => clearInterval(timer);
+  }, [view, manage]);
+
   async function changeStatus(next, withConfirm = false) {
     if (!selected) return;
     setError("");
@@ -277,6 +306,7 @@ export default function Visitas() {
       await load(status);
     } catch (e) {
       setError(e.message);
+      setNoticeModal({ title: "WhatsApp del conductor", text: e.message });
       api(`/gate-visits/${selected.id}`).then(setSelected).catch(() => {});
     }
   }
@@ -390,15 +420,15 @@ export default function Visitas() {
       setSelected(detail);
       const last = (detail.notices || [])[0];
       if (last?.status === "ya_enviado") {
-        setMsg(last.detail || "Ese envío ya salió.");
+        const text = last.detail || "Ese envío ya salió.";
+        setMsg(text);
+        setNoticeModal({ title: "WhatsApp del conductor", text });
         return;
       }
-      if (last?.status === "en_espera") {
-        setError(last.detail || "Ese número todavía tiene un mensaje sin salir. No se cargó otro.");
-        return;
-      }
-      if (last && last.status !== "en_cola") {
-        setError(last.detail || "El WhatsApp no quedó en cola.");
+      if (last?.status === "en_espera" || (last && last.status !== "en_cola")) {
+        const text = last.detail || "Ese número todavía tiene un mensaje sin salir. No se cargó otro.";
+        setError(text);
+        setNoticeModal({ title: "WhatsApp del conductor", text });
         return;
       }
       const place = (detail.warehouses || []).find((item) => item.id === warehouseId);
@@ -407,10 +437,9 @@ export default function Visitas() {
         : "La confirmación quedó en la cola. El conductor la recibe cuando WhatsApp la envía.");
     } catch (e) {
       setError(e.message);
+      setNoticeModal({ title: "WhatsApp del conductor", text: e.message });
     }
   }
-
-  async function archivePhoto() {
     setError("");
     try {
       await api(`/gate-visits/${selected.id}/photo/archive`, { method: "POST" });
@@ -604,7 +633,7 @@ export default function Visitas() {
                                 {note.channel === "whatsapp" ? (
                                   <button className="btn-ghost" type="button" onClick={() => setOpenNote(note)}>Ver mensaje</button>
                                 ) : null}
-                                {note.status !== "en_cola" && note.status !== "en_espera" && note.status !== "ya_enviado" && note.channel !== "interno" ? (
+                                {note.status !== "en_cola" && note.status !== "en_espera" && note.status !== "ya_enviado" && note.status !== "enviado" && note.channel !== "interno" ? (
                                   <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/${selected.id}/notices/${note.id}/retry`, { method: "POST" }).then(setSelected).catch((e) => setError(e.message))}>Reenviar</button>
                                 ) : null}
                               </span>
@@ -817,6 +846,22 @@ export default function Visitas() {
               <p className="section-sub">{openNote.destination} · {formatWhen(openNote.createdAt)}</p>
               <p className="drv-note-body">{openNote.message || "Este envío no guardó el texto."}</p>
               {openNote.message && openNote.messageSaved === false && openNote.kind !== "ubicacion" ? <p className="section-sub">Este envío no guardó el texto. Se muestra con los datos de ahora.</p> : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {noticeModal ? (
+        <div className="overlay open" role="presentation">
+          <div className="modal drv-reg-modal" role="dialog">
+            <div className="modal-head">
+              <h3>{noticeModal.title}</h3>
+              <button className="modal-close" type="button" onClick={() => setNoticeModal(null)} aria-label="Cerrar">×</button>
+            </div>
+            <div className="modal-body single">
+              <p>{noticeModal.text}</p>
+              <div className="action-row">
+                <button className="btn-primary" type="button" onClick={() => setNoticeModal(null)}>Entendido</button>
+              </div>
             </div>
           </div>
         </div>

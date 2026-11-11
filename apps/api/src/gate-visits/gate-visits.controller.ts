@@ -238,6 +238,12 @@ export class GateVisitsController {
     });
   }
 
+  @Roles("admin", "coordinador")
+  @Post("salida-sync")
+  syncSalida() {
+    return this.registry.syncSalida();
+  }
+
   @Roles("superadmin")
   @Post("reset")
   resetVisits(@CurrentUser() user: AuthUser, @Req() req: Request) {

@@ -975,6 +975,7 @@ model VisitNotice {
   status      String
   detail      String    @default("")
   message     String    @default("")
+  externalRef String    @default("")
   createdAt   DateTime  @default(now())
 
   @@index([visitId, createdAt])

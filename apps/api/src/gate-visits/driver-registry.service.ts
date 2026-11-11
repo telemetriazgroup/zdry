@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, OnModuleInit } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
@@ -35,14 +35,18 @@ import { StorageService } from "../storage/storage.service";
 
 type VisitRow = Prisma.GateVisitGetPayload<object>;
 
-const DRIVER_HOLD_MS = 3 * 60 * 1000;
+const DRIVER_QUEUE_LIMIT = 2;
+const DRIVER_STALE_MS = 5 * 60 * 1000;
+const DRIVER_SYNC_MS = 30 * 1000;
 
 function manages(role: string) {
   return role === "admin" || role === "superadmin" || role === "coordinador";
 }
 
 @Injectable()
-export class DriverRegistryService implements OnModuleInit {
+export class DriverRegistryService implements OnModuleInit, OnModuleDestroy {
+  private syncTimer: ReturnType<typeof setInterval> | null = null;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -52,6 +56,13 @@ export class DriverRegistryService implements OnModuleInit {
 
   async onModuleInit() {
     await this.ensureMasters().catch(() => undefined);
+    this.syncTimer = setInterval(() => {
+      this.syncSalida().catch(() => undefined);
+    }, DRIVER_SYNC_MS);
+  }
+
+  onModuleDestroy() {
+    if (this.syncTimer) clearInterval(this.syncTimer);
   }
 
   async ensureMasters() {
@@ -341,6 +352,7 @@ export class DriverRegistryService implements OnModuleInit {
         status: hit ? String(hit.estado || "error") : "error",
         detail: hit ? String(hit.motivo || result.detail || "") : (result.detail || "La salida no confirmó el WhatsApp."),
         message,
+        externalRef: hit?.estado === "en_cola" ? referencia : "",
       };
     }));
   }
@@ -353,6 +365,7 @@ export class DriverRegistryService implements OnModuleInit {
     status: string;
     detail: string;
     message?: string;
+    externalRef?: string;
   }>) {
     if (!rows.length) return;
     await this.prisma.visitNotice.createMany({
@@ -365,6 +378,7 @@ export class DriverRegistryService implements OnModuleInit {
         status: row.status,
         detail: row.detail.slice(0, 300),
         message: (row.message || "").slice(0, 4000),
+        externalRef: (row.externalRef || "").slice(0, 80),
       })),
     });
   }
@@ -414,10 +428,10 @@ export class DriverRegistryService implements OnModuleInit {
       if (visit.status !== "EN ATENCION") {
         throw new BadRequestException("La confirmación se reenvía cuando el ingreso está en atención.");
       }
-      await this.holdDriverSend(visitId);
-      const text = await this.driverText(visit, notice.kind === "ubicacion" ? "ubicacion" : "confirmacion", "");
       const kind = notice.kind === "ubicacion" ? "ubicacion" : "confirmacion";
-      await this.sendWhatsapps(visit, [notice.destination], site?.replyPhone || "", text, notice.kind, notice.audience, cfg, visitWhatsappRef(visit.id, kind));
+      const ref = await this.nextDriverRef(visitId, kind);
+      const text = await this.driverText(visit, kind, "");
+      await this.sendWhatsapps(visit, [notice.destination], site?.replyPhone || "", text, notice.kind, notice.audience, cfg, ref);
     } else if (notice.channel === "correo" || notice.channel === "whatsapp") {
       const sent = await this.dispatchRegistration(
         this.registrationOf(visit),
@@ -459,35 +473,90 @@ export class DriverRegistryService implements OnModuleInit {
     if (visit.status !== "EN ATENCION") {
       throw new BadRequestException("La confirmación y la ubicación se envían cuando el ingreso está en atención.");
     }
-    await this.holdDriverSend(id);
+    const ref = await this.nextDriverRef(id, kind);
     const site = visit.siteId ? await this.prisma.visitSite.findUnique({ where: { id: visit.siteId } }) : null;
     const message = await this.driverText(visit, kind, warehouseId);
     const cfg = await this.salida.read();
-    await this.sendWhatsapps(visit, [visit.phone], site?.replyPhone || "", message, kind, "conductor", cfg, visitWhatsappRef(id, kind));
+    await this.sendWhatsapps(visit, [visit.phone], site?.replyPhone || "", message, kind, "conductor", cfg, ref);
     await this.audit.log({ user, action: "driver_notice", entity: "GateVisit", entityId: id, after: { kind }, ip });
     return this.detail(id);
   }
 
-  private async holdDriverSend(visitId: string) {
-    const since = new Date(Date.now() - DRIVER_HOLD_MS);
-    const pending = await this.prisma.visitNotice.findFirst({
-      where: {
-        visitId,
-        audience: "conductor",
-        channel: "whatsapp",
-        status: { in: ["en_cola", "en_espera", "ya_enviado"] },
-        createdAt: { gte: since },
-      },
-      orderBy: { createdAt: "desc" },
+  private async nextDriverRef(visitId: string, kind: "confirmacion" | "ubicacion") {
+    const queued = await this.prisma.visitNotice.count({
+      where: { visitId, audience: "conductor", channel: "whatsapp", status: "en_cola" },
     });
-    if (!pending) return;
-    if (pending.status === "ya_enviado") {
-      throw new BadRequestException(pending.detail || "Ese envío ya salió.");
+    if (queued >= DRIVER_QUEUE_LIMIT) {
+      throw new BadRequestException("Este ingreso ya tiene 2 mensajes pendientes de enviar. Cuando salga uno, se puede cargar otro.");
     }
-    if (pending.status === "en_espera") {
-      throw new BadRequestException(pending.detail || "Ese número todavía tiene un mensaje sin salir. No se cargó otro.");
+    const sent = await this.prisma.visitNotice.count({
+      where: { visitId, audience: "conductor", channel: "whatsapp", kind },
+    });
+    return visitWhatsappRef(visitId, kind, String(sent + 1));
+  }
+
+  async syncSalida() {
+    const pending = await this.prisma.visitNotice.findMany({
+      where: {
+        channel: "whatsapp",
+        audience: "conductor",
+        status: { in: ["en_cola", "en_espera"] },
+        createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      },
+      include: { visit: { select: { id: true, driverName: true } } },
+      orderBy: { createdAt: "asc" },
+      take: 30,
+    });
+    if (!pending.length) return { alerts: [] as Array<{ id: string; visitId: string; text: string }> };
+    const refs = [...new Set(pending.flatMap((note) => note.externalRef ? [note.externalRef] : [`zdry:visita:${note.visitId}:${note.kind}`]))];
+    const known = await this.readSalidaEstado(refs);
+    const alerts: Array<{ id: string; visitId: string; text: string }> = [];
+    for (const note of pending) {
+      const ref = note.externalRef || `zdry:visita:${note.visitId}:${note.kind}`;
+      const hit = known.get(ref);
+      const name = note.visit.driverName || "el conductor";
+      if (hit?.estado === "enviado") {
+        await this.prisma.visitNotice.update({ where: { id: note.id }, data: { status: "enviado", detail: "SGIT confirmó el envío." } });
+        continue;
+      }
+      if (hit?.estado === "cerrado") {
+        const text = `No se llegó a enviar el mensaje a ${name}.`;
+        await this.prisma.visitNotice.update({ where: { id: note.id }, data: { status: "sin_enviar", detail: hit.motivo || text } });
+        alerts.push({ id: note.id, visitId: note.visitId, text: hit.motivo || text });
+        continue;
+      }
+      if (Date.now() - note.createdAt.getTime() >= DRIVER_STALE_MS) {
+        const text = `No se llegó a enviar el mensaje a ${name}.`;
+        await this.prisma.visitNotice.update({ where: { id: note.id }, data: { status: "sin_enviar", detail: text } });
+        alerts.push({ id: note.id, visitId: note.visitId, text });
+      }
     }
-    throw new BadRequestException("Ya hay un WhatsApp de este ingreso en cola. No se cargó otro. Sale cuando SGIT lo envía.");
+    return { alerts };
+  }
+
+  private async readSalidaEstado(refs: string[]) {
+    const found = new Map<string, { estado: string; motivo: string }>();
+    if (!refs.length) return found;
+    const cfg = await this.salida.read();
+    if (!cfg.clave) return found;
+    try {
+      const res = await fetch(`${cfg.url.replace(/\/$/, "")}/estado`, {
+        method: "POST",
+        redirect: "error",
+        signal: AbortSignal.timeout(15000),
+        headers: { "content-type": "application/json", "x-salida-clave": cfg.clave },
+        body: JSON.stringify({ referencias: refs.slice(0, 30) }),
+      });
+      if (!res.ok) return found;
+      const data = await res.json() as { avisos?: Array<{ referencia?: string; estado?: string; motivo?: string }> };
+      for (const aviso of data.avisos || []) {
+        if (!aviso.referencia) continue;
+        found.set(aviso.referencia, { estado: String(aviso.estado || ""), motivo: String(aviso.motivo || "") });
+      }
+    } catch {
+      return found;
+    }
+    return found;
   }
 
   async changeStatus(id: string, statusRaw: string, sendConfirm: boolean, user: AuthUser, ip?: string) {
