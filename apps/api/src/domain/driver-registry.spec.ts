@@ -12,6 +12,7 @@ import {
   normalizeStatus,
   registrationCard,
   registrationRequest,
+  visitWhatsappRef,
   peruLocalPhone,
   peruReplyPhone,
   readXlsxSheets,
@@ -146,6 +147,11 @@ describe("registro de conductores", () => {
     expect(body.registro).toEqual(card);
     expect(body).not.toHaveProperty("html");
     expect(JSON.stringify(body.whatsapp)).not.toContain("mensaje");
+    expect(JSON.stringify(body.whatsapp)).not.toContain("referencia");
+    const marked = registrationRequest(card, [{ telefono: "51900000000", contacto: "51900000001", referencia: "zdry:visita:1:registro:51900000000" }], []);
+    expect(marked.whatsapp).toEqual([{ telefono: "51900000000", contacto: "51900000001", referencia: "zdry:visita:1:registro:51900000000" }]);
+    expect(visitWhatsappRef("abc", "confirmacion")).toBe("zdry:visita:abc:confirmacion");
+    expect(visitWhatsappRef("a".repeat(80), "registro", "51900000000").length).toBe(80);
     expect(htmlSalidaUrl("https://ztrack.app/servicio/salida")).toBe("https://ztrack.app/servicio/salida-registro");
     expect(htmlSalidaUrl("https://ztrack.app/servicio/salida-registro")).toBe("https://ztrack.app/servicio/salida-registro");
   });

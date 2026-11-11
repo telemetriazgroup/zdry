@@ -319,13 +319,24 @@ export function registrationPreview(card: RegistrationCard) {
   ].join("\n");
 }
 
+export function visitWhatsappRef(visitId: string, kind: "confirmacion" | "ubicacion" | "registro", phone = "") {
+  const ref = phone ? `zdry:visita:${visitId}:${kind}:${phone}` : `zdry:visita:${visitId}:${kind}`;
+  return ref.slice(0, 80);
+}
+
 export function registrationRequest(
   card: RegistrationCard,
-  whatsapp: Array<{ telefono: string; contacto: string }>,
+  whatsapp: Array<{ telefono: string; contacto: string; referencia?: string }>,
   correos: string[],
 ) {
   const body: Record<string, unknown> = { registro: card };
-  if (whatsapp.length) body.whatsapp = whatsapp.map((item) => ({ telefono: item.telefono, contacto: item.contacto }));
+  if (whatsapp.length) {
+    body.whatsapp = whatsapp.map((item) => {
+      const row: Record<string, string> = { telefono: item.telefono, contacto: item.contacto };
+      if (item.referencia) row.referencia = item.referencia;
+      return row;
+    });
+  }
   if (correos.length) body.correo = correos.map((direccion) => ({ direccion }));
   return body;
 }

@@ -26,6 +26,7 @@ import {
   registrationCard,
   registrationPreview,
   registrationRequest,
+  visitWhatsappRef,
   registrationRows,
   validatePublicInput,
   PublicInput,
@@ -33,6 +34,8 @@ import {
 import { StorageService } from "../storage/storage.service";
 
 type VisitRow = Prisma.GateVisitGetPayload<object>;
+
+const DRIVER_HOLD_MS = 3 * 60 * 1000;
 
 function manages(role: string) {
   return role === "admin" || role === "superadmin" || role === "coordinador";
@@ -209,7 +212,14 @@ export class DriverRegistryService implements OnModuleInit {
       return;
     }
     const cfg = await this.salida.read();
-    const sent = await this.dispatchRegistration(this.registrationOf(visit), phones, emails, site.replyPhone, cfg);
+    const sent = await this.dispatchRegistration(
+      this.registrationOf(visit),
+      phones,
+      emails,
+      site.replyPhone,
+      cfg,
+      (telefono) => visitWhatsappRef(visit.id, "registro", telefono),
+    );
     await this.storeResults(visit.id, sent.items.map((item) => ({ ...item, kind: "registro", audience: "interno" })));
   }
 
@@ -219,6 +229,7 @@ export class DriverRegistryService implements OnModuleInit {
     emails: string[],
     replyPhone: string,
     cfg: { url: string; clave: string },
+    refFor?: (telefono: string) => string,
   ) {
     const contacto = whatsappDigits(replyPhone);
     const replyOk = contacto.length >= 8 && contacto.length <= 15;
@@ -237,7 +248,11 @@ export class DriverRegistryService implements OnModuleInit {
     }
     const body = registrationRequest(
       card,
-      waReady.map((item) => ({ telefono: item.telefono, contacto })),
+      waReady.map((item) => ({
+        telefono: item.telefono,
+        contacto,
+        referencia: refFor ? refFor(item.telefono) : "",
+      })),
       emails,
     );
     if (!body.whatsapp && !body.correo) {
@@ -280,6 +295,7 @@ export class DriverRegistryService implements OnModuleInit {
     kind: string,
     audience: string,
     cfg: { url: string; clave: string },
+    referencia = "",
   ) {
     const contacto = whatsappDigits(replyPhone);
     const items = phones.map((phone) => ({ destination: phone, telefono: whatsappDigits(phone) }));
@@ -308,7 +324,11 @@ export class DriverRegistryService implements OnModuleInit {
       return;
     }
     const body = {
-      whatsapp: items.map((item) => ({ telefono: item.telefono, mensaje: message, contacto })),
+      whatsapp: items.map((item) => {
+        const row: Record<string, string> = { telefono: item.telefono, mensaje: message, contacto };
+        if (referencia) row.referencia = referencia;
+        return row;
+      }),
     };
     const result = await this.postSalida(cfg.url, cfg.clave, body);
     await this.storeResults(visit.id, items.map((item, index) => {
@@ -394,8 +414,10 @@ export class DriverRegistryService implements OnModuleInit {
       if (visit.status !== "EN ATENCION") {
         throw new BadRequestException("La confirmación se reenvía cuando el ingreso está en atención.");
       }
+      await this.holdDriverSend(visitId);
       const text = await this.driverText(visit, notice.kind === "ubicacion" ? "ubicacion" : "confirmacion", "");
-      await this.sendWhatsapps(visit, [notice.destination], site?.replyPhone || "", text, notice.kind, notice.audience, cfg);
+      const kind = notice.kind === "ubicacion" ? "ubicacion" : "confirmacion";
+      await this.sendWhatsapps(visit, [notice.destination], site?.replyPhone || "", text, notice.kind, notice.audience, cfg, visitWhatsappRef(visit.id, kind));
     } else if (notice.channel === "correo" || notice.channel === "whatsapp") {
       const sent = await this.dispatchRegistration(
         this.registrationOf(visit),
@@ -403,6 +425,7 @@ export class DriverRegistryService implements OnModuleInit {
         notice.channel === "correo" ? [notice.destination] : [],
         site?.replyPhone || "",
         cfg,
+        notice.kind === "registro" ? (telefono) => visitWhatsappRef(visit.id, "registro", telefono) : undefined,
       );
       await this.storeResults(visit.id, sent.items.map((item) => ({ ...item, kind: notice.kind, audience: notice.audience })));
     }
@@ -436,12 +459,35 @@ export class DriverRegistryService implements OnModuleInit {
     if (visit.status !== "EN ATENCION") {
       throw new BadRequestException("La confirmación y la ubicación se envían cuando el ingreso está en atención.");
     }
+    await this.holdDriverSend(id);
     const site = visit.siteId ? await this.prisma.visitSite.findUnique({ where: { id: visit.siteId } }) : null;
     const message = await this.driverText(visit, kind, warehouseId);
     const cfg = await this.salida.read();
-    await this.sendWhatsapps(visit, [visit.phone], site?.replyPhone || "", message, kind, "conductor", cfg);
+    await this.sendWhatsapps(visit, [visit.phone], site?.replyPhone || "", message, kind, "conductor", cfg, visitWhatsappRef(id, kind));
     await this.audit.log({ user, action: "driver_notice", entity: "GateVisit", entityId: id, after: { kind }, ip });
     return this.detail(id);
+  }
+
+  private async holdDriverSend(visitId: string) {
+    const since = new Date(Date.now() - DRIVER_HOLD_MS);
+    const pending = await this.prisma.visitNotice.findFirst({
+      where: {
+        visitId,
+        audience: "conductor",
+        channel: "whatsapp",
+        status: { in: ["en_cola", "en_espera", "ya_enviado"] },
+        createdAt: { gte: since },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!pending) return;
+    if (pending.status === "ya_enviado") {
+      throw new BadRequestException(pending.detail || "Ese envío ya salió.");
+    }
+    if (pending.status === "en_espera") {
+      throw new BadRequestException(pending.detail || "Ese número todavía tiene un mensaje sin salir. No se cargó otro.");
+    }
+    throw new BadRequestException("Ya hay un WhatsApp de este ingreso en cola. No se cargó otro. Sale cuando SGIT lo envía.");
   }
 
   async changeStatus(id: string, statusRaw: string, sendConfirm: boolean, user: AuthUser, ip?: string) {
@@ -628,6 +674,34 @@ export class DriverRegistryService implements OnModuleInit {
       throw error;
     });
     await this.audit.log({ user, action: "create", entity: "VisitRecipient", entityId: row.id, ip });
+    return row;
+  }
+
+  async patchRecipient(id: string, destination: string, user: AuthUser, ip?: string) {
+    if (!manages(user.role)) throw new ForbiddenException("Sin acceso.");
+    const current = await this.prisma.visitRecipient.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException("Destino no encontrado.");
+    let dest = "";
+    if (current.kind === "correo") {
+      dest = String(destination || "").trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(dest)) throw new BadRequestException("El correo no es válido.");
+    } else if (current.kind === "whatsapp") {
+      const phone = peruReplyPhone(destination);
+      if (!phone) throw new BadRequestException("El WhatsApp son 9 dígitos después del 51.");
+      dest = phone;
+    } else {
+      throw new BadRequestException("Ese destino no se puede editar.");
+    }
+    const row = await this.prisma.visitRecipient.update({
+      where: { id },
+      data: { destination: dest, label: dest },
+    }).catch((error: unknown) => {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        throw new BadRequestException(current.kind === "correo" ? "Ese correo ya está en la sede." : "Ese WhatsApp ya está en la sede.");
+      }
+      throw error;
+    });
+    await this.audit.log({ user, action: "update", entity: "VisitRecipient", entityId: id, after: { destination: dest }, ip });
     return row;
   }
 

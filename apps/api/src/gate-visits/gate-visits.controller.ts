@@ -182,6 +182,17 @@ export class GateVisitsController {
   }
 
   @Roles("admin", "coordinador")
+  @Patch("recipients/:id")
+  patchRecipient(
+    @Param("id") id: string,
+    @Body() body: { destination?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.registry.patchRecipient(id, body.destination || "", user, req.ip);
+  }
+
+  @Roles("admin", "coordinador")
   @Delete("recipients/:id")
   removeRecipient(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.registry.removeRecipient(id, user, req.ip);

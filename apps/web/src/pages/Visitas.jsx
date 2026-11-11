@@ -43,6 +43,15 @@ function StageTrack({ status, events }) {
   );
 }
 
+function RegSection({ icon, title, children }) {
+  return (
+    <section className="reg-section">
+      <h3>{icon}<span>{title}</span></h3>
+      <div className="reg-grid">{children}</div>
+    </section>
+  );
+}
+
 function noteTitle(note) {
   if (note.kind === "ubicacion") return "Ubicación";
   if (note.kind === "confirmacion") return "Confirmación";
@@ -86,6 +95,7 @@ export default function Visitas() {
   const [asksDetail, setAsksDetail] = useState(false);
   const [mailDraft, setMailDraft] = useState({});
   const [phoneDraft, setPhoneDraft] = useState({});
+  const [editDest, setEditDest] = useState(null);
   const [warehouse, setWarehouse] = useState({ siteId: "", name: "", mapUrl: "" });
   const [reply, setReply] = useState({ siteId: "", phone: "" });
   const [confirmText, setConfirmText] = useState("");
@@ -150,6 +160,26 @@ export default function Visitas() {
       await api("/gate-visits/recipients", { method: "POST", body: { siteId, kind: "whatsapp", destination: `51${local}` } });
       setPhoneDraft((current) => ({ ...current, [siteId]: "" }));
       setMsg("WhatsApp agregado. Recibirá el aviso cuando un conductor se registre.");
+      await loadMasters();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function saveDest() {
+    if (!editDest) return;
+    setError("");
+    const local = localPhone(editDest.value);
+    if (editDest.kind === "whatsapp" && local.length !== 9) {
+      setError("El WhatsApp son 9 dígitos después del 51.");
+      return;
+    }
+    const destination = editDest.kind === "whatsapp" ? `51${local}` : String(editDest.value || "").trim();
+    try {
+      await api(`/gate-visits/recipients/${editDest.id}`, { method: "PATCH", body: { destination } });
+      const kind = editDest.kind;
+      setEditDest(null);
+      setMsg(kind === "whatsapp" ? "WhatsApp actualizado." : "Correo actualizado.");
       await loadMasters();
     } catch (e) {
       setError(e.message);
@@ -243,7 +273,7 @@ export default function Visitas() {
         body: { status: next, sendConfirm: next === "EN ATENCION" && withConfirm },
       });
       setSelected(detail);
-      setMsg(next === "EN ATENCION" && withConfirm ? "Pasó a EN ATENCIÓN y la confirmación quedó enviada." : "Estado actualizado.");
+      setMsg(next === "EN ATENCION" && withConfirm ? "Pasó a EN ATENCIÓN y la confirmación quedó en la cola." : "Estado actualizado.");
       await load(status);
     } catch (e) {
       setError(e.message);
@@ -359,14 +389,22 @@ export default function Visitas() {
       const detail = await api(`/gate-visits/${selected.id}/driver`, { method: "POST", body: { kind, warehouseId } });
       setSelected(detail);
       const last = (detail.notices || [])[0];
-      if (last && last.status !== "en_cola" && last.status !== "en_espera") {
+      if (last?.status === "ya_enviado") {
+        setMsg(last.detail || "Ese envío ya salió.");
+        return;
+      }
+      if (last?.status === "en_espera") {
+        setError(last.detail || "Ese número todavía tiene un mensaje sin salir. No se cargó otro.");
+        return;
+      }
+      if (last && last.status !== "en_cola") {
         setError(last.detail || "El WhatsApp no quedó en cola.");
         return;
       }
       const place = (detail.warehouses || []).find((item) => item.id === warehouseId);
       setMsg(kind === "ubicacion"
-        ? `Ubicación de ${place?.name || "el almacén"} enviada al WhatsApp del conductor.`
-        : "Confirmación enviada al conductor.");
+        ? `La ubicación de ${place?.name || "el almacén"} quedó en la cola. El transportista la recibe cuando WhatsApp la envía.`
+        : "La confirmación quedó en la cola. El conductor la recibe cuando WhatsApp la envía.");
     } catch (e) {
       setError(e.message);
     }
@@ -566,7 +604,7 @@ export default function Visitas() {
                                 {note.channel === "whatsapp" ? (
                                   <button className="btn-ghost" type="button" onClick={() => setOpenNote(note)}>Ver mensaje</button>
                                 ) : null}
-                                {note.status !== "en_cola" && note.channel !== "interno" ? (
+                                {note.status !== "en_cola" && note.status !== "en_espera" && note.status !== "ya_enviado" && note.channel !== "interno" ? (
                                   <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/${selected.id}/notices/${note.id}/retry`, { method: "POST" }).then(setSelected).catch((e) => setError(e.message))}>Reenviar</button>
                                 ) : null}
                               </span>
@@ -637,23 +675,53 @@ export default function Visitas() {
                 <b>{site.name}</b>
                 <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/sites/${site.id}`, { method: "PATCH", body: { active: !site.active } }).then(loadMasters).catch((e) => setError(e.message))}>{site.active ? "Ocultar del formulario" : "Publicar"}</button>
                 <p className="section-sub">Correos que reciben el aviso</p>
-                <ul>
+                <ul className="drv-dest">
                   {(site.recipients || []).filter((item) => item.kind === "correo").map((item) => (
-                    <li key={item.id}>{item.destination} <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/recipients/${item.id}`, { method: "DELETE" }).then(loadMasters).catch((e) => setError(e.message))}>Quitar</button></li>
+                    editDest?.id === item.id ? (
+                      <li key={item.id}>
+                        <input value={editDest.value} onChange={(e) => setEditDest({ ...editDest, value: e.target.value })} placeholder="correo@empresa.com" />
+                        <button className="btn-primary" type="button" onClick={saveDest}>Guardar</button>
+                        <button className="btn-ghost" type="button" onClick={() => setEditDest(null)}>Cancelar</button>
+                      </li>
+                    ) : (
+                      <li key={item.id}>
+                        <span>{item.destination}</span>
+                        <button className="btn-ghost" type="button" onClick={() => setEditDest({ id: item.id, kind: "correo", value: item.destination })}>Editar</button>
+                        <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/recipients/${item.id}`, { method: "DELETE" }).then(loadMasters).catch((e) => setError(e.message))}>Quitar</button>
+                      </li>
+                    )
                   ))}
                 </ul>
-                <div className="action-row">
-                  <input value={mailDraft[site.id] || ""} onChange={(e) => setMailDraft({ ...mailDraft, [site.id]: e.target.value })} placeholder="correo@empresa.com" />
+                <div className="drv-add">
+                  <label>
+                    <span>Correo</span>
+                    <input value={mailDraft[site.id] || ""} onChange={(e) => setMailDraft({ ...mailDraft, [site.id]: e.target.value })} placeholder="correo@empresa.com" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addMail(site.id); } }} />
+                  </label>
                   <button className="btn-primary" type="button" onClick={() => addMail(site.id)}>Agregar correo</button>
                 </div>
                 <p className="section-sub">WhatsApp que reciben el aviso</p>
-                <ul>
+                <ul className="drv-dest">
                   {(site.recipients || []).filter((item) => item.kind === "whatsapp").map((item) => (
-                    <li key={item.id}>+51 {localPhone(item.destination)} <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/recipients/${item.id}`, { method: "DELETE" }).then(loadMasters).catch((e) => setError(e.message))}>Quitar</button></li>
+                    editDest?.id === item.id ? (
+                      <li key={item.id}>
+                        <PeruPhone value={editDest.value} onChange={(phone) => setEditDest({ ...editDest, value: phone })} placeholder="9 dígitos" />
+                        <button className="btn-primary" type="button" onClick={saveDest}>Guardar</button>
+                        <button className="btn-ghost" type="button" onClick={() => setEditDest(null)}>Cancelar</button>
+                      </li>
+                    ) : (
+                      <li key={item.id}>
+                        <span>+51 {localPhone(item.destination)}</span>
+                        <button className="btn-ghost" type="button" onClick={() => setEditDest({ id: item.id, kind: "whatsapp", value: localPhone(item.destination) })}>Editar</button>
+                        <button className="btn-ghost" type="button" onClick={() => api(`/gate-visits/recipients/${item.id}`, { method: "DELETE" }).then(loadMasters).catch((e) => setError(e.message))}>Quitar</button>
+                      </li>
+                    )
                   ))}
                 </ul>
-                <div className="action-row">
-                  <PeruPhone value={phoneDraft[site.id] || ""} onChange={(phone) => setPhoneDraft({ ...phoneDraft, [site.id]: phone })} placeholder="9 dígitos" />
+                <div className="drv-add">
+                  <label>
+                    <span>WhatsApp</span>
+                    <PeruPhone value={phoneDraft[site.id] || ""} onChange={(phone) => setPhoneDraft({ ...phoneDraft, [site.id]: phone })} placeholder="9 dígitos" />
+                  </label>
                   <button className="btn-primary" type="button" onClick={() => addPhone(site.id)}>Agregar WhatsApp</button>
                 </div>
                 <p className="section-sub">WhatsApp de respuesta: {site.replyPhone ? `+51 ${localPhone(site.replyPhone)}` : "sin número"}</p>
@@ -667,19 +735,19 @@ export default function Visitas() {
                 ) : null}
               </div>
             ))}
-            <div className="form-grid">
-              <div>
-                <label>Sede del número de respuesta</label>
+            <div className="drv-add">
+              <label>
+                <span>Sede del número de respuesta</span>
                 <select value={reply.siteId} onChange={(e) => pickReplySite(e.target.value)}>
                   {masters.sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
                 </select>
-              </div>
-              <div>
-                <label>WhatsApp de respuesta, si contestan el aviso</label>
+              </label>
+              <label>
+                <span>WhatsApp de respuesta, si contestan el aviso</span>
                 <PeruPhone value={reply.phone} onChange={(phone) => setReply({ ...reply, phone })} placeholder="9 dígitos" />
-              </div>
+              </label>
+              <button className="btn-primary" type="button" onClick={saveReply}>Guardar número de respuesta</button>
             </div>
-            <button className="btn-primary" type="button" onClick={saveReply}>Guardar número de respuesta</button>
           </section> : null}
           {menuTab === "motivos" ? <section>
             <h4>Motivos</h4>
@@ -772,59 +840,69 @@ export default function Visitas() {
       ) : null}
       {formOpen && edit ? (
         <div className="overlay open" role="presentation" onClick={() => setFormOpen(false)}>
-          <form className="modal drv-reg-modal" role="dialog" aria-labelledby="drv-reg-title" onClick={(event) => event.stopPropagation()} onSubmit={saveForm}>
-            <div className="modal-head">
-              <h3 id="drv-reg-title">Registro del conductor</h3>
-              <button className="modal-close" type="button" onClick={() => setFormOpen(false)} aria-label="Cerrar">×</button>
-            </div>
-            <div className="modal-body single drv-modal-grid">
-              <label>Sede
-                <select value={edit.siteId} disabled={!manage} onChange={(e) => setEdit({ ...edit, siteId: e.target.value })}>
-                  <option value="">{selected?.siteName || "Sin sede"}</option>
-                  {editOptions.sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
-                </select>
-              </label>
-              <label>Motivo
-                <select value={edit.motiveId} disabled={!manage} onChange={(e) => setEdit({ ...edit, motiveId: e.target.value })}>
-                  <option value="">{selected?.motive || "Sin motivo"}</option>
-                  {editOptions.motives.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </select>
-              </label>
-              <label>Detalle
-                <input value={edit.motiveDetail} disabled={!manage} onChange={(e) => setEdit({ ...edit, motiveDetail: e.target.value })} />
-              </label>
-              <label>Empresa
-                <input value={edit.company} disabled={!manage} onChange={(e) => setEdit({ ...edit, company: e.target.value })} />
-              </label>
-              <label>RUC
-                <input value={edit.ruc} disabled={!manage} onChange={(e) => setEdit({ ...edit, ruc: e.target.value.replace(/\D/g, "").slice(0, 11) })} />
-              </label>
-              <label>Conductor
-                <input value={edit.driverName} disabled={!manage} onChange={(e) => setEdit({ ...edit, driverName: e.target.value })} />
-              </label>
-              <label>Brevete
-                <input value={edit.license} disabled={!manage} onChange={(e) => setEdit({ ...edit, license: e.target.value })} />
-              </label>
-              <label className="drv-span">Teléfono
-                <PeruPhone value={edit.phone} disabled={!manage} onChange={(phone) => setEdit({ ...edit, phone })} />
-              </label>
-              <label>Placa tracto
-                <input value={edit.tractorPlate} disabled={!manage} onChange={(e) => setEdit({ ...edit, tractorPlate: e.target.value.toUpperCase() })} />
-              </label>
-              <label>Placa carreta
-                <input value={edit.trailerPlate} disabled={!manage} onChange={(e) => setEdit({ ...edit, trailerPlate: e.target.value.toUpperCase() })} />
-              </label>
-              <label className="drv-span">Código de equipo
-                <input value={edit.equipmentCode} disabled={!manage} onChange={(e) => setEdit({ ...edit, equipmentCode: e.target.value })} placeholder="4 letras y 7 dígitos" />
-                <small className={isoNote(edit.equipmentCode) ? "drv-iso" : "drv-iso ok"}>{isoNote(edit.equipmentCode) || (edit.equipmentCode ? "Cumple la norma ISO." : "Si lo dejas vacío, no se evalúa.")}</small>
-              </label>
-              <label className="drv-span">Observaciones
-                <textarea value={edit.observations} disabled={!manage} rows={3} onChange={(e) => setEdit({ ...edit, observations: e.target.value })} />
-              </label>
-              <div className="drv-span action-row">
-                {manage ? <button className="btn-primary" type="submit" disabled={savingForm}>{savingForm ? "Guardando…" : "Guardar registro"}</button> : null}
-                <button className="btn-ghost" type="button" onClick={() => setFormOpen(false)}>Cerrar</button>
+          <form className="modal reg-card drv-reg-form" role="dialog" aria-labelledby="drv-reg-title" onClick={(event) => event.stopPropagation()} onSubmit={saveForm}>
+            <header className="reg-banner">
+              <span className="reg-banner-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M3 7h11v8H3V7zm11 2h4l3 3v3h-7V9zM7 18a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm10 0a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" /></svg>
+              </span>
+              <div>
+                <strong id="drv-reg-title">REGISTRO DE CONDUCTORES</strong>
+                <small>Control de ingreso</small>
               </div>
+              <button className="modal-close" type="button" onClick={() => setFormOpen(false)} aria-label="Cerrar">×</button>
+            </header>
+            <div className="reg-body">
+              <RegSection icon={<svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6a2.5 2.5 0 0 1 0 5.5z" /></svg>} title="SEDE DE REGISTRO">
+                <label className="reg-field reg-span">
+                  Sede<i>*</i>
+                  <select value={edit.siteId} disabled={!manage} onChange={(e) => setEdit({ ...edit, siteId: e.target.value })}>
+                    <option value="">{selected?.siteName || "Seleccione una sede"}</option>
+                    {editOptions.sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
+                  </select>
+                  <small>Seleccione la sede de ZGROUP donde realizará el ingreso.</small>
+                </label>
+              </RegSection>
+              <RegSection icon={<svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-8 2-8 5v1h16v-1c0-3-4-5-8-5z" /></svg>} title="DATOS DEL CONDUCTOR">
+                <label className="reg-field">Empresa<i>*</i><input value={edit.company} disabled={!manage} onChange={(e) => setEdit({ ...edit, company: e.target.value })} placeholder="Ingrese la empresa" /></label>
+                <label className="reg-field">RUC<i>*</i><input value={edit.ruc} disabled={!manage} inputMode="numeric" onChange={(e) => setEdit({ ...edit, ruc: e.target.value.replace(/\D/g, "").slice(0, 11) })} placeholder="Ingrese RUC de 11 dígitos" /></label>
+                <label className="reg-field">Nombres y apellidos<i>*</i><input value={edit.driverName} disabled={!manage} onChange={(e) => setEdit({ ...edit, driverName: e.target.value })} placeholder="Ingrese nombres y apellidos" /></label>
+                <label className="reg-field">N.º de brevete<i>*</i><input value={edit.license} disabled={!manage} onChange={(e) => setEdit({ ...edit, license: e.target.value })} placeholder="Ingrese n.º de brevete" /></label>
+                <label className="reg-field">Teléfono<i>*</i><PeruPhone value={edit.phone} disabled={!manage} onChange={(phone) => setEdit({ ...edit, phone })} placeholder="Ingrese teléfono de 9 dígitos" /></label>
+              </RegSection>
+              <RegSection icon={<svg viewBox="0 0 24 24"><path d="M3 7h11v8H3V7zm11 2h4l3 3v3h-7V9zM7 18a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm10 0a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" /></svg>} title="DATOS DEL VEHÍCULO">
+                <label className="reg-field">Placa tracto<i>*</i><input value={edit.tractorPlate} disabled={!manage} onChange={(e) => setEdit({ ...edit, tractorPlate: e.target.value.toUpperCase() })} placeholder="Ingrese placa del tracto" /></label>
+                <label className="reg-field">Placa carreta<i>*</i><input value={edit.trailerPlate} disabled={!manage} onChange={(e) => setEdit({ ...edit, trailerPlate: e.target.value.toUpperCase() })} placeholder="Ingrese placa de la carreta" /></label>
+              </RegSection>
+              <RegSection icon={<svg viewBox="0 0 24 24"><path d="M6 2h9l5 5v15a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V8h4.5zM8 12h8v1.6H8zm0 3.4h8V17H8z" /></svg>} title="DATOS DE LA VISITA">
+                <label className="reg-field">
+                  Motivo de visita<i>*</i>
+                  <select value={edit.motiveId} disabled={!manage} onChange={(e) => setEdit({ ...edit, motiveId: e.target.value })}>
+                    <option value="">{selected?.motive || "Seleccione una opción"}</option>
+                    {editOptions.motives.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                  </select>
+                </label>
+                <label className="reg-field">
+                  Código de equipo
+                  <input value={edit.equipmentCode} disabled={!manage} onChange={(e) => setEdit({ ...edit, equipmentCode: e.target.value })} placeholder="Ingrese código de equipo" />
+                  <small className={isoNote(edit.equipmentCode) ? "reg-iso" : "reg-iso ok"}>{isoNote(edit.equipmentCode) || (edit.equipmentCode ? "Cumple la norma ISO." : "Si lo dejas vacío, no se evalúa.")}</small>
+                </label>
+                {edit.motiveDetail || editOptions.motives.find((item) => item.id === edit.motiveId)?.asksDetail ? (
+                  <label className="reg-field reg-span">Detalle del motivo<i>*</i><input value={edit.motiveDetail} disabled={!manage} onChange={(e) => setEdit({ ...edit, motiveDetail: e.target.value })} placeholder="Describe la visita" /></label>
+                ) : null}
+                <label className="reg-field reg-span">
+                  Observaciones
+                  <textarea value={edit.observations} disabled={!manage} rows={3} onChange={(e) => setEdit({ ...edit, observations: e.target.value })} placeholder="Ingrese observaciones si corresponde" />
+                </label>
+                <div className="reg-field reg-span">
+                  Foto de la unidad
+                  <span className="reg-file">
+                    {selected?.hasPhoto ? <img src={apiUrl(`/gate-visits/${selected.id}/photo`)} alt="Foto de la unidad" /> : null}
+                    <span>{selected?.hasPhoto ? "Foto cargada" : selected?.photoArchived ? "La foto está archivada." : "Sin foto"}</span>
+                  </span>
+                </div>
+              </RegSection>
+              {manage ? <button className="reg-submit" type="submit" disabled={savingForm}>{savingForm ? "GUARDANDO…" : "GUARDAR CAMBIOS"}</button> : null}
+              <button className="reg-dismiss" type="button" onClick={() => setFormOpen(false)}>Cerrar</button>
             </div>
           </form>
         </div>
