@@ -1618,6 +1618,13 @@ tr.archived-row td, tr.archived-row b, .recv-card.archived-row, .recv-card.archi
   .pdp-cta-bar .btn-primary { width: 100%; }
   .pdp-cta-bar .btn-whatsapp,
   .pdp-cta-bar .link-btn { margin-top: 8px; width: 100%; }
+  .modal.reg-alert {
+    height: auto; max-height: none; min-height: 0;
+    border-radius: 14px; max-width: 420px;
+  }
+  .reg-alert-overlay { align-items: center; padding: 16px; height: auto; overflow: auto; }
+  .reg-alert .modal-body { overflow: visible; flex: none; }
+  .reg-alert .action-row .btn-primary { width: 100%; min-height: 44px; }
   .modal-close { width: 42px; height: 42px; font-size: 18px; }
   .modal.quote-modal { max-width: none; }
   .doc-overlay { padding: 0; align-items: stretch; }
@@ -1687,6 +1694,9 @@ tr.archived-row td, tr.archived-row b, .recv-card.archived-row, .recv-card.archi
 .cost-hist { margin: 10px 0 0; padding-left: 18px; font-size: 13px; }
 .cost-hist small { color: var(--text-3); }
 .visita-public { max-width: 720px; margin: 24px auto; }
+.reg-alert-overlay { z-index: 80; align-items: center; justify-content: center; padding: 16px; }
+.reg-alert { max-width: 420px; }
+.reg-alert-list { margin: 0 0 12px; padding-left: 18px; display: grid; gap: 6px; }
 .reg-page {
   min-height: 100vh;
   background: #eef3f8;

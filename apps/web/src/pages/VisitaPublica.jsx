@@ -50,6 +50,47 @@ function siteByName(sites, name) {
   return (sites || []).find((site) => String(site.name || "").trim().toLowerCase() === wanted) || null;
 }
 
+function formIssues(form, motive) {
+  const issues = [];
+  if (!String(form.siteId || "").trim()) issues.push("Selecciona una sede.");
+  if (String(form.company || "").trim().length < 2) issues.push("Indica la empresa.");
+  if (!/^\d{11}$/.test(String(form.ruc || "").replace(/\D/g, ""))) issues.push("El RUC tiene 11 dígitos.");
+  if (String(form.driverName || "").trim().length < 3) issues.push("Indica los nombres y apellidos.");
+  if (String(form.license || "").trim().length < 3) issues.push("Indica el número de brevete.");
+  if (!/^\d{9}$/.test(String(form.phone || "").replace(/\D/g, ""))) issues.push("El teléfono tiene 9 dígitos.");
+  if (String(form.tractorPlate || "").trim().length < 3) issues.push("Indica la placa del tracto.");
+  if (String(form.trailerPlate || "").trim().length < 3) issues.push("Indica la placa de la carreta.");
+  if (!String(form.motiveId || "").trim()) issues.push("Selecciona el motivo de visita.");
+  if (motive?.asksDetail && String(form.motiveDetail || "").trim().length < 3) issues.push("Si el motivo es Otros, escribe el detalle.");
+  return issues;
+}
+
+function FieldAlert({ items, onClose }) {
+  if (!items.length) return null;
+  return (
+    <div className="overlay open reg-alert-overlay" role="presentation">
+      <div className="modal reg-alert" role="dialog" aria-modal="true">
+        <div className="modal-head">
+          <h3>Revisa el registro</h3>
+          <button className="modal-close" type="button" onClick={onClose} aria-label="Cerrar">×</button>
+        </div>
+        <div className="modal-body single">
+          {items.length === 1 ? <p>{items[0]}</p> : (
+            <ul className="reg-alert-list">
+              {items.map((item) => <li key={item}>{item}</li>)}
+            </ul>
+          )}
+          <div className="action-row">
+            <button className="btn-primary" type="button" onClick={onClose}>Entendido</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ""));
+}
+
 function isVisitToken(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ""));
 }
@@ -89,6 +130,7 @@ export default function VisitaPublica() {
   const [photoBust, setPhotoBust] = useState(0);
   const [ticket, setTicket] = useState(null);
   const [qrSrc, setQrSrc] = useState("");
+  const [alertItems, setAlertItems] = useState([]);
 
   const staffVisitas = hasRole(user, "admin", "coordinador", "almacen");
   const motive = options.motives.find((item) => item.id === form.motiveId);
@@ -119,7 +161,7 @@ export default function VisitaPublica() {
         setOptions({ sites: data.sites || [], motives: data.motives || [] });
         const sites = data.sites || [];
         const picked = siteByName(sites, siteSlug) || siteByName(sites, "Piura") || sites[0];
-        if (siteSlug && !siteByName(sites, siteSlug)) setError(`No hay una sede ${siteSlug}. Quedó Piura.`);
+        if (siteSlug && !siteByName(sites, siteSlug)) setAlertItems([`No hay una sede ${siteSlug}. Quedó Piura.`]);
         setForm((current) => ({
           ...current,
           siteId: current.siteId || picked?.id || "",
@@ -186,8 +228,9 @@ export default function VisitaPublica() {
   function submitForm(e) {
     e.preventDefault();
     setError("");
-    if (motive?.asksDetail && form.motiveDetail.trim().length < 3) {
-      setError("Si el motivo es Otros, escribe el detalle.");
+    const issues = formIssues(form, motive);
+    if (issues.length) {
+      setAlertItems(issues);
       return;
     }
     proceed();
@@ -216,7 +259,9 @@ export default function VisitaPublica() {
       setLocked(!!next?.locked);
       if (v?.publicToken) nav(`/visita/${v.publicToken}?recibo=1`, { replace: true });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : err.message);
+      const text = err instanceof ApiError ? err.message : err.message;
+      setError(text);
+      setAlertItems([text]);
     } finally {
       setBusy(false);
     }
@@ -294,7 +339,7 @@ export default function VisitaPublica() {
   return (
     <div className="reg-page">
       <Brand />
-      <form className="reg-card" onSubmit={submitForm}>
+      <form className="reg-card" onSubmit={submitForm} noValidate>
         <header className="reg-banner">
           <span className="reg-banner-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24"><path d="M3 7h11v8H3V7zm11 2h4l3 3v3h-7V9zM7 18a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm10 0a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" /></svg>
@@ -359,6 +404,7 @@ export default function VisitaPublica() {
           <p className="reg-safe">La información será registrada de forma segura.</p>
         </div>
       </form>
+      <FieldAlert items={alertItems} onClose={() => setAlertItems([])} />
       {lb.node}
     </div>
   );
