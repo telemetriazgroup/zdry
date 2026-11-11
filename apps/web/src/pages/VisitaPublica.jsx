@@ -236,7 +236,7 @@ export default function VisitaPublica() {
   };
   const welcomeName = (ticket?.driverName || form.driverName || "").trim() || "a ZGROUP";
 
-  if (token && ready && staffVisitas && !showReceipt && !forceEdit && !error) {
+  if (visitToken && ready && staffVisitas && !showReceipt && !forceEdit && !error) {
     return (
       <div className="reg-page">
         <Brand />
