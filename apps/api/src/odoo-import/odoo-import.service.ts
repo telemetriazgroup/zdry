@@ -44,6 +44,7 @@ import { applySerialTextRefs, assignRefsBySharedMove, purchaseRefFromOrder, type
 import {
   assimilateCostPlan,
   availabilityAfterStock,
+  statusWhenLotsConflict,
   classifyLotOrigin,
   dossierKindForMove,
   catalogAfterDispatch,
@@ -1856,7 +1857,10 @@ export class OdooImportService {
       const rows = await this.prisma.odooLotCandidate.findMany({
         where: { status: { not: "ignored" }, OR: [{ isoNormalized: want }, { containerIso: iso }] },
       });
-      linked = rows.find((row) => serialOf(row) === want) || null;
+      linked =
+        rows.find((row) => serialOf(row) === want && (row.qtyOnHand ?? 0) > 0) ||
+        rows.find((row) => serialOf(row) === want) ||
+        null;
     }
     if (!linked) {
       return {
@@ -3043,7 +3047,14 @@ export class OdooImportService {
     const saleByName = new Map(sales.map((s) => [String(s.name || ""), s]));
     const cands = await this.prisma.odooLotCandidate.findMany({ where: { odooLotId: { in: ids } } });
     const candByLot = new Map(cands.map((c) => [c.odooLotId, c]));
-    const onHand = await this.internalQtyByLot(ids);
+    const serials = [...new Set(cands.map((c) => c.isoNormalized).filter((iso): iso is string => !!iso))];
+    const family = serials.length
+      ? await this.prisma.odooLotCandidate.findMany({
+          where: { isoNormalized: { in: serials }, status: { not: "ignored" } },
+          select: { odooLotId: true, isoNormalized: true },
+        })
+      : [];
+    const onHand = await this.internalQtyByLot([...new Set([...ids, ...family.map((row) => row.odooLotId)])]);
     let n = 0;
     let left = 0;
     for (const lotId of ids) {
@@ -3056,6 +3067,14 @@ export class OdooImportService {
       const names: string[] = [];
       const internalQty = onHand ? (onHand.get(lotId) ?? 0) : null;
       const avail = availabilityAfterStock(moves, internalQty);
+      const siblings = family
+        .filter((other) => other.odooLotId !== lotId && other.isoNormalized === iso)
+        .map((other) => ({ odooLotId: other.odooLotId, qty: onHand ? (onHand.get(other.odooLotId) ?? 0) : null }));
+      const decided = statusWhenLotsConflict(
+        { qty: internalQty, availability: avail.availability, pickingName: avail.pickingName, destName: avail.destName },
+        siblings,
+      );
+      const live = decided.keepExpediente ? siblings.find((row) => (row.qty ?? 0) > 0) : null;
       if (onHand) {
         await this.prisma.odooLotCandidate.updateMany({
           where: { odooLotId: lotId },
@@ -3140,7 +3159,7 @@ export class OdooImportService {
         );
         linkedSale = true;
       }
-      if (avail.availability === "left" && !linkedSale) {
+      if (!decided.keepExpediente && avail.availability === "left" && !linkedSale) {
         const extra = await this.salesForSerial(iso);
         for (const sale of extra) {
           const name = String(sale.name || "").trim();
@@ -3172,9 +3191,17 @@ export class OdooImportService {
           );
         }
       }
-      await this.expediente.retainDocs(iso, ["picking_in", "picking_out", "transfer", "repair", "sale"], names);
-      if (avail.availability === "left") left += 1;
-      await this.applyLotAvailability(cand?.containerIso || iso, lotId, avail);
+      if (!decided.keepExpediente) {
+        await this.expediente.retainDocs(iso, ["picking_in", "picking_out", "transfer", "repair", "sale"], names);
+      }
+      if (live) {
+        await this.prisma.container.updateMany({
+          where: { iso: cand?.containerIso || iso, OR: [{ odooLotId: lotId }, { odooLotId: null }] },
+          data: { odooLotId: live.odooLotId },
+        });
+      }
+      if (decided.apply.availability === "left") left += 1;
+      await this.applyLotAvailability(cand?.containerIso || iso, live?.odooLotId || lotId, decided.apply);
       n += 1;
     }
     return { checked: n, left };

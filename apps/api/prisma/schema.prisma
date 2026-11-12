@@ -648,6 +648,21 @@ model Dispatch {
   @@index([status])
 }
 
+model YardExit {
+  id            String    @id @default(uuid())
+  iso           String
+  depotId       String
+  destination   String
+  note          String    @default("")
+  status        String    @default("pendiente")
+  createdByName String    @default("")
+  createdAt     DateTime  @default(now())
+  cancelledAt   DateTime?
+
+  @@index([depotId, status])
+  @@index([iso, status])
+}
+
 model OdooLotCandidate {
   id             String    @id @default(uuid())
   odooLotId      Int       @unique

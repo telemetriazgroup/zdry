@@ -1,6 +1,6 @@
 import { PrismaService } from "../prisma/prisma.service";
 import { readMovementPolicy, retrievalReference, type MovementPolicy } from "./freight-stub";
-import { asBayHalf, ghostsWithSupport, movesAbove, normalizeYardPlan } from "./yard-plan";
+import { asBayHalf, ghostsWithSupport, movesToReach, normalizeYardPlan } from "./yard-plan";
 
 type YardRow = {
   iso: string;
@@ -38,7 +38,7 @@ export async function retrievalByIso(prisma: PrismaService, rows: YardRow[], pol
       }));
     const ghosts = ghostsWithSupport(stored.zones, stored.ghosts, stacked);
     for (const unit of stacked) {
-      const moves = movesAbove(stored.zones, ghosts, stacked, unit.zoneName, unit.row, unit.col, unit.level, unit.iso, unit.half, unit.type);
+      const moves = movesToReach(stored.zones, ghosts, stacked, unit.zoneName, unit.row, unit.col, unit.level, unit.iso, unit.half, unit.type).total;
       result.set(unit.iso, retrievalReference(moves, active));
     }
   }

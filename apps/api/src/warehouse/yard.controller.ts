@@ -51,6 +51,29 @@ export class YardController {
     return this.warehouse.movementHistory(iso, depotId || "");
   }
 
+  @Post("fence")
+  fence(
+    @Body() body: { depotId?: string; sideId?: string; slot?: number; level?: number; iso?: string; wall?: boolean; move?: boolean; half?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.assignFence(body, user, req.ip);
+  }
+
+  @Post("exit")
+  exit(
+    @Body() body: { depotId?: string; iso?: string; destination?: string; note?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.registerExit(body, user, req.ip);
+  }
+
+  @Post("exit/:id/cancel")
+  cancelExit(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.warehouse.cancelExit(id, user, req.ip);
+  }
+
   @Post("place")
   place(
     @Body() body: { iso?: string; depotId?: string; lado?: string; ruma?: number; columna?: number; nivel?: number; half?: string },
@@ -63,6 +86,15 @@ export class YardController {
   @Post("compact")
   compact(@Body() body: { depotId?: string }, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.warehouse.compact(body.depotId || "", user, req.ip);
+  }
+
+  @Post("scenario")
+  loadScenario(
+    @Body() body: { depotId?: string; scenario?: string; withPerimeter?: boolean },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.loadDemoScenario(body.depotId || "", body.scenario || "", body.withPerimeter === true, user, req.ip);
   }
 
   @Post("reset")

@@ -218,6 +218,35 @@ export function availabilityAfterStock(
   };
 }
 
+export type SerialLotView = {
+  qty: number | null;
+  availability: LotAvailability;
+  pickingName: string | null;
+  destName: string | null;
+};
+
+/**
+ * Varios lotes de la misma serie. Manda el que Odoo todavía tiene en una
+ * ubicación interna. Un lote viejo en cero, sin salida a cliente, no cierra
+ * la unidad ni debe borrar el expediente del lote que sigue en stock.
+ * Una OUT hecha del lote que sí tiene cantidad sigue cerrando.
+ */
+export function statusWhenLotsConflict(
+  own: SerialLotView,
+  siblings: Array<{ qty: number | null }>,
+): { apply: SerialLotView; keepExpediente: boolean } {
+  const otherHasStock = siblings.some((row) => (row.qty ?? 0) > 0);
+  const closedOnlyBecauseEmpty =
+    own.availability === "left" && (own.qty ?? 0) <= 0 && own.pickingName === "sin existencia interna";
+  if (otherHasStock && closedOnlyBecauseEmpty) {
+    return {
+      apply: { qty: own.qty, availability: "stock", pickingName: null, destName: null },
+      keepExpediente: true,
+    };
+  }
+  return { apply: own, keepExpediente: false };
+}
+
 export function serialSearchForms(iso: string): string[] {
   const raw = String(iso || "").toUpperCase().trim();
   const compact = raw.replace(/[^A-Z0-9]/g, "");

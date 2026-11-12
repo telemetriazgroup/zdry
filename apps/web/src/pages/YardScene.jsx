@@ -149,6 +149,285 @@ function groundLabel(text) {
   return mesh;
 }
 
+function walkPerimeter(sides) {
+  const points = [{ x: 0, z: 0 }];
+  let x = 0;
+  let z = 0;
+  let heading = 0;
+  sides.forEach((side) => {
+    const length = Number(side.lengthM) || 0;
+    x += Math.cos(heading) * length;
+    z += Math.sin(heading) * length;
+    points.push({ x, z });
+    heading += ((Number(side.turnDeg) || 0) * Math.PI) / 180;
+  });
+  return points;
+}
+
+function pointAlong(a, b, meters, length) {
+  const f = length ? meters / length : 0;
+  return { x: a.x + (b.x - a.x) * f, z: a.z + (b.z - a.z) * f };
+}
+
+function addRun(root, disposables, from, to, height, thick, color, y) {
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  const len = Math.hypot(dx, dz);
+  if (len < 0.2) return;
+  const geometry = new THREE.BoxGeometry(len, height, thick);
+  const material = new THREE.MeshStandardMaterial({ color, roughness: 0.82, metalness: 0.04 });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set((from.x + to.x) / 2, y + height / 2, (from.z + to.z) / 2);
+  mesh.rotation.y = -Math.atan2(dz, dx);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  root.add(mesh);
+  disposables.push(geometry, material);
+}
+
+function addFenceBox(root, disposables, from, to, unit, pick) {
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  const len = Math.hypot(dx, dz);
+  if (len < 0.2) return;
+  const height = unit ? 2.59 : 0.28;
+  const texture = faceTexture(unit?.typeColor || "#8ea0b5", unit ? String(unit.iso).slice(-6) : "LIBRE", !unit);
+  const geometry = new THREE.BoxGeometry(len, height, 2.44);
+  const material = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.62, metalness: 0.04 });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set((from.x + to.x) / 2, (pick.level - 1) * 2.59 + height / 2, (from.z + to.z) / 2);
+  mesh.rotation.y = -Math.atan2(dz, dx);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  if (unit) mesh.userData.pick = pick;
+  root.add(mesh);
+  disposables.push(geometry, material, texture);
+}
+
+function addFenceTarget(root, disposables, from, to, level, pick) {
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  const len = Math.hypot(dx, dz);
+  if (len < 0.2) return;
+  const height = 2.59;
+  const geometry = new THREE.BoxGeometry(len, height, 2.44);
+  const material = new THREE.MeshBasicMaterial({ color: "#f0c14a", transparent: true, opacity: 0.9 });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set((from.x + to.x) / 2, (level - 1) * 2.59 + height / 2, (from.z + to.z) / 2);
+  mesh.rotation.y = -Math.atan2(dz, dx);
+  mesh.userData.pick = pick;
+  root.add(mesh);
+  disposables.push(geometry, material);
+}
+
+function fenceLevelCells(perimeter, sideId, slot, level) {
+  return (perimeter?.cells || []).filter((item) => item.sideId === sideId && Number(item.slot) === slot && Number(item.level) === level);
+}
+
+function fenceHalfOpen(cells, half) {
+  const others = cells || [];
+  if (!half) return !others.length;
+  return !others.some((cell) => !cell.half || cell.half === half);
+}
+
+function fenceHalfSupported(perimeter, side, slot, level, half, movingIso) {
+  if (level <= 1) return true;
+  const below = fenceLevelCells(perimeter, side.id, slot, level - 1).filter((cell) => cell.iso !== movingIso);
+  if (!half) {
+    return below.some((cell) => !cell.half) || (below.some((cell) => cell.half === "A") && below.some((cell) => cell.half === "B"));
+  }
+  return below.some((cell) => !cell.half || cell.half === half);
+}
+
+function fenceOpenLevel(perimeter, side, slot, half, movingIso) {
+  const levels = Math.min(3, Math.max(1, Number(side.levels) || 1));
+  for (let level = 1; level <= levels; level += 1) {
+    if (!fenceHalfOpen(fenceLevelCells(perimeter, side.id, slot, level), half, movingIso)) continue;
+    if (!fenceHalfSupported(perimeter, side, slot, level, half, movingIso)) return 0;
+    return level;
+  }
+  return 0;
+}
+
+function shiftInside(from, to, amount) {
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  const len = Math.hypot(dx, dz) || 1;
+  const ox = (-dz / len) * amount;
+  const oz = (dx / len) * amount;
+  return {
+    from: { x: from.x + ox, z: from.z + oz },
+    to: { x: to.x + ox, z: to.z + oz },
+  };
+}
+
+function addPerimeter(root, disposables, perimeter, bounds, units = [], options = {}) {
+  const sides = perimeter?.sides || [];
+  if (sides.length < 3) return;
+  const raw = walkPerimeter(sides);
+  const xs = raw.map((point) => point.x);
+  const zs = raw.map((point) => point.z);
+  const shiftX = (bounds.minX + bounds.maxX) / 2 - (Math.min(...xs) + Math.max(...xs)) / 2;
+  const shiftZ = (bounds.minZ + bounds.maxZ) / 2 - (Math.min(...zs) + Math.max(...zs)) / 2;
+  const points = raw.map((point) => ({ x: point.x + shiftX, z: point.z + shiftZ }));
+  points.forEach((point) => {
+    bounds.minX = Math.min(bounds.minX, point.x);
+    bounds.maxX = Math.max(bounds.maxX, point.x);
+    bounds.minZ = Math.min(bounds.minZ, point.z);
+    bounds.maxZ = Math.max(bounds.maxZ, point.z);
+  });
+  sides.forEach((side, index) => {
+    const from = points[index];
+    const to = points[index + 1];
+    const length = Number(side.lengthM) || 0;
+    const feet = Number(side.containerFeet) === 20 ? 6.1 : 12.2;
+    const wallUntil = side.kind === "pared" ? length : side.kind === "mixto" ? Math.min(Number(side.wallM) || 0, length) : 0;
+    const cuts = (perimeter.gates || [])
+      .filter((gate) => gate.sideId === side.id)
+      .map((gate) => ({ from: Number(gate.atM) || 0, to: (Number(gate.atM) || 0) + (Number(gate.widthM) || 0), name: gate.name }))
+      .filter((gate) => gate.to > gate.from && gate.from < length)
+      .sort((a, b) => a.from - b.from);
+    const spans = [];
+    let cursor = 0;
+    cuts.forEach((cut) => {
+      const start = Math.max(0, Math.min(length, cut.from));
+      const end = Math.max(start, Math.min(length, cut.to));
+      if (start > cursor) spans.push({ from: cursor, to: start });
+      spans.push({ from: start, to: end, gate: cut.name || "Entrada" });
+      cursor = end;
+    });
+    if (cursor < length) spans.push({ from: cursor, to: length });
+    spans.forEach((span) => {
+      const a = pointAlong(from, to, span.from, length);
+      const b = pointAlong(from, to, span.to, length);
+      if (span.gate) {
+        addRun(root, disposables, a, b, 0.08, 6, "#6b7280", 0.02);
+        const label = groundLabel(span.gate);
+        label.position.set((a.x + b.x) / 2, 0.06, (a.z + b.z) / 2);
+        root.add(label);
+        disposables.push(label.geometry, label.material, label.material.map);
+        return;
+      }
+      let at = span.from;
+      while (at < span.to - 0.2) {
+        const remain = span.to - at;
+        const container = at >= wallUntil;
+        const step = container ? Math.min(feet, remain) : Math.min(remain, wallUntil - at || remain);
+        const next = at + Math.max(step, 0.2);
+        const pieceFrom = pointAlong(from, to, at, length);
+        const pieceTo = pointAlong(from, to, Math.min(next, span.to), length);
+        if (container && remain + 0.05 >= feet) {
+          const slot = Math.floor((at - wallUntil + 0.05) / feet) + 1;
+          const end = pointAlong(from, to, at + feet, length);
+          if ((side.wallSlots || []).includes(slot)) {
+            addRun(root, disposables, pieceFrom, end, 3.2, 0.35, "#d5d8de", 0);
+          } else {
+            const levels = Math.min(3, Math.max(1, Number(side.levels) || 1));
+            const incomingFeet = feetOf(options.incomingType);
+            const wide = Number(side.containerFeet) !== 20;
+            const drawSpan = (fromM, toM, unit, pick) => {
+              const start = pointAlong(from, to, fromM, length);
+              const finish = pointAlong(from, to, toM, length);
+              const shifted = shiftInside(start, finish, 1.6);
+              if (pick.empty) addFenceTarget(root, disposables, shifted.from, shifted.to, pick.level, pick);
+              else addFenceBox(root, disposables, shifted.from, shifted.to, unit, pick);
+            };
+            const whereOf = (level, half) => `Cerco · ${side.name} · puesto ${slot} · nivel ${level}${half ? ` · mitad ${half}` : ""}`;
+            for (let level = 1; level <= levels; level += 1) {
+              const here = fenceLevelCells(perimeter, side.id, slot, level);
+              const fullCell = here.find((cell) => !cell.half);
+              if (fullCell) {
+                const unit = units.find((item) => item.iso === fullCell.iso);
+                if (unit) {
+                  drawSpan(at, at + feet, unit, {
+                    key: unit.iso,
+                    code: unit.iso,
+                    typeLabel: unit.typeLabel || unit.type || "Puesto de cerco",
+                    where: whereOf(level, ""),
+                    note: unit.status || "En el cerco",
+                    level,
+                  });
+                }
+                continue;
+              }
+              const fullTarget = options.targets && incomingFeet === 40 && wide && fenceOpenLevel(perimeter, side, slot, "", options.movingIso) === level;
+              if (fullTarget) {
+                drawSpan(at, at + feet, null, {
+                  key: `fence-${side.id}-${slot}-${level}`,
+                  empty: true,
+                  fence: true,
+                  sideId: side.id,
+                  slot,
+                  level,
+                  code: "Cerco libre",
+                  typeLabel: "40 pies",
+                  where: whereOf(level, ""),
+                  note: "Puesto de 40 pies libre. También caben dos de 20.",
+                });
+                continue;
+              }
+              const parts = wide ? ["A", "B"] : [""];
+              parts.forEach((half, index) => {
+                const piece = feet / parts.length;
+                const fromM = at + index * piece;
+                const cell = here.find((item) => (item.half || "") === half);
+                const unit = cell ? units.find((item) => item.iso === cell.iso) : null;
+                const halfTarget = options.targets && incomingFeet === 20 && (wide || Number(side.containerFeet) === 20) && fenceOpenLevel(perimeter, side, slot, wide ? half : "", options.movingIso) === level;
+                if (unit) {
+                  drawSpan(fromM, fromM + piece, unit, {
+                    key: unit.iso,
+                    code: unit.iso,
+                    typeLabel: unit.typeLabel || unit.type || "Puesto de cerco",
+                    where: whereOf(level, half),
+                    note: unit.status || "En el cerco",
+                    level,
+                    half: half || undefined,
+                  });
+                  return;
+                }
+                if (halfTarget) {
+                  drawSpan(fromM, fromM + piece, null, {
+                    key: `fence-${side.id}-${slot}-${level}-${half || "F"}`,
+                    empty: true,
+                    fence: true,
+                    sideId: side.id,
+                    slot,
+                    level,
+                    half: wide ? half : undefined,
+                    code: "Cerco libre",
+                    typeLabel: wide ? `20 pies · mitad ${half}` : "20 pies",
+                    where: whereOf(level, half),
+                    note: wide ? "Mitad libre de un puesto de 40 pies." : "Puesto libre del cerco.",
+                  });
+                  return;
+                }
+                if (level === 1 && index === 0 && !here.length) {
+                  addFenceBox(root, disposables, pieceFrom, end, null, {
+                    key: "",
+                    code: "Cerco libre",
+                    typeLabel: "Puesto de cerco",
+                    where: whereOf(level, ""),
+                    note: "Puesto libre.",
+                    level,
+                  });
+                }
+              });
+            }
+          }
+          at += feet;
+        } else if (container) {
+          addRun(root, disposables, pieceFrom, pointAlong(from, to, span.to, length), 2.4, 0.35, "#d5d8de", 0);
+          at = span.to;
+        } else {
+          addRun(root, disposables, pieceFrom, pieceTo, 3.2, 0.35, "#d5d8de", 0);
+          at = next;
+        }
+      }
+    });
+  });
+  return { minX: bounds.minX, maxX: bounds.maxX, minZ: bounds.minZ, maxZ: bounds.maxZ };
+}
+
 function buildYard(zones, units, ghosts, typeColor, options = {}) {
   const stackedUnits = (units || []).filter((unit) => unit.lado && !unit.onAisle && unit.lado !== "PASILLO");
   const held = (units || []).filter((unit) => unit.onAisle || unit.lado === "PASILLO");
@@ -164,8 +443,8 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
   let maxZ = -Infinity;
 
   zones.forEach((zone) => {
-    const originX = ((Number(zone.gridCol) || 1) - 1) * (blockX + AISLE);
-    const originZ = ((Number(zone.gridRow) || 1) - 1) * (blockZ + AISLE);
+    const originX = Number.isFinite(Number(zone.xM)) ? Number(zone.xM) : ((Number(zone.gridCol) || 1) - 1) * (blockX + AISLE);
+    const originZ = Number.isFinite(Number(zone.zM)) ? Number(zone.zM) : ((Number(zone.gridRow) || 1) - 1) * (blockZ + AISLE);
     const padW = zone.cols * PITCH_X - 0.4;
     const padD = zone.rows * PITCH_Z - 0.3;
     const pad = new THREE.Mesh(
@@ -180,6 +459,25 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
     title.position.set(originX + padW / 2, 0.04, originZ + padD - 1.2);
     root.add(title);
     disposables.push(pad.geometry, pad.material, title.geometry, title.material, title.material.map);
+    if (zone.closedSide) {
+      const thick = 0.45;
+      const height = 3.2;
+      const alongRows = zone.closedSide === "frente" || zone.closedSide === "fondo";
+      const width = alongRows ? padW : thick;
+      const depth = alongRows ? thick : padD;
+      const x = zone.closedSide === "derecha" ? originX + padW - thick / 2 : zone.closedSide === "izquierda" ? originX + thick / 2 : originX + padW / 2;
+      const z = zone.closedSide === "fondo" ? originZ + padD - thick / 2 : zone.closedSide === "frente" ? originZ + thick / 2 : originZ + padD / 2;
+      const wallGeometry = new THREE.BoxGeometry(width, height, depth);
+      const wallMaterial = new THREE.MeshStandardMaterial({ color: "#5c6570", roughness: 0.9, metalness: 0.02 });
+      const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+      wall.position.set(x, height / 2, z);
+      wall.castShadow = true;
+      root.add(wall);
+      const closedLabel = groundLabel("Sin acceso");
+      closedLabel.position.set(x, 0.05, z);
+      root.add(closedLabel);
+      disposables.push(wallGeometry, wallMaterial, closedLabel.geometry, closedLabel.material, closedLabel.material.map);
+    }
     minX = Math.min(minX, originX);
     maxX = Math.max(maxX, originX + padW);
     minZ = Math.min(minZ, originZ);
@@ -380,27 +678,34 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
     disposables.push(geometry, material, texture, edges.geometry, edges.material);
   });
 
+  const fenceBounds = addPerimeter(root, disposables, options.perimeter, { minX, maxX, minZ, maxZ }, units, options);
+
   const picks = [];
   root.traverse((node) => {
     if (node.userData.pick) picks.push(node.position);
   });
+  const framed = (options.perimeter?.sides || []).length >= 3;
   const center = new THREE.Vector3();
-  if (picks.length) {
+  if (framed) {
+    center.set((fenceBounds.minX + fenceBounds.maxX) / 2, 0, (fenceBounds.minZ + fenceBounds.maxZ) / 2);
+  } else if (picks.length) {
     picks.forEach((position) => center.add(position));
     center.multiplyScalar(1 / picks.length);
   } else {
     center.set((minX + maxX) / 2, 0, (minZ + maxZ) / 2);
   }
-  const radius = picks.length
-    ? Math.max(...picks.map((position) => position.distanceTo(center)), 8)
-    : Math.max(spanX, spanZ, 12) / 2;
+  const radius = framed
+    ? Math.max(Math.hypot(fenceBounds.maxX - fenceBounds.minX, fenceBounds.maxZ - fenceBounds.minZ) / 2, 12)
+    : picks.length
+      ? Math.max(...picks.map((position) => position.distanceTo(center)), 8)
+      : Math.max(spanX, spanZ, 12) / 2;
   root.userData.center = center;
   root.userData.radius = radius;
   root.userData.disposables = disposables;
   return root;
 }
 
-export default function YardScene({ zones, units, ghosts, typeColor, onPick, picked, onClose, targets, incomingType, transferring, onTransfer, onSlide, onSplit, onContextMenu, onPark, onRelease, history }) {
+export default function YardScene({ zones, units, ghosts, perimeter, typeColor, onPick, picked, onClose, targets, incomingType, movingIso, transferring, onTransfer, onSlide, onSplit, onContextMenu, onPark, onRelease, history, fenceHint }) {
   const mountRef = useRef(null);
   const pickRef = useRef(onPick);
   const menuRef = useRef(onContextMenu);
@@ -414,13 +719,16 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
   menuRef.current = onContextMenu;
   colorRef.current = typeColor;
   selectedRef.current = picked && !picked.empty ? (picked.key || "") : "";
-  dataRef.current = { zones, units, ghosts, targets, incomingType };
+  dataRef.current = { zones, units, ghosts, targets, incomingType, perimeter, movingIso };
   const yardKey = JSON.stringify({
-    zones: (zones || []).map((zone) => [zone.id, zone.name, zone.rows, zone.cols, zone.levels, zone.gridRow, zone.gridCol]),
+    zones: (zones || []).map((zone) => [zone.id, zone.name, zone.rows, zone.cols, zone.levels, zone.gridRow, zone.gridCol, zone.xM || 0, zone.zM || 0, zone.closedSide || ""]),
     units: (units || []).map((unit) => [unit.iso, unit.lado, unit.ruma, unit.columna, unit.nivel, unit.type, unit.onAisle, unit.bayHalf || ""]),
     ghosts: (ghosts || []).map((ghost) => [ghost.zoneId, ghost.row, ghost.col, ghost.level, ghost.code || "", ghost.typeCode || "", ghost.half || ""]),
+    perimeter: (perimeter?.sides || []).map((side) => [side.id, side.name, side.lengthM, side.turnDeg, side.kind, side.containerFeet, side.wallM, side.levels, side.wallSlots || [], ...(perimeter.gates || []).filter((gate) => gate.sideId === side.id).map((gate) => [gate.atM, gate.widthM])]),
+    cells: (perimeter?.cells || []).map((cell) => [cell.sideId, cell.slot, cell.level, cell.iso, cell.half || ""]),
     targets: Boolean(targets),
     incomingType: incomingType || "",
+    movingIso: movingIso || "",
   });
 
   useEffect(() => {
@@ -526,7 +834,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
         scene.remove(content);
       }
       const data = dataRef.current;
-      content = buildYard(data.zones, data.units, data.ghosts, colorRef.current, { targets: data.targets, incomingType: data.incomingType });
+      content = buildYard(data.zones, data.units, data.ghosts, colorRef.current, { targets: data.targets, incomingType: data.incomingType, perimeter: data.perimeter, units: data.units, movingIso: data.movingIso });
       yardRoot.current = content;
       scene.add(content);
       const next = first || mode === "overview" ? "overview" : mode;
@@ -674,7 +982,8 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
   }, []);
 
   useEffect(() => {
-    viewRef.current?.rebuild(selectedRef.current ? "selection" : "keep");
+    const showTargets = dataRef.current.targets;
+    viewRef.current?.rebuild(showTargets ? "overview" : (selectedRef.current ? "selection" : "keep"));
   }, [yardKey]);
 
   const focusKey = picked && !picked.empty ? (picked.key || "") : "";
@@ -707,6 +1016,7 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
               <button type="button" aria-label="Cerrar" onClick={onClose}>×</button>
             </div>
             <p>{picked.where}</p>
+            {picked.note ? <p>{picked.note}</p> : null}
             <p>{picked.access}</p>
             <p>{picked.cost}</p>
             {picked.unknown ? <p>Este hueco no está en el catálogo.</p> : <p className="yard-float-note">Esa referencia de movimientos queda en el catálogo comercial.</p>}
@@ -747,7 +1057,8 @@ export default function YardScene({ zones, units, ghosts, typeColor, onPick, pic
               {transferring ? <button className="btn-ghost" type="button" onClick={onPark}>Pasillo</button> : null}
               {transferring ? <button className="btn-ghost" type="button" onClick={onRelease}>Devolver</button> : null}
             </div>
-            {transferring ? <p>Elige un cuadro amarillo libre. Un 40 cabe sobre dos de 20, uno a cada lado.</p> : null}
+            {transferring ? <p>Toca un cuadro amarillo del patio o del cerco. Un puesto de 40 pies admite un 40, o dos de 20, uno en cada mitad.</p> : null}
+            {transferring && fenceHint ? <p>{fenceHint}</p> : null}
             {history?.length ? (
               <ul className="yard-history">
                 {history.slice(0, 6).map((row) => <li key={row.id}>{row.detail}</li>)}

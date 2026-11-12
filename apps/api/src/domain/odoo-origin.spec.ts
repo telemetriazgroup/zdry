@@ -4,6 +4,7 @@ import {
   dossierKindForMove,
   isDryContainerProduct,
   availabilityAfterStock,
+  statusWhenLotsConflict,
   catalogAfterDispatch,
   lotAvailability,
   serialSearchForms,
@@ -319,6 +320,25 @@ describe("lotAvailability", () => {
     expect(availabilityAfterStock(adjustment, 0)).toMatchObject({ availability: "left", pickingName: "sin existencia interna" });
     expect(availabilityAfterStock(adjustment, 1).availability).toBe("stock");
     expect(availabilityAfterStock(adjustment, null).availability).toBe("stock");
+  });
+
+  it("un lote viejo en cero no cierra la serie si otro lote de la misma serie sigue en stock", () => {
+    const stale = { qty: 0, availability: "left" as const, pickingName: "sin existencia interna", destName: null };
+    const decided = statusWhenLotsConflict(stale, [{ qty: 1 }]);
+    expect(decided.keepExpediente).toBe(true);
+    expect(decided.apply.availability).toBe("stock");
+    expect(statusWhenLotsConflict(stale, [{ qty: 0 }])).toMatchObject({
+      keepExpediente: false,
+      apply: { availability: "left" },
+    });
+  });
+
+  it("una OUT del lote que sigue con cantidad no la reabre el lote viejo", () => {
+    const sold = { qty: 1, availability: "left" as const, pickingName: "ZGROU/OUT/08515", destName: "FLOWEN S.A.C." };
+    expect(statusWhenLotsConflict(sold, [{ qty: 0 }]).apply).toMatchObject({
+      availability: "left",
+      pickingName: "ZGROU/OUT/08515",
+    });
   });
 
   it("una OUT hecha sigue cerrando aunque el quant interno siga en 1", () => {

@@ -10,7 +10,17 @@ export type YardZone = {
   gridRow: number;
   /** Columna del plano. 1 queda a la izquierda. */
   gridCol: number;
+  /** Origen en metros. Si viene, el 3D usa esta posición en vez de la cuadrícula. */
+  xM?: number;
+  zM?: number;
+  /**
+   * Lado por el que el stacker no entra. Ese lado es el perímetro.
+   * Vacío: puede entrar por la fila 1 o por la última fila.
+   */
+  closedSide?: ZoneClosedSide;
 };
+
+export type ZoneClosedSide = "" | "frente" | "fondo" | "izquierda" | "derecha";
 
 export type YardAisle = {
   id: string;
@@ -37,7 +47,54 @@ export type YardPlan = {
   zones: YardZone[];
   aisles: YardAisle[];
   ghosts: YardGhost[];
+  perimeter: YardPerimeter;
 };
+
+export type FenceKind = "pared" | "contenedores" | "mixto";
+
+export type YardFenceSide = {
+  id: string;
+  name: string;
+  /** Largo del lado, en metros. */
+  lengthM: number;
+  /** Giro a la derecha al terminar el lado, en grados. 90 cierra un rectángulo. */
+  turnDeg: number;
+  kind: FenceKind;
+  containerFeet: 20 | 40;
+  /** En un lado mixto, metros de pared desde el inicio. El resto son contenedores. */
+  wallM: number;
+  /** Altura del cerco en ese lado. Máximo 3. */
+  levels: number;
+  /** Puestos de contenedor que pasaron a ser pared. */
+  wallSlots: number[];
+};
+
+export type YardGate = {
+  id: string;
+  sideId: string;
+  name: string;
+  /** Metros desde el inicio del lado. */
+  atM: number;
+  widthM: number;
+};
+
+export type YardPerimeter = {
+  sides: YardFenceSide[];
+  gates: YardGate[];
+  /** Contenedores del almacén que forman el cerco. */
+  cells: YardFenceCell[];
+};
+
+export type YardFenceCell = {
+  sideId: string;
+  slot: number;
+  level: number;
+  iso: string;
+  /** En un puesto de 40 pies, la mitad que ocupa un contenedor de 20. */
+  half?: "A" | "B";
+};
+
+export const FENCE_SIDE = "CERCO";
 
 const LEFT_STATUSES = new Set(["Vendido", "Alquilado", "Retirado por cliente"]);
 
@@ -50,6 +107,7 @@ export function defaultYardPlan(): YardPlan {
     zones: [{ id: "zona-a", name: "Zona A", rows: 4, cols: 3, levels: 5, gridRow: 1, gridCol: 1 }],
     aisles: [{ id: "pasillo-1", name: "Pasillo 1", afterZoneId: "zona-a" }],
     ghosts: [],
+    perimeter: { sides: [], gates: [], cells: [] },
   };
 }
 
@@ -80,6 +138,9 @@ export function normalizeYardPlan(raw: unknown): YardPlan {
     const id = text(row.id, `zona-${index + 1}`).toLowerCase().replace(/[^a-z0-9-]/g, "") || `zona-${index + 1}`;
     if (seen.has(id)) return;
     seen.add(id);
+    const xM = Number(row.xM);
+    const zM = Number(row.zM);
+    const closedSide = closedSideOf(row.closedSide);
     zones.push({
       id,
       name: text(row.name, `Zona ${index + 1}`),
@@ -88,6 +149,9 @@ export function normalizeYardPlan(raw: unknown): YardPlan {
       levels: clamp(row.levels, 1, 20, 5),
       gridRow: clamp(row.gridRow, 1, 4, 0),
       gridCol: clamp(row.gridCol, 1, 4, 0),
+      ...(Number.isFinite(xM) ? { xM } : {}),
+      ...(Number.isFinite(zM) ? { zM } : {}),
+      ...(closedSide ? { closedSide } : {}),
     });
   });
   if (!zones.length) return defaultYardPlan();
@@ -130,7 +194,91 @@ export function normalizeYardPlan(raw: unknown): YardPlan {
       : { ...ghost, ...(half ? { half } : {}) };
     ghosts.push(named);
   });
-  return { zones, aisles, ghosts };
+  return { zones, aisles, ghosts, perimeter: normalizePerimeter(source.perimeter) };
+}
+
+function fenceId(value: unknown, fallback: string) {
+  return text(value, fallback).toLowerCase().replace(/[^a-z0-9-]/g, "") || fallback;
+}
+
+function closedSideOf(value: unknown): ZoneClosedSide {
+  return value === "frente" || value === "fondo" || value === "izquierda" || value === "derecha" ? value : "";
+}
+
+function fenceKind(value: unknown): FenceKind {
+  return value === "contenedores" || value === "mixto" ? value : "pared";
+}
+
+export function normalizePerimeter(raw: unknown): YardPerimeter {
+  const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const sides: YardFenceSide[] = [];
+  const seen = new Set<string>();
+  (Array.isArray(source.sides) ? source.sides : []).slice(0, 8).forEach((item, index) => {
+    const row = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+    const id = fenceId(row.id, `lado-${index + 1}`);
+    if (seen.has(id)) return;
+    seen.add(id);
+    const lengthM = clamp(row.lengthM, 2, 500, 40);
+    const kind = fenceKind(row.kind);
+    const containerFeet: 20 | 40 = Number(row.containerFeet) === 20 ? 20 : 40;
+    const wallM = clamp(row.wallM, 0, lengthM, 0);
+    const levels = clamp(row.levels, 1, 3, 1);
+    const slotCount = fenceSlotCount({ lengthM, kind, containerFeet, wallM });
+    const wallSlots = [...new Set((Array.isArray(row.wallSlots) ? row.wallSlots : []).map((item) => Math.round(Number(item))).filter((item) => item >= 1 && item <= slotCount))].slice(0, 80);
+    sides.push({
+      id,
+      name: text(row.name, `Lado ${index + 1}`),
+      lengthM,
+      turnDeg: clamp(row.turnDeg, -170, 170, 90),
+      kind,
+      containerFeet,
+      wallM,
+      levels,
+      wallSlots,
+    });
+  });
+  if (sides.length && sides.length < 3) return { sides: [], gates: [], cells: [] };
+  const ids = new Set(sides.map((side) => side.id));
+  const gates: YardGate[] = [];
+  const gateSeen = new Set<string>();
+  (Array.isArray(source.gates) ? source.gates : []).slice(0, 8).forEach((item, index) => {
+    const row = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+    const side = sides.find((itemSide) => itemSide.id === String(row.sideId || ""));
+    if (!side || !ids.has(side.id)) return;
+    const id = fenceId(row.id, `entrada-${index + 1}`);
+    if (gateSeen.has(id)) return;
+    gateSeen.add(id);
+    const widthM = clamp(row.widthM, 3, 30, 12);
+    const atM = clamp(row.atM, 0, Math.max(0, side.lengthM - widthM), 0);
+    gates.push({ id, sideId: side.id, name: text(row.name, `Entrada ${index + 1}`), atM, widthM });
+  });
+  const cells: YardFenceCell[] = [];
+  const usedIso = new Set<string>();
+  (Array.isArray(source.cells) ? source.cells : []).slice(0, 400).forEach((item) => {
+    const row = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+    const side = sides.find((itemSide) => itemSide.id === String(row.sideId || ""));
+    if (!side || side.wallSlots.includes(Math.round(Number(row.slot)))) return;
+    const slot = inside(row.slot, 1, fenceSlotCount(side));
+    const level = inside(row.level, 1, side.levels);
+    const iso = String(row.iso || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 20);
+    const half = row.half === "A" || row.half === "B" ? row.half : "";
+    if (!slot || !level || !iso || usedIso.has(iso)) return;
+    usedIso.add(iso);
+    cells.push({ sideId: side.id, slot, level, iso, ...(half ? { half } : {}) });
+  });
+  return { sides, gates, cells };
+}
+
+export function fenceWithout(plan: YardPlan, iso: string) {
+  const code = iso.trim().toUpperCase();
+  return { ...plan.perimeter, cells: plan.perimeter.cells.filter((cell) => cell.iso !== code) };
+}
+
+export function fenceSlotCount(side: { lengthM: number; kind: FenceKind; containerFeet: 20 | 40; wallM: number }) {
+  if (side.kind === "pared") return 0;
+  const feet = side.containerFeet === 20 ? 6.1 : 12.2;
+  const wall = side.kind === "mixto" ? Math.min(side.wallM, side.lengthM) : 0;
+  return Math.max(0, Math.floor((side.lengthM - wall + 0.05) / feet));
 }
 
 /** Las zonas sin fila ni columna quedan en la primera fila, de izquierda a derecha. */
@@ -288,6 +436,85 @@ export function movesAbove(
     ).length
     : 0;
   return units + unknown;
+}
+
+function boxesAlong(
+  zone: YardZone,
+  ghosts: YardGhost[],
+  occupied: StackCell[],
+  row: number,
+  col: number,
+  level: number,
+  iso: string | undefined,
+  span: BaySpan,
+  axis: "row" | "col",
+  towardLow: boolean,
+) {
+  const limit = axis === "row" ? zone.rows : zone.cols;
+  const index = axis === "row" ? row : col;
+  const from = towardLow ? 1 : index + 1;
+  const to = towardLow ? index - 1 : limit;
+  let count = 0;
+  for (let cursor = from; cursor <= to; cursor += 1) {
+    const atRow = axis === "row" ? cursor : row;
+    const atCol = axis === "col" ? cursor : col;
+    count += occupied.filter(
+      (cell) => cell.zoneName === zone.name && cell.row === atRow && cell.col === atCol && cell.level > level && cell.iso !== iso
+        && spansOverlap(baySpan(cell.type, cell.half), span),
+    ).length;
+    count += ghosts.filter(
+      (ghost) => ghost.zoneId === zone.id && ghost.row === atRow && ghost.col === atCol && ghost.level > level
+        && spansOverlap(baySpan(ghost.typeCode, ghost.half), span),
+    ).length;
+  }
+  return count;
+}
+
+/**
+ * Movimientos para que el stacker saque el equipo.
+ * Cuenta los que están encima y los de las filas de acceso que son más altos:
+ * tapan la vista y hay que bajarlos hasta el nivel del equipo.
+ */
+export function movesToReach(
+  zones: YardZone[],
+  ghosts: YardGhost[],
+  occupied: StackCell[],
+  lado: string,
+  row: number,
+  col: number,
+  level: number,
+  iso?: string,
+  half?: string | null,
+  type?: string | null,
+) {
+  const above = movesAbove(zones, ghosts, occupied, lado, row, col, level, iso, half, type);
+  const zone = zones.find((item) => item.name === lado);
+  if (!zone) return { above, beside: 0, total: above };
+  const span = type || half ? baySpan(type, half) : "full";
+  const closed = zone.closedSide || "";
+  const options: number[] = [];
+  if (closed === "izquierda" || closed === "derecha") {
+    options.push(boxesAlong(zone, ghosts, occupied, row, col, level, iso, span, "col", closed === "derecha"));
+  } else {
+    if (closed !== "frente") options.push(boxesAlong(zone, ghosts, occupied, row, col, level, iso, span, "row", true));
+    if (closed !== "fondo") options.push(boxesAlong(zone, ghosts, occupied, row, col, level, iso, span, "row", false));
+  }
+  const beside = options.length ? Math.min(...options) : 0;
+  return { above, beside, total: above + beside };
+}
+
+export function accessBlockMessage(above: number, beside: number) {
+  if (above && beside) return "Hay equipos encima y la fila de al lado le tapa la vista al stacker. Muévelos antes de sacar este.";
+  if (beside) return "La fila de al lado le tapa la vista al stacker. Mueve los que están más altos antes de sacar este.";
+  return "Hay equipos encima. Muévelos antes de sacar este.";
+}
+
+export function accessPlaceNote(above: number, beside: number) {
+  const total = above + beside;
+  if (!total) return " El stacker tiene vista. Se saca sin movimientos.";
+  if (beside && above) return ` Para acceder hay que mover ${total} equipo(s): ${beside} tapan la vista y ${above} están encima.`;
+  if (beside) return ` Para acceder hay que mover ${beside} equipo(s) que tapan la vista del stacker.`;
+  return ` Para acceder hay que mover ${above} equipo(s) que están encima.`;
 }
 
 export const AISLE_SIDE = "PASILLO";

@@ -11,6 +11,8 @@ export default function Patio() {
   const [selectedIso, setSelectedIso] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [scenario, setScenario] = useState("guardado");
+  const [withPerimeter, setWithPerimeter] = useState(true);
 
   const depotId = params.get("depotId") || layout?.depotId || "";
 
@@ -19,6 +21,12 @@ export default function Patio() {
     setLayout(data);
     return data;
   }
+
+  useEffect(() => {
+    if (!layout?.activeScenario) return;
+    setScenario(layout.activeScenario);
+    setWithPerimeter(layout.withPerimeter === true);
+  }, [layout?.activeScenario, layout?.withPerimeter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,13 +62,49 @@ export default function Patio() {
 
   async function resetDepot() {
     const text = layout.simulation
-      ? "Reiniciar el depósito demo: los equipos de la simulación vuelven a sin posición y se borran los huecos desconocidos. El plano de zonas se conserva. El patio real no cambia."
+      ? "Reiniciar la simulación: los equipos vuelven a sin posición y se borran los huecos desconocidos. Las zonas se conservan. El patio real no cambia."
       : `Devolver a sin posición todos los equipos de ${layout.depotName}. El plano de zonas se conserva.`;
     if (!window.confirm(text)) return;
     setBusy(true);
     setError("");
     try {
       await api("/yard/reset", { method: "POST", body: { depotId: layout.depotId } });
+      setSelectedIso(null);
+      await load(layout.depotId);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadScenario() {
+    const chosen = (layout.scenarios || []).find((item) => item.id === scenario);
+    const name = chosen?.name || "el escenario";
+    const fence = withPerimeter ? "con perímetro" : "sin perímetro";
+    if (!window.confirm(`Cargar ${name}, ${fence}. Se vacían las posiciones y se vuelven a poner las zonas de ese escenario.`)) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api("/yard/scenario", { method: "POST", body: { depotId: layout.depotId, scenario, withPerimeter } });
+      setSelectedIso(null);
+      await load(layout.depotId);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function restoreScenario() {
+    if (!layout.activeScenario) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api("/yard/scenario", {
+        method: "POST",
+        body: { depotId: layout.depotId, scenario: layout.activeScenario, withPerimeter: layout.withPerimeter === true },
+      });
       setSelectedIso(null);
       await load(layout.depotId);
     } catch (e) {
@@ -96,7 +140,28 @@ export default function Patio() {
         ) : null}
       </div>
       {layout.simulation ? (
-        <p className="section-sub">Depósito demo. Aquí están todos los equipos para probar cómo armar el patio. Lo que coloques no mueve el depósito real.</p>
+        <p className="section-sub">
+          {layout.depotId === "yard-demo-2"
+            ? "Depósito demo 2. Carga un escenario y puedes reiniciarlo las veces que quieras. Vaciar posiciones no borra las zonas: se vuelven a poner al cargar el escenario. El depósito demo queda libre para armar otro."
+            : "Depósito demo. Aquí están todos los equipos para probar cómo armar el patio. Lo que coloques no mueve el depósito real."}
+        </p>
+      ) : null}
+      {layout.depotId === "yard-demo-2" && isSuperadmin(user) ? (
+        <div className="action-row" style={{ marginTop: 8 }}>
+          <label className="zone-field">Escenario
+            <select aria-label="Escenario del depósito demo 2" value={scenario} onChange={(e) => setScenario(e.target.value)}>
+              {(layout.scenarios || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </label>
+          <label className="zone-field">Perímetro
+            <select aria-label="Perímetro del escenario" value={withPerimeter ? "si" : "no"} onChange={(e) => setWithPerimeter(e.target.value === "si")}>
+              <option value="si">Con perímetro</option>
+              <option value="no">Sin perímetro</option>
+            </select>
+          </label>
+          <button className="btn-primary" type="button" disabled={busy} onClick={loadScenario}>Cargar escenario</button>
+          <button className="btn-ghost" type="button" disabled={busy || !layout.activeScenario} onClick={restoreScenario}>Volver a poner las zonas</button>
+        </div>
       ) : null}
       {error ? <div className="err">{error}</div> : null}
       <YardBuild
@@ -122,7 +187,7 @@ export default function Patio() {
                     <td style={{ color: unit.catColor }}>{unit.catLabel}</td>
                     <td>{unit.status}</td>
                     <td>{unit.posLabel}</td>
-                    <td>{unit.onAisle ? "En el pasillo" : unit.lado ? (unit.movesToRetrieve ? `${unit.movesToRetrieve} movimiento(s)` : "En la cima") : "Sin posición"}</td>
+                    <td>{unit.onAisle ? "En el pasillo" : unit.lado ? (unit.movesToRetrieve ? `${unit.movesToRetrieve} movimiento(s)` : "Con vista") : "Sin posición"}</td>
                   </tr>
                 ))}
               </tbody>

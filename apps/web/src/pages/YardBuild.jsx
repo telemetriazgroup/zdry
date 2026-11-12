@@ -10,8 +10,10 @@ const FALLBACK_PLAN = {
   ghosts: [],
 };
 
+let freshSeq = 0;
 function freshId(prefix) {
-  return `${prefix}-${Date.now().toString(36)}`;
+  freshSeq += 1;
+  return `${prefix}-${Date.now().toString(36)}-${freshSeq.toString(36)}`;
 }
 
 function withSeats(plan) {
@@ -146,6 +148,49 @@ function movesAbove(zones, units, ghosts, zone, row, col, level, iso, half, type
   return unitsAbove + ghostsAbove;
 }
 
+function boxesAlong(zone, units, ghosts, row, col, level, iso, span, axis, towardLow) {
+  const limit = axis === "row" ? Number(zone.rows) : Number(zone.cols);
+  const index = axis === "row" ? row : col;
+  const from = towardLow ? 1 : index + 1;
+  const to = towardLow ? index - 1 : limit;
+  let count = 0;
+  for (let cursor = from; cursor <= to; cursor += 1) {
+    const atRow = axis === "row" ? cursor : row;
+    const atCol = axis === "col" ? cursor : col;
+    count += (units || []).filter(
+      (unit) => unit.lado === zone.name && unit.ruma === atRow && unit.columna === atCol && unit.nivel > level && unit.iso !== iso
+        && spansOverlap(baySpan(unit.type, unit.bayHalf), span),
+    ).length;
+    count += ghosts.filter(
+      (ghost) => ghost.zoneId === zone.id && ghost.row === atRow && ghost.col === atCol && ghost.level > level
+        && spansOverlap(baySpan(ghost.typeCode, ghost.half), span),
+    ).length;
+  }
+  return count;
+}
+
+function movesToReach(zones, units, ghosts, zone, row, col, level, iso, half, type) {
+  const above = movesAbove(zones, units, ghosts, zone, row, col, level, iso, half, type);
+  const closed = zone.closedSide || "";
+  const span = type || half ? baySpan(type, half) : "full";
+  const options = [];
+  if (closed === "izquierda" || closed === "derecha") {
+    options.push(boxesAlong(zone, units, ghosts, row, col, level, iso, span, "col", closed === "derecha"));
+  } else {
+    if (closed !== "frente") options.push(boxesAlong(zone, units, ghosts, row, col, level, iso, span, "row", true));
+    if (closed !== "fondo") options.push(boxesAlong(zone, units, ghosts, row, col, level, iso, span, "row", false));
+  }
+  const beside = options.length ? Math.min(...options) : 0;
+  return { above, beside, total: above + beside };
+}
+
+function accessText(reach) {
+  if (!reach.total) return "El stacker tiene vista. Se saca sin movimientos.";
+  if (reach.beside && reach.above) return `Para sacarlo hay que mover ${reach.total} equipos: ${reach.beside} tapan la vista y ${reach.above} están encima.`;
+  if (reach.beside) return `Para sacarlo hay que mover ${reach.beside} ${reach.beside === 1 ? "equipo que tapa" : "equipos que tapan"} la vista del stacker.`;
+  return `Para sacarlo hay que mover ${reach.above} ${reach.above === 1 ? "equipo" : "equipos"} que están encima.`;
+}
+
 function nextSeat(zones) {
   const taken = new Set(zones.map((zone) => `${zone.gridRow || 1}:${zone.gridCol || 1}`));
   for (let row = 1; row <= 4; row += 1) {
@@ -154,6 +199,386 @@ function nextSeat(zones) {
     }
   }
   return { gridRow: 1, gridCol: zones.length + 1 };
+}
+
+function yardOutline(zones) {
+  const maxCols = Math.max(...zones.map((zone) => Number(zone.cols) || 1), 1);
+  const maxRows = Math.max(...zones.map((zone) => Number(zone.rows) || 1), 1);
+  const gridCols = Math.max(...zones.map((zone) => Number(zone.gridCol) || 1), 1);
+  const gridRows = Math.max(...zones.map((zone) => Number(zone.gridRow) || 1), 1);
+  const width = gridCols * maxCols * 12.9 + Math.max(0, gridCols - 1) * 8 + 16;
+  const depth = gridRows * maxRows * 2.99 + Math.max(0, gridRows - 1) * 8 + 16;
+  return { width: Math.max(20, Math.round(width)), depth: Math.max(20, Math.round(depth)) };
+}
+
+function sideFit(side) {
+  const length = Number(side.lengthM) || 0;
+  const feet = Number(side.containerFeet) === 20 ? 6.1 : 12.2;
+  const wall = side.kind === "pared" ? length : side.kind === "mixto" ? Math.min(Number(side.wallM) || 0, length) : 0;
+  const room = Math.max(0, length - wall);
+  if (side.kind === "pared") return "Pared en todo el lado.";
+  const count = Math.floor((room + 0.05) / feet);
+  const rest = Math.round((room - count * feet) * 10) / 10;
+  return `${count} contenedores de ${Number(side.containerFeet) === 20 ? "20" : "40"} pies${rest > 0.2 ? ` y ${rest} m de cierre en pared` : ""}.`;
+}
+
+function rankFenceUnits(units, needle) {
+  const code = String(needle || "").trim().toUpperCase();
+  const pool = code.length >= 3 ? (units || []).filter((unit) => unit.iso.toUpperCase().includes(code)) : (units || []);
+  return [...pool].sort((a, b) => {
+    if (code.length >= 3) {
+      const as = a.iso.toUpperCase().startsWith(code) ? 0 : a.iso.toUpperCase().indexOf(code);
+      const bs = b.iso.toUpperCase().startsWith(code) ? 0 : b.iso.toUpperCase().indexOf(code);
+      if (as !== bs) return as - bs;
+      return a.iso.localeCompare(b.iso);
+    }
+    const ap = a.lado ? 1 : 0;
+    const bp = b.lado ? 1 : 0;
+    if (ap !== bp) return ap - bp;
+    return a.iso.localeCompare(b.iso);
+  }).slice(0, 10);
+}
+
+function fencePlaceLabel(unit) {
+  return unit?.lado ? `En el patio · ${unit.posLabel || unit.lado}` : "Sin lugar asignado";
+}
+
+function fenceLevelCells(perimeter, sideId, slot, level) {
+  return (perimeter?.cells || []).filter((item) => item.sideId === sideId && Number(item.slot) === slot && Number(item.level) === level);
+}
+
+function fenceHalfOpen(cells, half) {
+  const others = cells || [];
+  if (!half) return !others.length;
+  return !others.some((cell) => !cell.half || cell.half === half);
+}
+
+function fenceHalfSupported(perimeter, side, slot, level, half, movingIso) {
+  if (level <= 1) return true;
+  const below = fenceLevelCells(perimeter, side.id, slot, level - 1).filter((cell) => cell.iso !== movingIso);
+  if (!half) {
+    return below.some((cell) => !cell.half) || (below.some((cell) => cell.half === "A") && below.some((cell) => cell.half === "B"));
+  }
+  return below.some((cell) => !cell.half || cell.half === half);
+}
+
+function fenceOpenLevel(perimeter, side, slot, half, movingIso) {
+  const levels = Math.min(3, Math.max(1, Number(side.levels) || 1));
+  for (let level = 1; level <= levels; level += 1) {
+    if (!fenceHalfOpen(fenceLevelCells(perimeter, side.id, slot, level), half, movingIso)) continue;
+    if (!fenceHalfSupported(perimeter, side, slot, level, half, movingIso)) return 0;
+    return level;
+  }
+  return 0;
+}
+
+function fenceOffers(perimeter, unit) {
+  const feet = feetOf(unit?.type);
+  if (feet !== 20 && feet !== 40) return [];
+  const offers = [];
+  (perimeter?.sides || []).forEach((side) => {
+    if (side.kind === "pared") return;
+    const sideFeet = Number(side.containerFeet) === 20 ? 20 : 40;
+    if (sideFeet === 20 && feet !== 20) return;
+    const halves = feet === 20 && sideFeet === 40 ? ["A", "B"] : [""];
+    for (let slot = 1; slot <= slotCount(side); slot += 1) {
+      if ((side.wallSlots || []).includes(slot)) continue;
+      halves.forEach((half) => {
+        const level = fenceOpenLevel(perimeter, side, slot, half, unit?.iso);
+        if (level) offers.push({ sideId: side.id, slot, level, half });
+      });
+    }
+  });
+  return offers;
+}
+
+function FencePlan({ perimeter, units, moving, onOccupy, onEmpty }) {
+  const sides = (perimeter?.sides || []).filter((side) => slotCount(side) > 0);
+  if (!sides.length) return null;
+  const feet = feetOf(moving?.type);
+  return (
+    <div className="yard-fence-plan">
+      <b>Cerco</b>
+      <p className="section-sub">Cada lado con contenedores es una zona. Un puesto de 40 pies admite un 40, o dos de 20 en las mitades A y B. El cuadro amarillo es el lugar libre.</p>
+      <div className="yard-plan-line">
+        {sides.map((side) => {
+          const sideFeet = Number(side.containerFeet) === 20 ? 20 : 40;
+          return (
+            <div className="zone-board" key={side.id}>
+              <b>{side.name}</b>
+              <div className="fila-label">{sideFeet} pies{side.kind === "mixto" ? " · parte pared" : ""}</div>
+              <div className="zone-cols">
+                {Array.from({ length: slotCount(side) }, (_, index) => {
+                  const slot = index + 1;
+                  const walled = (side.wallSlots || []).includes(slot);
+                  const levels = Math.min(3, Number(side.levels) || 1);
+                  return (
+                    <div className="stack-col" key={slot}>
+                      <span>Puesto {slot}</span>
+                      {walled ? <button className="yard-cell ghost" type="button" disabled>Pared</button> : Array.from({ length: levels }, (_, levelIndex) => {
+                        const level = levels - levelIndex;
+                        const here = fenceLevelCells(perimeter, side.id, slot, level);
+                        const full = here.find((cell) => !cell.half);
+                        if (sideFeet === 40 && !full) {
+                          return (
+                            <div className="yard-bay" key={level}>
+                              {["A", "B"].map((half) => {
+                                const cell = here.find((item) => item.half === half);
+                                const unit = cell ? (units || []).find((item) => item.iso === cell.iso) : null;
+                                const open = feet === 20 && fenceOpenLevel(perimeter, side, slot, half, moving?.iso) === level;
+                                return (
+                                  <button
+                                    key={half}
+                                    type="button"
+                                    className={`yard-cell${unit ? " full" : ""}${open ? " fence-target" : ""}`}
+                                    style={unit?.typeColor ? { background: unit.typeColor } : undefined}
+                                    aria-label={`Cerco ${side.name} puesto ${slot} nivel ${level} mitad ${half}`}
+                                    onClick={() => (unit ? onOccupy(unit) : onEmpty(side, slot, level, half))}
+                                  >
+                                    {unit ? unit.iso.slice(-4) : half}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          );
+                        }
+                        const unit = full ? (units || []).find((item) => item.iso === full.iso) : null;
+                        const open = feet === sideFeet && fenceOpenLevel(perimeter, side, slot, "", moving?.iso) === level;
+                        return (
+                          <button
+                            key={level}
+                            type="button"
+                            className={`yard-cell${unit ? " full" : ""}${open ? " fence-target" : ""}`}
+                            style={unit?.typeColor ? { background: unit.typeColor } : undefined}
+                            aria-label={`Cerco ${side.name} puesto ${slot} nivel ${level}`}
+                            onClick={() => (unit ? onOccupy(unit) : onEmpty(side, slot, level, ""))}
+                          >
+                            {unit ? unit.iso.slice(-4) : open ? "Libre" : level}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function slotCount(side) {
+  if (side.kind === "pared") return 0;
+  const feet = Number(side.containerFeet) === 20 ? 6.1 : 12.2;
+  const wall = side.kind === "mixto" ? Math.min(Number(side.wallM) || 0, Number(side.lengthM) || 0) : 0;
+  return Math.max(0, Math.floor(((Number(side.lengthM) || 0) - wall + 0.05) / feet));
+}
+
+function closureGap(sides) {
+  let x = 0;
+  let z = 0;
+  let heading = 0;
+  (sides || []).forEach((side) => {
+    x += Math.cos(heading) * (Number(side.lengthM) || 0);
+    z += Math.sin(heading) * (Number(side.lengthM) || 0);
+    heading += ((Number(side.turnDeg) || 0) * Math.PI) / 180;
+  });
+  return Math.hypot(x, z);
+}
+
+function PerimeterEditor({ draft, setDraft, busy, units, onSave, onFence, onWarn }) {
+  const perimeter = draft.perimeter?.sides ? draft.perimeter : { sides: [], gates: [], cells: [] };
+  const cells = perimeter.cells || [];
+  const [slotCode, setSlotCode] = useState({});
+  const gap = closureGap(perimeter.sides);
+  const setPerimeter = (next) => setDraft((current) => ({ ...current, perimeter: next }));
+  const updateSide = (id, patch) => setPerimeter({
+    ...perimeter,
+    sides: perimeter.sides.map((side) => (side.id === id ? { ...side, ...patch } : side)),
+  });
+  return (
+    <div>
+      <p className="section-sub">
+        El perímetro es el cerco del depósito, aparte de las zonas. Puede tener de 3 a 8 lados. Cada lado es pared, contenedores del almacén, o una mezcla, y se apila hasta 3 niveles.
+        Un dry de 20 pies mide 6,1 m y uno de 40 mide 12,2 m. Poner un código lo saca de su ruma y lo deja en ese puesto. Pasar a pared suelta los dry de ese puesto. El giro de 90° cierra un rectángulo.
+      </p>
+      {!perimeter.sides.length ? (
+        <button className="btn-primary" type="button" onClick={() => {
+          const size = yardOutline(draft.zones);
+          const frontId = freshId("lado");
+          setPerimeter({
+            sides: [
+              { id: frontId, name: "Frente", lengthM: size.width, turnDeg: 90, kind: "pared", containerFeet: 40, wallM: 0, levels: 1, wallSlots: [] },
+              { id: freshId("lado"), name: "Derecha", lengthM: size.depth, turnDeg: 90, kind: "contenedores", containerFeet: 40, wallM: 0, levels: 1, wallSlots: [] },
+              { id: freshId("lado"), name: "Fondo", lengthM: size.width, turnDeg: 90, kind: "pared", containerFeet: 40, wallM: 0, levels: 1, wallSlots: [] },
+              { id: freshId("lado"), name: "Izquierda", lengthM: size.depth, turnDeg: 90, kind: "mixto", containerFeet: 20, wallM: Math.round(size.depth / 2), levels: 1, wallSlots: [] },
+            ],
+            gates: [{ id: freshId("entrada"), sideId: frontId, name: "Entrada principal", atM: Math.max(0, Math.round(size.width / 2 - 6)), widthM: 12 }],
+          });
+        }}>Crear perímetro alrededor de las zonas</button>
+      ) : (
+        <>
+          {gap > 1.5 ? <p className="section-sub">El último lado queda a {gap.toFixed(1)} m del inicio. Ajusta un largo o un giro para cerrar el cerco.</p> : <p className="section-sub">El cerco cierra. Las medidas se dibujan a escala alrededor de las zonas.</p>}
+          {perimeter.sides.map((side, index) => (
+            <div className="fence-card" key={side.id}>
+              <label className="zone-field">Lado {index + 1}
+                <input value={side.name} onChange={(e) => updateSide(side.id, { name: e.target.value })} />
+              </label>
+              <label className="zone-field">Largo m
+                <input type="number" min={2} max={500} value={side.lengthM} onChange={(e) => updateSide(side.id, { lengthM: Number(e.target.value) })} />
+              </label>
+              <label className="zone-field">Giro °
+                <input type="number" min={-170} max={170} value={side.turnDeg} onChange={(e) => updateSide(side.id, { turnDeg: Number(e.target.value) })} />
+              </label>
+              <label className="zone-field">Niveles
+                <input type="number" min={1} max={3} value={side.levels || 1} onChange={(e) => updateSide(side.id, { levels: Math.min(3, Math.max(1, Number(e.target.value) || 1)) })} />
+              </label>
+              <label className="zone-field">Material
+                <select value={side.kind} onChange={(e) => updateSide(side.id, { kind: e.target.value })}>
+                  <option value="pared">Pared</option>
+                  <option value="contenedores">Contenedores</option>
+                  <option value="mixto">Pared y contenedores</option>
+                </select>
+              </label>
+              {side.kind !== "pared" ? (
+                <label className="zone-field">Contenedor
+                  <select value={side.containerFeet} onChange={(e) => updateSide(side.id, { containerFeet: Number(e.target.value) })}>
+                    <option value={40}>40 pies</option>
+                    <option value={20}>20 pies</option>
+                  </select>
+                </label>
+              ) : null}
+              {side.kind === "mixto" ? (
+                <label className="zone-field">Pared m
+                  <input type="number" min={0} max={side.lengthM} value={side.wallM} onChange={(e) => updateSide(side.id, { wallM: Number(e.target.value) })} />
+                </label>
+              ) : null}
+              <span className="section-sub">{sideFit(side)} Hasta {side.levels || 1} nivel{(side.levels || 1) === 1 ? "" : "es"}.</span>
+              {slotCount(side) ? (
+                <div className="fence-slots">
+                  {Array.from({ length: slotCount(side) }, (_, index) => {
+                    const slot = index + 1;
+                    const walled = (side.wallSlots || []).includes(slot);
+                    return (
+                      <div key={slot} className="fence-slot">
+                        <b>Puesto {slot}{walled ? " · pared" : ""}</b>
+                        {walled ? (
+                          <button className="btn-ghost" type="button" disabled={busy} onClick={() => onFence({ sideId: side.id, slot, wall: false })}>Volver a puesto</button>
+                        ) : Array.from({ length: side.levels || 1 }, (_, levelIndex) => {
+                          const level = levelIndex + 1;
+                          const cell = cells.find((item) => item.sideId === side.id && item.slot === slot && item.level === level);
+                          const key = `${side.id}:${slot}:${level}`;
+                          return (
+                            <div key={level} className="fence-slot-row">
+                              <span>Nivel {level}</span>
+                              <div className="fence-suggest">
+                                <input
+                                  value={slotCode[key] ?? cell?.iso ?? ""}
+                                  onChange={(e) => setSlotCode((current) => ({ ...current, [key]: e.target.value.toUpperCase() }))}
+                                  placeholder="Código dry"
+                                  aria-label={`Código del puesto ${slot} nivel ${level}`}
+                                />
+                                <ul className="fence-suggest-list">
+                                  {rankFenceUnits(units, slotCode[key] ?? "").map((unit) => (
+                                    <li key={unit.iso}>
+                                      <button
+                                        type="button"
+                                        onMouseDown={(event) => {
+                                          event.preventDefault();
+                                          setSlotCode((current) => ({ ...current, [key]: unit.iso }));
+                                          if (unit.lado) onWarn("Ese contenedor ya está en el patio. Para llevarlo al cerco usa Trasladar.");
+                                        }}
+                                      >
+                                        <b>{unit.iso}</b>
+                                        <span>{fencePlaceLabel(unit)}</span>
+                                      </button>
+                                    </li>
+                                  ))}
+                                  {!rankFenceUnits(units, slotCode[key] ?? "").length ? <li className="fence-suggest-empty">Ningún contenedor coincide.</li> : null}
+                                </ul>
+                              </div>
+                              <button className="btn-primary" type="button" disabled={busy} onClick={() => {
+                                const iso = slotCode[key] ?? cell?.iso ?? "";
+                                const unit = (units || []).find((item) => item.iso === iso.trim().toUpperCase());
+                                if (unit?.lado) {
+                                  onWarn("Ese contenedor ya está en el patio. Para llevarlo al cerco usa Trasladar.");
+                                  return;
+                                }
+                                onFence({ sideId: side.id, slot, level, iso });
+                              }}>Poner</button>
+                              {level === 1 ? <button className="btn-ghost" type="button" disabled={busy} onClick={() => onFence({ sideId: side.id, slot, wall: true })}>Pasar a pared</button> : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {perimeter.sides.length > 3 ? (
+                <button className="btn-ghost" type="button" onClick={() => setPerimeter({
+                  ...perimeter,
+                  sides: perimeter.sides.filter((item) => item.id !== side.id),
+                  gates: perimeter.gates.filter((gate) => gate.sideId !== side.id),
+                  cells: cells.filter((item) => item.sideId !== side.id),
+                })}>Quitar lado</button>
+              ) : null}
+            </div>
+          ))}
+          <h4>Entradas</h4>
+          {perimeter.gates.map((gate) => (
+            <div className="fence-card" key={gate.id}>
+              <label className="zone-field">Nombre
+                <input value={gate.name} onChange={(e) => setPerimeter({
+                  ...perimeter,
+                  gates: perimeter.gates.map((item) => item.id === gate.id ? { ...item, name: e.target.value } : item),
+                })} />
+              </label>
+              <label className="zone-field">Lado
+                <select value={gate.sideId} onChange={(e) => setPerimeter({
+                  ...perimeter,
+                  gates: perimeter.gates.map((item) => item.id === gate.id ? { ...item, sideId: e.target.value } : item),
+                })}>
+                  {perimeter.sides.map((side) => <option key={side.id} value={side.id}>{side.name}</option>)}
+                </select>
+              </label>
+              <label className="zone-field">Desde m
+                <input type="number" min={0} value={gate.atM} onChange={(e) => setPerimeter({
+                  ...perimeter,
+                  gates: perimeter.gates.map((item) => item.id === gate.id ? { ...item, atM: Number(e.target.value) } : item),
+                })} />
+              </label>
+              <label className="zone-field">Ancho m
+                <input type="number" min={3} max={30} value={gate.widthM} onChange={(e) => setPerimeter({
+                  ...perimeter,
+                  gates: perimeter.gates.map((item) => item.id === gate.id ? { ...item, widthM: Number(e.target.value) } : item),
+                })} />
+              </label>
+              <button className="btn-ghost" type="button" onClick={() => setPerimeter({ ...perimeter, gates: perimeter.gates.filter((item) => item.id !== gate.id) })}>Quitar</button>
+            </div>
+          ))}
+          <div className="action-row">
+            {perimeter.sides.length < 8 ? (
+              <button className="btn-ghost" type="button" onClick={() => setPerimeter({
+                ...perimeter,
+                sides: [...perimeter.sides, { id: freshId("lado"), name: `Lado ${perimeter.sides.length + 1}`, lengthM: 20, turnDeg: 90, kind: "pared", containerFeet: 40, wallM: 0, levels: 1, wallSlots: [] }],
+              })}>Agregar lado</button>
+            ) : null}
+            {perimeter.gates.length < 8 ? (
+              <button className="btn-ghost" type="button" onClick={() => setPerimeter({
+                ...perimeter,
+                gates: [...perimeter.gates, { id: freshId("entrada"), sideId: perimeter.sides[0].id, name: `Entrada ${perimeter.gates.length + 1}`, atM: 0, widthM: 8 }],
+              })}>Agregar entrada</button>
+            ) : null}
+            <button className="btn-ghost" type="button" onClick={() => setPerimeter({ sides: [], gates: [], cells: [] })}>Quitar perímetro</button>
+            <button className="btn-primary" type="button" disabled={busy} onClick={onSave}>{busy ? "Guardando…" : "Guardar plano"}</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 export default function YardBuild({ layout, onReload, selectedIso, setSelectedIso }) {
@@ -171,6 +596,10 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   const [history, setHistory] = useState([]);
   const [detailIso, setDetailIso] = useState("");
   const [menu, setMenu] = useState(null);
+  const [yardQuery, setYardQuery] = useState("");
+  const [exitIso, setExitIso] = useState("");
+  const [destination, setDestination] = useState("");
+  const [exitNote, setExitNote] = useState("");
 
   useEffect(() => {
     setDraft(withSeats(layout.plan?.zones?.length ? layout.plan : FALLBACK_PLAN));
@@ -190,6 +619,10 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   const typeByCode = useMemo(() => Object.fromEntries(types.map((type) => [type.code, type])), [types]);
   const typeColor = (code) => typeByCode[code]?.color || "#8a90a2";
   const typeLabel = (code) => typeByCode[code]?.label || code || "Sin tipo";
+  const sceneUnits = useMemo(() => (layout.units || []).map((unit) => {
+    const pending = (layout.exits || []).some((item) => item.iso === unit.iso);
+    return pending ? { ...unit, status: `${unit.status || "En patio"} · Salida pendiente de regularizar` } : unit;
+  }), [layout]);
   const feetName = (code) => {
     const raw = String(code || "").toUpperCase();
     if (raw.startsWith("40")) return "40 pies";
@@ -222,6 +655,68 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     }
   }
 
+  async function putFence(body) {
+    const code = String(body.iso || "").trim().toUpperCase();
+    if (code && !body.wall && !body.move) {
+      const unit = (layout.units || []).find((item) => item.iso === code);
+      if (unit?.lado) {
+        setError("Ese contenedor ya está en el patio. Para llevarlo al cerco usa Trasladar.");
+        return;
+      }
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api("/yard/plan", { method: "POST", body: { depotId: layout.depotId, ...draft } });
+      await api("/yard/fence", { method: "POST", body: { depotId: layout.depotId, ...body } });
+      await onReload();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function locateContainer() {
+    const needle = yardQuery.trim().toUpperCase();
+    if (needle.length < 3) {
+      setError("Escribe al menos 3 caracteres del código.");
+      return;
+    }
+    const hits = (layout.units || []).filter((unit) => unit.iso.toUpperCase().includes(needle));
+    const exact = hits.find((unit) => unit.iso === needle);
+    if (!exact && hits.length !== 1) {
+      setError(hits.length ? `Hay ${hits.length} coincidencias. Escribe el código completo.` : "Ese código no está en este depósito.");
+      return;
+    }
+    const unit = exact || hits[0];
+    const pending = (layout.exits || []).some((item) => item.iso === unit.iso);
+    setError("");
+    setPicked({
+      key: unit.iso,
+      code: unit.iso,
+      typeLabel: unit.typeLabel || unit.type,
+      where: unit.lado ? unit.posLabel : "Sin posición en el patio",
+      note: [unit.status, pending ? "Salida pendiente de regularizar" : ""].filter(Boolean).join(" · "),
+    });
+    if (mode === "despachar") setExitIso(unit.iso);
+  }
+
+  async function registerExit() {
+    setBusy(true);
+    setError("");
+    try {
+      await api("/yard/exit", { method: "POST", body: { depotId: layout.depotId, iso: exitIso, destination, note: exitNote } });
+      setDestination("");
+      setExitNote("");
+      await onReload();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function updateZone(id, patch) {
     setDraft({ ...draft, zones: draft.zones.map((zone) => (zone.id === id ? { ...zone, ...patch } : zone)) });
   }
@@ -229,14 +724,13 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   function cellPick(zone, row, col, level, occupant, ghost) {
     const span = occupant ? baySpan(occupant.type, occupant.bayHalf) : baySpan(ghost?.typeCode, ghost?.half);
     const half = span === "A" || span === "B" ? span : "";
-    const above = movesAbove(draft.zones, layout.units, ghosts, zone, row, col, level, occupant?.iso, half, occupant?.type || ghost?.typeCode);
+    const reach = movesToReach(draft.zones, layout.units, ghosts, zone, row, col, level, occupant?.iso, half, occupant?.type || ghost?.typeCode);
+    const above = reach.above;
     const freeMoves = layout.retrieval?.freeMoves ?? 3;
     const rate = layout.retrieval?.rate ?? 25;
-    const extraMoves = Math.max(0, above - freeMoves);
+    const extraMoves = Math.max(0, reach.total - freeMoves);
     const reference = extraMoves * rate;
-    const access = above
-      ? `Para sacarlo hay que mover ${above} ${above === 1 ? "equipo" : "equipos"}.`
-      : "Está en la cima. Se saca sin movimientos.";
+    const access = accessText(reach);
     const cost = extraMoves
       ? `Referencia de costo extra: USD ${reference} (${extraMoves} × ${rate}). ${freeMoves} movimientos van libres.`
       : `Sin cargo extra de movimientos. ${freeMoves} van libres.`;
@@ -384,6 +878,47 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     } catch (e) {
       setError(e.message);
     }
+  }
+
+  function occupyFence(unit) {
+    setError("");
+    setTransferIso(unit.iso);
+    setPicked({
+      key: unit.iso,
+      code: unit.iso,
+      typeLabel: unit.typeLabel || unit.type,
+      where: unit.posLabel || "Cerco",
+      note: unit.status || "",
+    });
+    loadHistory(unit.iso);
+  }
+
+  function dropOnFence(side, slot, level, half) {
+    const moving = layout.units.find((unit) => unit.iso === transferIso);
+    if (!moving) {
+      setError("Elige primero el contenedor que vas a trasladar.");
+      return;
+    }
+    const feet = feetOf(moving.type);
+    const sideFeet = Number(side.containerFeet) === 20 ? 20 : 40;
+    if (feet !== 20 && feet !== 40) {
+      setError("Solo un contenedor de 20 o de 40 pies puede ir al cerco.");
+      return;
+    }
+    if (sideFeet === 20 && feet !== 20) {
+      setError("Ese lado es de 20 pies y este contenedor es de 40.");
+      return;
+    }
+    const placeHalf = feet === 20 && sideFeet === 40 ? half : "";
+    if (feet === 20 && sideFeet === 40 && placeHalf !== "A" && placeHalf !== "B") {
+      setError("Ese puesto es de 40 pies. Un 20 ocupa la mitad A o la mitad B.");
+      return;
+    }
+    if (fenceOpenLevel(draft.perimeter, side, slot, placeHalf, moving.iso) !== level) {
+      setError("Ese puesto no tiene base libre. Un 40 necesita debajo el puesto completo, o las dos mitades de 20.");
+      return;
+    }
+    putFence({ sideId: side.id, slot, level, iso: moving.iso, move: true, ...(placeHalf ? { half: placeHalf } : {}) });
   }
 
   async function slideTo(half) {
@@ -574,14 +1109,16 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         <b>Plano del almacén</b>
         <button className={mode === "3d" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("3d")}>Vista 3D</button>
         <button className={mode === "armar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("armar")}>Zonas</button>
+        <button className={mode === "perimetro" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("perimetro")}>Perímetro</button>
         <button className={mode === "regularizar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => { setMode("regularizar"); setTransferIso(null); }}>Regularizar</button>
         <button className={mode === "trasladar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("trasladar")}>Trasladar</button>
+        <button className={mode === "despachar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("despachar")}>Despachar</button>
       </div>
       {error ? <div className="err">{error}</div> : null}
 
       {mode === "armar" ? (
         <div>
-          <p className="section-sub">Cada zona ocupa un puesto de la cuadrícula. La cuarta zona cae en la fila 2, columna 1, debajo de la A, con pasillo de por medio.</p>
+          <p className="section-sub">Cada zona ocupa un puesto de la cuadrícula. La cuarta zona cae en la fila 2, columna 1, debajo de la A, con pasillo de por medio. El lado sin acceso es el perímetro: el stacker no entra por ahí. Una fila vecina más alta que el equipo le tapa la vista.</p>
           {draft.zones.map((zone) => (
             <div className="zone-card" key={zone.id}>
               <label className="zone-field">Nombre
@@ -601,6 +1138,15 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               </label>
               <label className="zone-field">Altura
                 <input type="number" min={1} max={20} value={zone.levels} onChange={(e) => updateZone(zone.id, { levels: Number(e.target.value) })} />
+              </label>
+              <label className="zone-field">Lado sin acceso
+                <select aria-label={`Lado sin acceso de ${zone.name}`} value={zone.closedSide || ""} onChange={(e) => updateZone(zone.id, { closedSide: e.target.value })}>
+                  <option value="">Ninguno</option>
+                  <option value="frente">Frente, fila 1</option>
+                  <option value="fondo">Fondo, última fila</option>
+                  <option value="izquierda">Izquierda, columna 1</option>
+                  <option value="derecha">Derecha, última columna</option>
+                </select>
               </label>
               {draft.zones.length > 1 ? (
                 <button className="btn-ghost" type="button" onClick={() => setDraft({
@@ -624,12 +1170,44 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         </div>
       ) : null}
 
+      {mode === "perimetro" ? (
+        <PerimeterEditor draft={draft} setDraft={setDraft} busy={busy} units={layout.units} onSave={() => save()} onFence={putFence} onWarn={setError} />
+      ) : null}
+
+      {mode === "despachar" ? (
+        <div>
+          <p className="section-sub">Elige un contenedor del patio o del cerco, indica a dónde sale y queda pendiente de regularizar. La salida en Odoo, el OUT, todavía no se envía.</p>
+          <div className="guest-form">
+            <label className="zone-field">Contenedor
+              <input value={exitIso} onChange={(e) => setExitIso(e.target.value.toUpperCase())} placeholder="Código" list="yard-units" />
+            </label>
+            <label className="zone-field">A dónde sale
+              <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="Cliente, puerto o almacén" />
+            </label>
+            <label className="zone-field">Nota
+              <input value={exitNote} onChange={(e) => setExitNote(e.target.value)} placeholder="Opcional" />
+            </label>
+            <button className="btn-primary" type="button" disabled={busy} onClick={registerExit}>Registrar salida</button>
+          </div>
+          {(layout.exits || []).length ? (
+            <ul className="drv-notes">
+              {layout.exits.map((item) => (
+                <li key={item.id}>
+                  <span>{item.iso} · {item.destination}{item.note ? ` · ${item.note}` : ""} · pendiente</span>
+                  <button className="btn-ghost" type="button" onClick={() => api(`/yard/exit/${item.id}/cancel`, { method: "POST" }).then(onReload).catch((e) => setError(e.message))}>Anular</button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="section-sub">No hay salidas pendientes.</p>}
+        </div>
+      ) : null}
+
       {mode === "regularizar" || mode === "trasladar" ? (
         <div>
           {mode === "trasladar" ? (
             <>
               <p className="section-sub">
-                Elige un equipo ubicado y toca el hueco destino. También puede quedar en el pasillo, en el suelo, hasta que tenga lugar. Cada traslado queda en su historial.
+                Elige un equipo ubicado y toca el hueco destino, en una zona o en el cerco. El cerco se dibuja como una zona más: el cuadro amarillo es el puesto libre del mismo largo.
                 {transferIso ? ` En traslado: ${transferIso}.` : ""}
               </p>
               <div className="action-row">
@@ -698,6 +1276,13 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             </>
           )}
           {mode === "regularizar" ? info : null}
+          <FencePlan
+            perimeter={draft.perimeter}
+            units={layout.units}
+            moving={mode === "trasladar" ? layout.units.find((unit) => unit.iso === transferIso) : null}
+            onOccupy={(unit) => { if (mode === "trasladar") occupyFence(unit); }}
+            onEmpty={(side, slot, level, half) => { if (mode === "trasladar") dropOnFence(side, slot, level, half); }}
+          />
           <div className="yard-plan-2d">
             {Array.from({ length: gridRows }, (_, rowIndex) => {
               const gridRow = rowIndex + 1;
@@ -825,15 +1410,34 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
           <p className="section-sub yard-help">
             La vista muestra las rumas como las ve el operario. Un 40 ocupa la columna. Un 20 o un 10 ocupa una mitad, y dos de 20 aguantan un 40 encima. El color es el del código. Sin color, el equipo se ve gris. El rayado es un espacio ocupado sin identificar.
           </p>
+          <div className="guest-form">
+            <label className="zone-field">Buscar en el patio
+              <input list="yard-units" value={yardQuery} onChange={(e) => setYardQuery(e.target.value.toUpperCase())} placeholder="Código del contenedor" onKeyDown={(e) => { if (e.key === "Enter") locateContainer(); }} />
+            </label>
+            <button className="btn-primary" type="button" onClick={locateContainer}>Ubicar</button>
+          </div>
+          <datalist id="yard-units">
+            {(layout.units || []).map((unit) => <option key={unit.iso} value={unit.iso} />)}
+          </datalist>
           <YardScene
             zones={draft.zones}
-            units={layout.units}
+            perimeter={draft.perimeter}
+            units={sceneUnits}
             ghosts={ghosts}
             typeColor={typeColor}
             picked={picked}
             targets={Boolean(transferIso)}
             incomingType={layout.units.find((unit) => unit.iso === transferIso)?.type || ""}
+            movingIso={transferIso || ""}
             transferring={Boolean(transferIso)}
+            fenceHint={(() => {
+              if (!transferIso) return "";
+              const moving = layout.units.find((unit) => unit.iso === transferIso);
+              const feet = feetOf(moving?.type);
+              const offers = fenceOffers(draft.perimeter, moving);
+              if (feet !== 20 && feet !== 40) return "Solo un contenedor de 20 o de 40 pies puede ir al cerco.";
+              return offers.length ? "" : `El cerco no tiene un puesto libre de ${feet} pies.`;
+            })()}
             history={history}
             onTransfer={() => {
               if (!picked?.code || picked.unknown) return;
@@ -856,6 +1460,11 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             onRelease={() => transferIso && returnUnit(transferIso)}
             onClose={() => { setPicked(null); setTransferIso(null); }}
             onPick={(item) => {
+              if (item.empty && item.fence && transferIso) {
+                const side = (draft.perimeter?.sides || []).find((entry) => entry.id === item.sideId);
+                if (side) dropOnFence(side, item.slot, item.level, item.half || "");
+                return;
+              }
               if (item.empty && transferIso) {
                 moveUnit(transferIso, item.zoneName, item.row, item.col, item.level, item.half);
                 return;
@@ -873,6 +1482,13 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               if (unit && zone) setPicked(cellPick(zone, unit.ruma, unit.columna, unit.nivel, unit, null));
               else setPicked(item);
             }}
+          />
+          <FencePlan
+            perimeter={draft.perimeter}
+            units={layout.units}
+            moving={layout.units.find((unit) => unit.iso === transferIso)}
+            onOccupy={occupyFence}
+            onEmpty={dropOnFence}
           />
         </>
       )}

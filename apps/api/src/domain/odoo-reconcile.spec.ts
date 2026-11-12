@@ -133,6 +133,18 @@ describe("planOdooRelink", () => {
     });
   });
 
+  it("si hay dos lotes de la misma serie, liga el que Odoo todavía tiene en stock", () => {
+    const duplicated = [
+      { id: "viejo", odooLotId: 100, isoNormalized: "CBHU414989", serialRaw: "CBHU414989", containerIso: "CBHU414989", qtyOnHand: 0 },
+      { id: "vivo", odooLotId: 200, isoNormalized: "CBHU414989", serialRaw: "CBHU414989", containerIso: "CBHU414989", qtyOnHand: 1 },
+    ];
+    expect(planOdooRelink({ iso: "CBHU414989", candidates: duplicated, containers: [{ iso: "CBHU414989", odooLotId: 100 }] })).toMatchObject({
+      ok: true,
+      candidateId: "vivo",
+      odooLotId: 200,
+    });
+  });
+
   it("sin lote de esa serie no crea uno ni propone otro equipo", () => {
     expect(planOdooRelink({ iso: "MSKU0225553", candidates, containers })).toMatchObject({ ok: false });
   });

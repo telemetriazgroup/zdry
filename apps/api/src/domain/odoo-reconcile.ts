@@ -144,6 +144,7 @@ export type RelinkCandidate = {
   isoNormalized?: string | null;
   serialRaw?: string | null;
   containerIso?: string | null;
+  qtyOnHand?: number | null;
 };
 
 export type RelinkContainer = {
@@ -171,7 +172,8 @@ export function planOdooRelink(input: {
   if (!want) return { ok: false, message: "La serie no es válida." };
   const serialOf = (row: { isoNormalized?: string | null; serialRaw?: string | null }) =>
     inspectOdooIso(row.isoNormalized || row.serialRaw || "").isoNormalized;
-  const own = input.candidates.find((row) => serialOf(row) === want);
+  const matches = input.candidates.filter((row) => serialOf(row) === want);
+  const own = [...matches].sort((a, b) => (b.qtyOnHand ?? 0) - (a.qtyOnHand ?? 0))[0];
   if (!own) {
     return { ok: false, message: "No hay un lote Odoo con esta serie. No se creó un duplicado ni se tocó el otro equipo." };
   }
