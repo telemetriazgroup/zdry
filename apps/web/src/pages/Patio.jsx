@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
-import { isSuperadmin, useAuth } from "../auth.jsx";
+import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
 import YardBuild from "./YardBuild.jsx";
 
 export default function Patio() {
@@ -13,6 +13,7 @@ export default function Patio() {
   const [busy, setBusy] = useState(false);
   const [scenario, setScenario] = useState("guardado");
   const [withPerimeter, setWithPerimeter] = useState(true);
+  const [ruma, setRuma] = useState("cargado");
 
   const depotId = params.get("depotId") || layout?.depotId || "";
 
@@ -27,6 +28,10 @@ export default function Patio() {
     setScenario(layout.activeScenario);
     setWithPerimeter(layout.withPerimeter === true);
   }, [layout?.activeScenario, layout?.withPerimeter]);
+
+  useEffect(() => {
+    if (layout?.activeRuma) setRuma(layout.activeRuma);
+  }, [layout?.activeRuma]);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,6 +101,23 @@ export default function Patio() {
     }
   }
 
+  async function loadRumas() {
+    const chosen = (layout.rumas || []).find((item) => item.id === ruma);
+    const name = chosen?.name || "la plantilla";
+    if (!window.confirm(`Cargar ${name}. Se reemplazan las posiciones de esta simulación con esa estructura de rumas. Los equipos se reparten al azar y el patio real no cambia.`)) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api("/yard/rumas", { method: "POST", body: { depotId: layout.depotId, template: ruma } });
+      setSelectedIso(null);
+      await load(layout.depotId);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function restoreScenario() {
     if (!layout.activeScenario) return;
     setBusy(true);
@@ -133,7 +155,7 @@ export default function Patio() {
             Cancelar selección ({selectedIso})
           </button>
         ) : null}
-        {isSuperadmin(user) ? (
+        {(layout.simulation ? hasRole(user, "admin") : isSuperadmin(user)) ? (
           <button className="btn-ghost yard-reset" type="button" disabled={busy} onClick={resetDepot}>
             {layout.simulation ? "Reiniciar simulación" : "Vaciar posiciones"}
           </button>
@@ -142,11 +164,22 @@ export default function Patio() {
       {layout.simulation ? (
         <p className="section-sub">
           {layout.depotId === "yard-demo-2"
-            ? "Depósito demo 2. Carga un escenario y puedes reiniciarlo las veces que quieras. Vaciar posiciones no borra las zonas: se vuelven a poner al cargar el escenario. El depósito demo queda libre para armar otro."
-            : "Depósito demo. Aquí están todos los equipos para probar cómo armar el patio. Lo que coloques no mueve el depósito real."}
+            ? "Depósito demo 2. Carga un escenario y una plantilla de rumas para practicar traslados. Vaciar posiciones no borra las zonas. El patio real no se mueve."
+            : "Depósito demo. Carga una plantilla de rumas para simular el patio. Los equipos se reparten al azar y lo que muevas aquí no cambia el depósito real."}
         </p>
       ) : null}
-      {layout.depotId === "yard-demo-2" && isSuperadmin(user) ? (
+      {layout.simulation && hasRole(user, "admin") ? (
+        <div className="action-row" style={{ marginTop: 8 }}>
+          <label className="zone-field">Plantilla de rumas
+            <select aria-label="Plantilla de rumas" value={ruma} onChange={(e) => setRuma(e.target.value)}>
+              {(layout.rumas || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </label>
+          <button className="btn-primary" type="button" disabled={busy || !(layout.rumas || []).length} onClick={loadRumas}>Cargar rumas</button>
+          <p className="section-sub" style={{ margin: 0 }}>{(layout.rumas || []).find((item) => item.id === ruma)?.detail}</p>
+        </div>
+      ) : null}
+      {layout.depotId === "yard-demo-2" && hasRole(user, "admin") ? (
         <div className="action-row" style={{ marginTop: 8 }}>
           <label className="zone-field">Escenario
             <select aria-label="Escenario del depósito demo 2" value={scenario} onChange={(e) => setScenario(e.target.value)}>

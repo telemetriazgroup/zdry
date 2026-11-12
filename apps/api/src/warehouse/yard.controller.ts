@@ -88,6 +88,15 @@ export class YardController {
     return this.warehouse.compact(body.depotId || "", user, req.ip);
   }
 
+  @Post("rumas")
+  loadRumas(
+    @Body() body: { depotId?: string; template?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.loadRumaTemplate(body.depotId || "", body.template || "", user, req.ip);
+  }
+
   @Post("scenario")
   loadScenario(
     @Body() body: { depotId?: string; scenario?: string; withPerimeter?: boolean },

@@ -66,6 +66,7 @@ import {
 } from "../domain/yard";
 import { AISLE_SIDE, FENCE_SIDE, accessBlockMessage, accessPlaceNote, asBayHalf, baySpan, fenceSlotCount, fenceWithout, feetOf, ghostsWithSupport, movesToReach, normalizeYardPlan, spansOverlap, stackLengthError, zoneSlotError, type YardPlan } from "../domain/yard-plan";
 import { YARD_SCENARIOS, yardScenario } from "../domain/yard-scenarios";
+import { YARD_RUMA_TEMPLATES, fillRumaTemplate, yardRumaTemplate } from "../domain/yard-rumas";
 import { readMovementPolicy } from "../domain/freight-stub";
 import { PHOTO_STATUS_ACTIVE, PHOTO_STATUS_REJECTED } from "../domain/catalog-media";
 import { OdooClient } from "../odoo/odoo.client";
@@ -156,7 +157,21 @@ type YardSimPlacement = {
   half?: "A" | "B" | null;
 };
 type YardSimHistory = { id: string; iso: string; type: string; detail: string; createdAt: string };
-type YardSim = { placements: YardSimPlacement[]; history: YardSimHistory[]; scenarioId?: string; withPerimeter?: boolean };
+type YardSim = {
+  placements: YardSimPlacement[];
+  history: YardSimHistory[];
+  scenarioId?: string;
+  withPerimeter?: boolean;
+  rumaTemplateId?: string;
+};
+
+function simMeta(sim: YardSim) {
+  return {
+    ...(sim.scenarioId ? { scenarioId: sim.scenarioId } : {}),
+    withPerimeter: sim.withPerimeter === true,
+    ...(sim.rumaTemplateId ? { rumaTemplateId: sim.rumaTemplateId } : {}),
+  };
+}
 const YARD_CONFIG_KEY = "yard_config";
 const COLORS_KEY = "container_colors";
 const MANUFACTURERS_KEY = "container_manufacturers";
@@ -2252,7 +2267,9 @@ export class WarehouseService {
   }
 
   private assertYardDemo(user: AuthUser) {
-    if (!isSuperadmin(user.role)) throw new ForbiddenException("Solo el superadmin usa el depósito demo.");
+    if (user.role !== "superadmin" && user.role !== "admin") {
+      throw new ForbiddenException("Solo el administrador y el superadmin usan el depósito demo.");
+    }
   }
 
   private async readYardSim(depotId = YARD_DEMO_ID): Promise<YardSim> {
@@ -2291,11 +2308,13 @@ export class WarehouseService {
         }).slice(0, 300)
       : [];
     const scenarioId = String(value.scenarioId || "");
+    const rumaTemplateId = String(value.rumaTemplateId || "");
     return {
       placements,
       history,
       ...(scenarioId ? { scenarioId } : {}),
       withPerimeter: value.withPerimeter === true,
+      ...(rumaTemplateId ? { rumaTemplateId } : {}),
     };
   }
 
@@ -2305,6 +2324,7 @@ export class WarehouseService {
       history: sim.history.slice(0, 300),
       ...(sim.scenarioId ? { scenarioId: sim.scenarioId } : {}),
       withPerimeter: sim.withPerimeter === true,
+      ...(sim.rumaTemplateId ? { rumaTemplateId: sim.rumaTemplateId } : {}),
     };
     await this.prisma.appSetting.upsert({
       where: { key: yardSimKey(depotId) },
@@ -2382,8 +2402,7 @@ export class WarehouseService {
       await this.writeYardSim(depotId, {
         placements: others.concat([{ iso, lado, ruma, columna, nivel, half: storedHalf }]),
         history: [{ id: randomUUID(), iso, type: "Movimiento", detail, createdAt: new Date().toISOString() }, ...sim.history],
-        scenarioId: sim.scenarioId,
-        withPerimeter: sim.withPerimeter,
+        ...simMeta(sim),
       });
       await this.audit.log({ user, action: "place", entity: "YardDemo", entityId: iso, after: { lado, ruma, columna, nivel }, ip });
       return { ok: true, message: placeSuccessMessage(iso, lado, ruma, columna, nivel) };
@@ -2440,8 +2459,7 @@ export class WarehouseService {
       await this.writeYardSim(depotId, {
         placements,
         history: [{ id: randomUUID(), iso, type: "Movimiento", detail, createdAt: new Date().toISOString() }, ...sim.history],
-        scenarioId: sim.scenarioId,
-        withPerimeter: sim.withPerimeter,
+        ...simMeta(sim),
       });
       await this.audit.log({ user, action: nextSide ? "aisle" : "release", entity: "YardDemo", entityId: iso, after: { lado: nextSide }, ip });
       return { ok: true, message: detail };
@@ -2494,10 +2512,64 @@ export class WarehouseService {
     });
   }
 
+  async loadRumaTemplate(depotId: string, templateId: string, user: AuthUser, ip?: string) {
+    this.assertYardDemo(user);
+    if (!isYardDemo(depotId)) throw new BadRequestException("Las plantillas de rumas se cargan en un depósito demo.");
+    const template = yardRumaTemplate(templateId);
+    if (!template) throw new BadRequestException("Esa plantilla de rumas no existe.");
+    return this.locks.withYardLock(depotId, async () => {
+      const plan = await this.getYardPlan(depotId);
+      if (!plan.zones.length) throw new BadRequestException("Este depósito no tiene zonas. Carga un escenario antes de las rumas.");
+      const live = await this.prisma.liveContainers();
+      const stock = await this.prisma.container.findMany({
+        where: { ...live, status: { notIn: ["Vendido", "Alquilado", "Retirado por cliente"] } },
+        select: { iso: true, type: true },
+      });
+      const placed = fillRumaTemplate(
+        plan.zones.map((zone) => ({ name: zone.name, rows: zone.rows, cols: zone.cols, levels: zone.levels })),
+        templateId,
+        stock.map((item) => ({ iso: item.iso, feet: feetOf(item.type) })),
+      );
+      if (!placed.length) throw new BadRequestException("No hay equipos a la mano para armar esas rumas.");
+      const sim = await this.readYardSim(depotId);
+      const used = new Set(placed.map((item) => item.iso));
+      const now = new Date().toISOString();
+      await this.prisma.appSetting.upsert({
+        where: { key: yardPlanKey(depotId) },
+        update: { value: { ...plan, ghosts: [], perimeter: { ...plan.perimeter, cells: plan.perimeter.cells.filter((cell) => !used.has(cell.iso)) } } },
+        create: { key: yardPlanKey(depotId), value: { ...plan, ghosts: [], perimeter: { ...plan.perimeter, cells: plan.perimeter.cells.filter((cell) => !used.has(cell.iso)) } } },
+      });
+      await this.writeYardSim(depotId, {
+        placements: placed.map((item) => ({ ...item, half: null })),
+        history: placed.slice(0, 300).map((item) => ({
+          id: randomUUID(),
+          iso: item.iso,
+          type: "Movimiento",
+          detail: `Simulación: plantilla ${template.name}. ${posLabel(item)}.`,
+          createdAt: now,
+        })),
+        scenarioId: sim.scenarioId,
+        withPerimeter: sim.withPerimeter,
+        rumaTemplateId: templateId,
+      });
+      await this.audit.log({
+        user,
+        action: "load",
+        entity: "YardDemo",
+        entityId: depotId,
+        after: { templateId, placed: placed.length },
+        ip,
+      });
+      return { ok: true, placed: placed.length, message: `${template.name}: ${placed.length} equipo(s) en las rumas. El patio real no cambió.` };
+    });
+  }
+
   async yardLayout(depotId: string, user?: AuthUser) {
     const simulation = isYardDemo(depotId);
     if (simulation) {
-      if (!user || !isSuperadmin(user.role)) throw new ForbiddenException("Solo el superadmin usa el depósito demo.");
+      if (!user || (user.role !== "superadmin" && user.role !== "admin")) {
+        throw new ForbiddenException("Solo el administrador y el superadmin usan el depósito demo.");
+      }
     }
     const depot = simulation ? null : await this.prisma.depot.findUnique({ where: { id: depotId } });
     if (!simulation && !depot) throw new NotFoundException("Depósito no encontrado.");
@@ -2583,7 +2655,7 @@ export class WarehouseService {
       };
     });
     const listed = depots.map((item) => ({ id: item.id, name: item.name }));
-    if (user && isSuperadmin(user.role)) {
+    if (user && (user.role === "superadmin" || user.role === "admin")) {
       listed.push({ id: YARD_DEMO_ID, name: "Depósito demo" });
       listed.push({ id: YARD_DEMO_2_ID, name: "Depósito demo 2" });
     }
@@ -2592,7 +2664,9 @@ export class WarehouseService {
       depotName: simulation ? demoDepotName(depotId) : depot!.name,
       simulation,
       scenarios: depotId === YARD_DEMO_2_ID ? YARD_SCENARIOS : [],
+      rumas: simulation ? YARD_RUMA_TEMPLATES.map(({ id, name, detail }) => ({ id, name, detail })) : [],
       activeScenario: sim?.scenarioId || "",
+      activeRuma: sim?.rumaTemplateId || "",
       withPerimeter: sim?.withPerimeter === true,
       depots: listed,
       types,
@@ -2875,8 +2949,7 @@ export class WarehouseService {
       await this.writeYardSim(depotId, {
         placements,
         history: iso ? [{ id: randomUUID(), iso, type: "Movimiento", detail, createdAt: new Date().toISOString() }, ...sim.history] : sim.history,
-        scenarioId: sim.scenarioId,
-        withPerimeter: sim.withPerimeter,
+        ...simMeta(sim),
       });
       await this.audit.log({ user, action: input.wall ? "fence_wall" : "fence_place", entity: "YardDemo", entityId: iso || sideId, after: { sideId, slot, level }, ip });
       return { ok: true };
@@ -3064,9 +3137,12 @@ export class WarehouseService {
   }
 
   async resetDepot(depotId: string, user: AuthUser, ip?: string) {
-    if (!isSuperadmin(user.role)) throw new ForbiddenException("Solo el superadmin puede reiniciar un depósito.");
     if (!depotId) throw new BadRequestException("Elige un depósito.");
-    if (isYardDemo(depotId)) return this.resetDemo(depotId, user, ip);
+    if (isYardDemo(depotId)) {
+      this.assertYardDemo(user);
+      return this.resetDemo(depotId, user, ip);
+    }
+    if (!isSuperadmin(user.role)) throw new ForbiddenException("Solo el superadmin puede reiniciar un depósito.");
     const depot = await this.prisma.depot.findUnique({ where: { id: depotId } });
     if (!depot) throw new NotFoundException("Depósito no encontrado.");
     return this.locks.withYardLock(depotId, async () => {
