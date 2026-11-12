@@ -87,7 +87,7 @@ export default function Patio() {
     const chosen = (layout.scenarios || []).find((item) => item.id === scenario);
     const name = chosen?.name || "el escenario";
     const fence = withPerimeter ? "con perímetro" : "sin perímetro";
-    if (!window.confirm(`Cargar ${name}, ${fence}. Se vacían las posiciones y se vuelven a poner las zonas de ese escenario.`)) return;
+    if (!window.confirm(`Cargar ${name}, ${fence}. Se arman las rumas y, si hay perímetro, el cerco. Un 40 queda sobre un 40 o sobre dos de 20.`)) return;
     setBusy(true);
     setError("");
     try {
@@ -104,7 +104,7 @@ export default function Patio() {
   async function loadRumas() {
     const chosen = (layout.rumas || []).find((item) => item.id === ruma);
     const name = chosen?.name || "la plantilla";
-    if (!window.confirm(`Cargar ${name}. Se reemplazan las posiciones de esta simulación con esa estructura de rumas. Los equipos se reparten al azar y el patio real no cambia.`)) return;
+    if (!window.confirm(`Cargar ${name}. Se arman las rumas y el cerco. Un 40 queda sobre un 40 o sobre dos de 20. El patio real no cambia.`)) return;
     setBusy(true);
     setError("");
     try {
@@ -164,7 +164,7 @@ export default function Patio() {
       {layout.simulation ? (
         <p className="section-sub">
           {layout.depotId === "yard-demo-2"
-            ? "Depósito demo 2. Carga un escenario y una plantilla de rumas para practicar traslados. Vaciar posiciones no borra las zonas. El patio real no se mueve."
+            ? "Depósito demo 2. Cargar un escenario arma las rumas y deja contenedores en el cerco. Un 40 va sobre un 40 o sobre dos de 20. El patio real no se mueve."
             : "Depósito demo. Carga una plantilla de rumas para simular el patio. Los equipos se reparten al azar y lo que muevas aquí no cambia el depósito real."}
         </p>
       ) : null}

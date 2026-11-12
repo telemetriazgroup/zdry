@@ -19,6 +19,24 @@ export type RumaPlacement = {
   ruma: number;
   columna: number;
   nivel: number;
+  half: "A" | "B" | null;
+};
+
+export type PerimeterSideInput = {
+  id: string;
+  kind: string;
+  containerFeet: number;
+  levels: number;
+  slots: number;
+  wallSlots?: number[];
+};
+
+export type PerimeterCell = {
+  sideId: string;
+  slot: number;
+  level: number;
+  iso: string;
+  half?: "A" | "B";
 };
 
 function levels(col: number, row: number, height: number): RumaSlot[] {
@@ -49,7 +67,7 @@ export const YARD_RUMA_TEMPLATES: RumaTemplate[] = [
   {
     id: "cargado",
     name: "Patio cargado",
-    detail: "En cada zona hay una ruma tapada, una escalera y una fila libre. Es la plantilla para practicar traslados.",
+    detail: "En cada zona hay una ruma tapada, una escalera y una fila libre. En una ruma alta el nivel 1 son dos de 20 y encima va un 40.",
     cells: [
       ...levels(1, 1, 5),
       ...levels(1, 2, 1),
@@ -114,8 +132,35 @@ function stacksOf(zones: RumaZone[], cells: RumaSlot[]): OpenSlot[][] {
   return [...stacks.values()].map((stack) => stack.sort((a, b) => a.nivel - b.nivel));
 }
 
+function takeNext(pile: RumaContainer[], used: Set<string>): RumaContainer | null {
+  const item = pile.find((entry) => !used.has(entry.iso));
+  if (!item) return null;
+  used.add(item.iso);
+  return item;
+}
+
+function takePair(pile: RumaContainer[], used: Set<string>): [RumaContainer, RumaContainer] | null {
+  const free = pile.filter((entry) => !used.has(entry.iso));
+  if (free.length < 2) return null;
+  used.add(free[0].iso);
+  used.add(free[1].iso);
+  return [free[0], free[1]];
+}
+
+function placeAt(placed: RumaPlacement[], slot: OpenSlot, iso: string, half: "A" | "B" | null) {
+  placed.push({ iso, lado: slot.lado, ruma: slot.ruma, columna: slot.columna, nivel: slot.nivel, half });
+}
+
+function supportOf(placed: Array<{ nivel: number; half: "A" | "B" | null | undefined }>, level: number) {
+  const below = placed.filter((item) => item.nivel === level - 1);
+  const full = below.some((item) => !item.half);
+  const pair = below.some((item) => item.half === "A") && below.some((item) => item.half === "B");
+  return { full, pair, holdsForty: level <= 1 || full || pair };
+}
+
 /**
- * Reparte equipos sobre la plantilla. Una ruma no mezcla 20 y 40.
+ * Reparte equipos sobre la plantilla.
+ * Un 40 se apoya en un 40 o en dos de 20, uno en cada mitad. Un solo 20 no lleva nada encima.
  * Si no alcanzan, la ruma queda más baja y no flota un nivel.
  */
 export function fillRumaTemplate(
@@ -134,22 +179,107 @@ export function fillRumaTemplate(
     if (iso && !unique.has(iso)) unique.set(iso, { iso, feet: item.feet });
   }
   const all = [...unique.values()];
-  const wide = shuffle(all.filter((item) => item.feet >= 40 || item.feet <= 0), random);
-  const narrow = shuffle(all.filter((item) => item.feet > 0 && item.feet < 40), random);
+  const wide = shuffle(all.filter((item) => item.feet === 40), random);
+  const twenties = shuffle(all.filter((item) => item.feet === 20), random);
   const used = new Set<string>();
   const placed: RumaPlacement[] = [];
-  const takeFrom = (pile: RumaContainer[], count: number) => {
-    const free = pile.filter((item) => !used.has(item.iso));
-    return free.slice(0, count);
-  };
+  const pairBase = new Set<string>();
+  const seenZone = new Set<string>();
   for (const stack of stacks) {
-    const wideTake = takeFrom(wide, stack.length);
-    const chosen = wideTake.length ? wideTake : takeFrom(narrow, stack.length);
-    chosen.forEach((item, index) => {
-      used.add(item.iso);
-      const slot = stack[index];
-      placed.push({ iso: item.iso, lado: slot.lado, ruma: slot.ruma, columna: slot.columna, nivel: slot.nivel });
-    });
+    const zone = stack[0].lado;
+    if (stack.length >= 2 && !seenZone.has(zone)) {
+      seenZone.add(zone);
+      pairBase.add(`${zone}|${stack[0].columna}|${stack[0].ruma}`);
+    }
+  }
+  for (const stack of stacks) {
+    const key = `${stack[0].lado}|${stack[0].columna}|${stack[0].ruma}`;
+    const column: RumaPlacement[] = [];
+    for (const slot of stack) {
+      const support = supportOf(column, slot.nivel);
+      if (!support.holdsForty) break;
+      if (slot.nivel === 1 && pairBase.has(key)) {
+        const pair = takePair(twenties, used);
+        if (pair) {
+          placeAt(column, slot, pair[0].iso, "A");
+          placeAt(column, slot, pair[1].iso, "B");
+          continue;
+        }
+      }
+      const forty = takeNext(wide, used);
+      if (forty) {
+        placeAt(column, slot, forty.iso, null);
+        continue;
+      }
+      const pair = takePair(twenties, used);
+      if (pair) {
+        placeAt(column, slot, pair[0].iso, "A");
+        placeAt(column, slot, pair[1].iso, "B");
+        continue;
+      }
+      const single = takeNext(twenties, used);
+      if (single) placeAt(column, slot, single.iso, "A");
+      break;
+    }
+    placed.push(...column);
   }
   return placed;
+}
+
+/** Llena los lados de contenedores del cerco. Un 40 del cerco también necesita un 40 o dos de 20 debajo. */
+export function fillPerimeter(
+  sides: PerimeterSideInput[],
+  containers: RumaContainer[],
+  used: Set<string>,
+  random: () => number = Math.random,
+): PerimeterCell[] {
+  const unique = new Map<string, RumaContainer>();
+  for (const item of containers) {
+    const iso = String(item.iso || "").trim().toUpperCase();
+    if (iso && !unique.has(iso) && !used.has(iso)) unique.set(iso, { iso, feet: item.feet });
+  }
+  const all = [...unique.values()];
+  const wide = shuffle(all.filter((item) => item.feet === 40), random);
+  const twenties = shuffle(all.filter((item) => item.feet === 20), random);
+  const cells: PerimeterCell[] = [];
+  for (const side of sides) {
+    if (side.kind !== "contenedores" && side.kind !== "mixto") continue;
+    const blocked = new Set(side.wallSlots || []);
+    const levels = Math.max(1, Math.min(3, Math.round(side.levels) || 1));
+    const slots = Math.max(0, Math.round(side.slots) || 0);
+    for (let slot = 1; slot <= slots; slot += 1) {
+      if (blocked.has(slot)) continue;
+      const column: PerimeterCell[] = [];
+      for (let level = 1; level <= levels; level += 1) {
+        const support = supportOf(column.map((cell) => ({ nivel: cell.level, half: cell.half || null })), level);
+        if (!support.holdsForty) break;
+        const wideSlot = side.containerFeet >= 40;
+        if (wideSlot && level === 1 && slot % 2 === 1) {
+          const pair = takePair(twenties, used);
+          if (pair) {
+            column.push({ sideId: side.id, slot, level, iso: pair[0].iso, half: "A" }, { sideId: side.id, slot, level, iso: pair[1].iso, half: "B" });
+            continue;
+          }
+        }
+        if (wideSlot) {
+          const forty = takeNext(wide, used);
+          if (forty) {
+            column.push({ sideId: side.id, slot, level, iso: forty.iso });
+            continue;
+          }
+          const pair = takePair(twenties, used);
+          if (pair) {
+            column.push({ sideId: side.id, slot, level, iso: pair[0].iso, half: "A" }, { sideId: side.id, slot, level, iso: pair[1].iso, half: "B" });
+            continue;
+          }
+          break;
+        }
+        const twenty = takeNext(twenties, used);
+        if (!twenty) break;
+        column.push({ sideId: side.id, slot, level, iso: twenty.iso });
+      }
+      cells.push(...column);
+    }
+  }
+  return cells;
 }

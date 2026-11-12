@@ -43,9 +43,43 @@ function baySpan(type, half) {
   return "full";
 }
 
+function spansOverlap(left, right) {
+  if (left === "center" || right === "center") return true;
+  return left === "full" || right === "full" || left === right;
+}
+
 function coversHalf(item, half) {
   const span = baySpan(item.type || item.typeCode, item.half ?? item.bayHalf);
   return span === "full" || span === half;
+}
+
+function stackerBlocked(zone, units, ghosts, row, col, level, type, half) {
+  const span = baySpan(type, half);
+  const above = (units || []).some((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel > level && spansOverlap(baySpan(unit.type, unit.bayHalf), span))
+    || (ghosts || []).some((ghost) => ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level > level && spansOverlap(baySpan(ghost.typeCode, ghost.half), span));
+  if (above) return true;
+  const count = (axis, towardLow) => {
+    const limit = axis === "row" ? Number(zone.rows) : Number(zone.cols);
+    const index = axis === "row" ? row : col;
+    const from = towardLow ? 1 : index + 1;
+    const to = towardLow ? index - 1 : limit;
+    let total = 0;
+    for (let cursor = from; cursor <= to; cursor += 1) {
+      const atRow = axis === "row" ? cursor : row;
+      const atCol = axis === "col" ? cursor : col;
+      total += (units || []).filter((unit) => unit.lado === zone.name && unit.ruma === atRow && unit.columna === atCol && unit.nivel > level && spansOverlap(baySpan(unit.type, unit.bayHalf), span)).length;
+      total += (ghosts || []).filter((ghost) => ghost.zoneId === zone.id && ghost.row === atRow && ghost.col === atCol && ghost.level > level && spansOverlap(baySpan(ghost.typeCode, ghost.half), span)).length;
+    }
+    return total;
+  };
+  const closed = zone.closedSide || "";
+  const options = [];
+  if (closed === "izquierda" || closed === "derecha") options.push(count("col", closed === "derecha"));
+  else {
+    if (closed !== "frente") options.push(count("row", true));
+    if (closed !== "fondo") options.push(count("row", false));
+  }
+  return options.length ? Math.min(...options) > 0 : false;
 }
 
 function columnAllows(zone, row, col, level, incomingType, units, ghosts, half) {
@@ -125,6 +159,27 @@ function faceTexture(color, label, hatch) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(label || "", 256, 128);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+function alertTexture(label) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#e8590c";
+  ctx.fillRect(0, 0, 512, 256);
+  ctx.strokeStyle = "#fff3e0";
+  ctx.lineWidth = 14;
+  ctx.strokeRect(16, 16, 480, 224);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "700 64px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(label || "").slice(-6), 256, 128);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 4;
@@ -520,7 +575,9 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
             hints.forEach((span) => {
               const floor = span === "B" ? floorB : span === "A" ? floorA : Math.max(floorA, floorB);
               if (offered[span]) return;
-              if (!columnAllows(zone, row, col, level, options.incomingType, stackedUnits, ghosts, span === "A" || span === "B" ? span : span === "center" ? "center" : null)) return;
+              const dropHalf = span === "A" || span === "B" ? span : span === "center" ? "center" : null;
+            if (!columnAllows(zone, row, col, level, options.incomingType, stackedUnits, ghosts, dropHalf)) return;
+            if (stackerBlocked(zone, stackedUnits, ghosts, row, col, level, options.incomingType, dropHalf)) return;
                 offered[span] = true;
                 const trio = hints.includes("center");
                 const length = span === "A" || span === "B"
@@ -705,19 +762,21 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
   return root;
 }
 
-export default function YardScene({ zones, units, ghosts, perimeter, typeColor, onPick, picked, onClose, targets, incomingType, movingIso, transferring, onTransfer, onSlide, onSplit, onContextMenu, onPark, onRelease, history, fenceHint }) {
+export default function YardScene({ zones, units, ghosts, perimeter, typeColor, onPick, picked, onClose, targets, incomingType, movingIso, transferring, blockers, onTransfer, onSlide, onSplit, onContextMenu, onPark, onRelease, history, fenceHint }) {
   const mountRef = useRef(null);
   const pickRef = useRef(onPick);
   const menuRef = useRef(onContextMenu);
   const colorRef = useRef(typeColor);
   const viewRef = useRef(null);
   const yardRoot = useRef(null);
+  const blockersRef = useRef(new Set());
   const selectedRef = useRef("");
   const dataRef = useRef({ zones, units, ghosts, targets, incomingType });
   const [detailIso, setDetailIso] = useState("");
   pickRef.current = onPick;
   menuRef.current = onContextMenu;
   colorRef.current = typeColor;
+  blockersRef.current = new Set(blockers || []);
   selectedRef.current = picked && !picked.empty ? (picked.key || "") : "";
   dataRef.current = { zones, units, ghosts, targets, incomingType, perimeter, movingIso };
   const yardKey = JSON.stringify({
@@ -828,6 +887,7 @@ export default function YardScene({ zones, units, ghosts, perimeter, typeColor, 
       const prev = { yaw: view.yaw, pitch: view.pitch, dist: view.dist, target: view.target.clone() };
       if (content) {
         content.traverse((node) => {
+          node.userData?.alertMap?.dispose?.();
           if (node.geometry) node.geometry.dispose?.();
         });
         (content.userData.disposables || []).forEach((item) => item?.dispose?.());
@@ -854,8 +914,26 @@ export default function YardScene({ zones, units, ghosts, perimeter, typeColor, 
       frame = requestAnimationFrame(loop);
       const glow = 0.55 + Math.sin(performance.now() / 180) * 0.4;
       yardRoot.current?.traverse((node) => {
-        if (!node.isMesh || !node.userData.pick || !node.material?.emissive) return;
-        const on = node.userData.pick.key === selectedRef.current;
+        if (!node.isMesh || !node.userData.pick || node.userData.pick.empty || !node.material?.emissive) return;
+        const blocked = blockersRef.current.has(node.userData.pick.key);
+        const on = !blocked && node.userData.pick.key === selectedRef.current;
+        if (blocked) {
+          if (!node.userData.alertMap) node.userData.alertMap = alertTexture(node.userData.pick.code || "");
+          if (node.material.map !== node.userData.alertMap) {
+            if (!node.userData.baseMap) node.userData.baseMap = node.material.map;
+            node.material.map = node.userData.alertMap;
+            node.material.color.set("#ffffff");
+            node.material.needsUpdate = true;
+          }
+          node.material.emissive.set("#9a3412");
+          node.material.emissiveIntensity = 0.7;
+          return;
+        }
+        if (node.userData.baseMap && node.material.map !== node.userData.baseMap) {
+          node.material.map = node.userData.baseMap;
+          node.material.color.set("#ffffff");
+          node.material.needsUpdate = true;
+        }
         node.material.emissive.set(on ? 0xffc107 : 0x000000);
         node.material.emissiveIntensity = on ? glow : 0;
       });
@@ -1042,7 +1120,8 @@ export default function YardScene({ zones, units, ghosts, perimeter, typeColor, 
                 </>
               );
             })()}
-            {picked.splittable && onSplit ? (
+            {picked.blocked ? <p>Los equipos en naranja hay que moverlos antes. El stacker no saca este mientras estén encima o le tapen la vista.</p> : null}
+            {picked.splittable && onSplit && !picked.blocked ? (
               <div className="yard-float-actions">
                 <button className="btn-ghost" type="button" onClick={onSplit}>Dividir en dos de 20</button>
               </div>
@@ -1051,13 +1130,13 @@ export default function YardScene({ zones, units, ghosts, perimeter, typeColor, 
               {detailCode ? (
                 <button className="btn-primary" type="button" onClick={() => setDetailIso(detailCode)}>Más información</button>
               ) : null}
-              {!picked.unknown && !picked.empty && onTransfer ? (
+              {!picked.blocked && !picked.unknown && !picked.empty && onTransfer ? (
                 <button className="btn-primary" type="button" onClick={onTransfer}>{transferring ? "Destino" : "Trasladar"}</button>
               ) : null}
-              {transferring ? <button className="btn-ghost" type="button" onClick={onPark}>Pasillo</button> : null}
-              {transferring ? <button className="btn-ghost" type="button" onClick={onRelease}>Devolver</button> : null}
+              {transferring && !picked.blocked && (picked.key === movingIso || picked.code === movingIso) ? <button className="btn-ghost" type="button" onClick={onPark}>Pasillo</button> : null}
+              {transferring && !picked.blocked && (picked.key === movingIso || picked.code === movingIso) ? <button className="btn-ghost" type="button" onClick={onRelease}>Devolver</button> : null}
             </div>
-            {transferring ? <p>Toca un cuadro amarillo del patio o del cerco. Un puesto de 40 pies admite un 40, o dos de 20, uno en cada mitad.</p> : null}
+            {transferring && !picked.blocked ? <p>Toca un cuadro amarillo. Solo aparecen puestos libres a los que el stacker llega.</p> : null}
             {transferring && fenceHint ? <p>{fenceHint}</p> : null}
             {history?.length ? (
               <ul className="yard-history">

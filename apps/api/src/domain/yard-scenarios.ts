@@ -47,7 +47,7 @@ function block(id: string, name: string, gridRow: number, gridCol: number, close
 }
 
 function wallBox(width: number, depth: number): YardPlan["perimeter"] {
-  const side = (id: string, name: string, lengthM: number) => ({
+  const wall = (id: string, name: string, lengthM: number) => ({
     id,
     name,
     lengthM,
@@ -58,9 +58,20 @@ function wallBox(width: number, depth: number): YardPlan["perimeter"] {
     levels: 1,
     wallSlots: [] as number[],
   });
+  const containers = (id: string, name: string, lengthM: number) => ({
+    id,
+    name,
+    lengthM,
+    turnDeg: 90,
+    kind: "contenedores" as const,
+    containerFeet: 40 as const,
+    wallM: 0,
+    levels: 2,
+    wallSlots: [] as number[],
+  });
   return {
-    sides: [side("norte", "Norte", width), side("este", "Este", depth), side("sur", "Sur", width), side("oeste", "Oeste", depth)],
-    gates: [{ id: "entrada", sideId: "norte", name: "Entrada", atM: Math.max(0, Math.round(width / 2 - 6)), widthM: 12 }],
+    sides: [containers("norte", "Norte", width), wall("este", "Este", depth), containers("sur", "Sur", width), wall("oeste", "Oeste", depth)],
+    gates: [{ id: "entrada", sideId: "este", name: "Entrada", atM: Math.max(0, Math.round(depth / 2 - 6)), widthM: 12 }],
     cells: [],
   };
 }

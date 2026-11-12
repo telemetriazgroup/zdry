@@ -64,9 +64,9 @@ import {
   posLabel,
   validateMove,
 } from "../domain/yard";
-import { AISLE_SIDE, FENCE_SIDE, accessBlockMessage, accessPlaceNote, asBayHalf, baySpan, fenceSlotCount, fenceWithout, feetOf, ghostsWithSupport, movesToReach, normalizeYardPlan, spansOverlap, stackLengthError, zoneSlotError, type YardPlan } from "../domain/yard-plan";
+import { AISLE_SIDE, FENCE_SIDE, STACKER_PLACE_MESSAGE, accessBlockMessage, accessPlaceNote, asBayHalf, baySpan, fenceSlotCount, fenceWithout, feetOf, ghostsWithSupport, movesToReach, normalizeYardPlan, spansOverlap, stackLengthError, zoneSlotError, type YardPlan } from "../domain/yard-plan";
 import { YARD_SCENARIOS, yardScenario } from "../domain/yard-scenarios";
-import { YARD_RUMA_TEMPLATES, fillRumaTemplate, yardRumaTemplate } from "../domain/yard-rumas";
+import { YARD_RUMA_TEMPLATES, fillPerimeter, fillRumaTemplate, yardRumaTemplate } from "../domain/yard-rumas";
 import { readMovementPolicy } from "../domain/freight-stub";
 import { PHOTO_STATUS_ACTIVE, PHOTO_STATUS_REJECTED } from "../domain/catalog-media";
 import { OdooClient } from "../odoo/odoo.client";
@@ -137,6 +137,34 @@ function fenceHalfFor(sideFeet: 20 | 40, feet: number, raw?: string | null): "A"
 function fenceCellsOverlap(left?: string | null, right?: string | null) {
   if (!left || !right) return true;
   return left === right;
+}
+
+function stockDemoYard(
+  zones: { name: string; rows: number; cols: number; levels: number }[],
+  perimeter: { sides: { id: string; kind: string; containerFeet: 20 | 40; levels: number; wallSlots: number[]; lengthM: number; wallM: number }[] },
+  templateId: string,
+  stock: { iso: string; feet: number }[],
+) {
+  const placed = fillRumaTemplate(zones, templateId, stock);
+  const used = new Set(placed.map((item) => item.iso));
+  const fence = fillPerimeter(
+    perimeter.sides.map((side) => ({
+      id: side.id,
+      kind: side.kind,
+      containerFeet: side.containerFeet,
+      levels: side.levels,
+      slots: fenceSlotCount({
+        lengthM: side.lengthM,
+        kind: side.kind === "contenedores" || side.kind === "mixto" ? side.kind : "pared",
+        containerFeet: side.containerFeet === 20 ? 20 : 40,
+        wallM: side.wallM,
+      }),
+      wallSlots: side.wallSlots,
+    })),
+    stock,
+    used,
+  );
+  return { placed, fence };
 }
 
 function fenceLevelSupported(cells: { sideId: string; slot: number; level: number; iso: string; half?: string | null }[], sideId: string, slot: number, level: number, half: "A" | "B" | null, iso: string) {
@@ -2349,7 +2377,7 @@ export class WarehouseService {
     });
   }
 
-  private async placeInDemo(depotId: string, iso: string, lado: string, ruma: number, columna: number, nivel: number, half: "A" | "B" | null, user: AuthUser, ip?: string) {
+  private async placeInDemo(depotId: string, iso: string, lado: string, ruma: number, columna: number, nivel: number, half: "A" | "B" | null, stacker: boolean, user: AuthUser, ip?: string) {
     this.assertYardDemo(user);
     return this.locks.withYardLock(depotId, async () => {
       const plan = await this.getYardPlan(depotId);
@@ -2372,12 +2400,25 @@ export class WarehouseService {
         ? await this.prisma.container.findMany({ where: { iso: { in: others.map((item) => item.iso) } }, select: { iso: true, type: true } })
         : [];
       const typeOf = new Map(typed.map((item) => [item.iso, item.type]));
+      const stacked = others
+        .filter((item) => item.lado && item.lado !== AISLE_SIDE && item.ruma && item.columna && item.nivel)
+        .map((item) => ({ zoneName: item.lado, row: item.ruma || 0, col: item.columna || 0, level: item.nivel || 0, type: typeOf.get(item.iso) || "", half: item.half, iso: item.iso }));
+      if (stacker && previous?.lado && previous.lado !== AISLE_SIDE && previous.lado !== FENCE_SIDE && previous.ruma && previous.columna && previous.nivel) {
+        const from = movesToReach(plan.zones, plan.ghosts, stacked, previous.lado, previous.ruma, previous.columna, previous.nivel, iso, previous.half, unit.type);
+        if (from.total) throw new ConflictException(accessBlockMessage(from.above, from.beside));
+      }
+      if (stacker && previous?.lado === FENCE_SIDE && previous.columna && previous.nivel) {
+        const side = plan.perimeter.sides[(previous.ruma || 1) - 1];
+        const covered = side && plan.perimeter.cells.some((cell) => cell.sideId === side.id && cell.slot === previous.columna && cell.level > (previous.nivel || 0) && cell.iso !== iso && fenceCellsOverlap(cell.half, previous.half));
+        if (covered) throw new ConflictException(accessBlockMessage(1, 0));
+      }
       const taken = others.find((item) => item.lado === lado && item.ruma === ruma && item.columna === columna && item.nivel === nivel && spansOverlap(baySpan(typeOf.get(item.iso), item.half), span));
       if (taken) throw new ConflictException(`${taken.iso} ya ocupa esa posición.`);
       if (zone) {
-        const stacked = others
-          .filter((item) => item.lado && item.lado !== AISLE_SIDE && item.ruma && item.columna && item.nivel)
-          .map((item) => ({ zoneName: item.lado, row: item.ruma || 0, col: item.columna || 0, level: item.nivel || 0, type: typeOf.get(item.iso) || "", half: item.half, iso: item.iso }));
+        if (stacker) {
+          const into = movesToReach(plan.zones, plan.ghosts, stacked, lado, ruma, columna, nivel, iso, storedHalf, unit.type);
+          if (into.total) throw new ConflictException(STACKER_PLACE_MESSAGE);
+        }
         const problem = stackLengthError(zone, plan.ghosts, stacked, unit.type, ruma, columna, nivel, storedHalf);
         if (problem) throw new ConflictException(problem);
         stacked.push({ zoneName: lado, row: ruma, col: columna, level: nivel, type: unit.type, half: storedHalf, iso });
@@ -2493,22 +2534,58 @@ export class WarehouseService {
     const scenario = yardScenario(scenarioId, withPerimeter);
     if (!scenario) throw new BadRequestException("Ese escenario no existe.");
     return this.locks.withYardLock(depotId, async () => {
+      const live = await this.prisma.liveContainers();
+      const stock = await this.prisma.container.findMany({
+        where: { ...live, status: { notIn: ["Vendido", "Alquilado", "Retirado por cliente"] } },
+        select: { iso: true, type: true },
+      });
+      const loaded = stockDemoYard(
+        scenario.plan.zones.map((zone) => ({ name: zone.name, rows: zone.rows, cols: zone.cols, levels: zone.levels })),
+        scenario.plan.perimeter,
+        "cargado",
+        stock.map((item) => ({ iso: item.iso, feet: feetOf(item.type) })),
+      );
+      const now = new Date().toISOString();
+      const fencePlacements = loaded.fence.map((cell) => {
+        const sideIndex = scenario.plan.perimeter.sides.findIndex((side) => side.id === cell.sideId);
+        return { iso: cell.iso, lado: FENCE_SIDE, ruma: sideIndex + 1, columna: cell.slot, nivel: cell.level, half: cell.half || null };
+      });
+      const placements = [
+        ...loaded.placed.map((item) => ({ iso: item.iso, lado: item.lado, ruma: item.ruma, columna: item.columna, nivel: item.nivel, half: item.half })),
+        ...fencePlacements,
+      ];
+      const plan = { ...scenario.plan, ghosts: [], perimeter: { ...scenario.plan.perimeter, cells: loaded.fence.map((cell) => ({ sideId: cell.sideId, slot: cell.slot, level: cell.level, iso: cell.iso, ...(cell.half ? { half: cell.half } : {}) })) } };
       await this.prisma.appSetting.upsert({
         where: { key: yardPlanKey(depotId) },
-        update: { value: scenario.plan },
-        create: { key: yardPlanKey(depotId), value: scenario.plan },
+        update: { value: plan },
+        create: { key: yardPlanKey(depotId), value: plan },
       });
-      await this.writeYardSim(depotId, { placements: [], history: [], scenarioId, withPerimeter });
+      await this.writeYardSim(depotId, {
+        placements,
+        history: placements.slice(0, 300).map((item) => ({
+          id: randomUUID(),
+          iso: item.iso,
+          type: "Movimiento",
+          detail: item.lado === FENCE_SIDE
+            ? `Simulación: ${scenario.name}. Cerco · puesto ${item.columna} · nivel ${item.nivel}.`
+            : `Simulación: ${scenario.name}. ${posLabel(item)}.`,
+          createdAt: now,
+        })),
+        scenarioId,
+        withPerimeter,
+        rumaTemplateId: "cargado",
+      });
       await this.audit.log({
         user,
         action: "load",
         entity: "YardDemo",
         entityId: depotId,
-        after: { scenarioId, withPerimeter, zones: scenario.plan.zones.length },
+        after: { scenarioId, withPerimeter, zones: scenario.plan.zones.length, placed: loaded.placed.length, fence: loaded.fence.length },
         ip,
       });
       const fence = withPerimeter ? "con perímetro" : "sin perímetro";
-      return { ok: true, message: `${scenario.name} cargado, ${fence}. Las posiciones quedaron vacías y las zonas se pueden volver a poner.` };
+      const cerco = loaded.fence.length ? ` ${loaded.fence.length} en el cerco.` : "";
+      return { ok: true, message: `${scenario.name} cargado, ${fence}. ${loaded.placed.length} equipo(s) en las rumas.${cerco} Un 40 va sobre un 40 o sobre dos de 20.` };
     });
   }
 
@@ -2525,27 +2602,38 @@ export class WarehouseService {
         where: { ...live, status: { notIn: ["Vendido", "Alquilado", "Retirado por cliente"] } },
         select: { iso: true, type: true },
       });
-      const placed = fillRumaTemplate(
+      const loaded = stockDemoYard(
         plan.zones.map((zone) => ({ name: zone.name, rows: zone.rows, cols: zone.cols, levels: zone.levels })),
+        plan.perimeter,
         templateId,
         stock.map((item) => ({ iso: item.iso, feet: feetOf(item.type) })),
       );
-      if (!placed.length) throw new BadRequestException("No hay equipos a la mano para armar esas rumas.");
+      if (!loaded.placed.length) throw new BadRequestException("No hay equipos a la mano para armar esas rumas.");
       const sim = await this.readYardSim(depotId);
-      const used = new Set(placed.map((item) => item.iso));
       const now = new Date().toISOString();
+      const fencePlacements = loaded.fence.map((cell) => {
+        const sideIndex = plan.perimeter.sides.findIndex((side) => side.id === cell.sideId);
+        return { iso: cell.iso, lado: FENCE_SIDE, ruma: sideIndex + 1, columna: cell.slot, nivel: cell.level, half: cell.half || null };
+      });
+      const placements = [
+        ...loaded.placed.map((item) => ({ iso: item.iso, lado: item.lado, ruma: item.ruma, columna: item.columna, nivel: item.nivel, half: item.half })),
+        ...fencePlacements,
+      ];
+      const cells = loaded.fence.map((cell) => ({ sideId: cell.sideId, slot: cell.slot, level: cell.level, iso: cell.iso, ...(cell.half ? { half: cell.half } : {}) }));
       await this.prisma.appSetting.upsert({
         where: { key: yardPlanKey(depotId) },
-        update: { value: { ...plan, ghosts: [], perimeter: { ...plan.perimeter, cells: plan.perimeter.cells.filter((cell) => !used.has(cell.iso)) } } },
-        create: { key: yardPlanKey(depotId), value: { ...plan, ghosts: [], perimeter: { ...plan.perimeter, cells: plan.perimeter.cells.filter((cell) => !used.has(cell.iso)) } } },
+        update: { value: { ...plan, ghosts: [], perimeter: { ...plan.perimeter, cells } } },
+        create: { key: yardPlanKey(depotId), value: { ...plan, ghosts: [], perimeter: { ...plan.perimeter, cells } } },
       });
       await this.writeYardSim(depotId, {
-        placements: placed.map((item) => ({ ...item, half: null })),
-        history: placed.slice(0, 300).map((item) => ({
+        placements,
+        history: placements.slice(0, 300).map((item) => ({
           id: randomUUID(),
           iso: item.iso,
           type: "Movimiento",
-          detail: `Simulación: plantilla ${template.name}. ${posLabel(item)}.`,
+          detail: item.lado === FENCE_SIDE
+            ? `Simulación: plantilla ${template.name}. Cerco · puesto ${item.columna} · nivel ${item.nivel}.`
+            : `Simulación: plantilla ${template.name}. ${posLabel(item)}.`,
           createdAt: now,
         })),
         scenarioId: sim.scenarioId,
@@ -2557,10 +2645,11 @@ export class WarehouseService {
         action: "load",
         entity: "YardDemo",
         entityId: depotId,
-        after: { templateId, placed: placed.length },
+        after: { templateId, placed: loaded.placed.length, fence: loaded.fence.length },
         ip,
       });
-      return { ok: true, placed: placed.length, message: `${template.name}: ${placed.length} equipo(s) en las rumas. El patio real no cambió.` };
+      const cerco = loaded.fence.length ? ` ${loaded.fence.length} en el cerco.` : "";
+      return { ok: true, placed: loaded.placed.length, message: `${template.name}: ${loaded.placed.length} equipo(s) en las rumas.${cerco} Un 40 va sobre un 40 o sobre dos de 20. El patio real no cambió.` };
     });
   }
 
@@ -2699,7 +2788,7 @@ export class WarehouseService {
   }
 
   async place(
-    input: { iso?: string; depotId?: string; lado?: string; ruma?: number; columna?: number; nivel?: number; regularize?: boolean; half?: string },
+    input: { iso?: string; depotId?: string; lado?: string; ruma?: number; columna?: number; nivel?: number; regularize?: boolean; stacker?: boolean; half?: string },
     user: AuthUser,
     ip?: string,
   ) {
@@ -2713,7 +2802,7 @@ export class WarehouseService {
       throw new BadRequestException("iso, depotId, lado, ruma, columna y nivel son obligatorios.");
     }
     const half = input.half === "A" || input.half === "B" ? input.half : null;
-    if (isYardDemo(depotId)) return this.placeInDemo(depotId, iso, lado, ruma, columna, nivel, half, user, ip);
+    if (isYardDemo(depotId)) return this.placeInDemo(depotId, iso, lado, ruma, columna, nivel, half, input.stacker === true, user, ip);
     const plan = await this.getYardPlan(depotId);
     const zone = plan.zones.find((item) => item.name === lado);
     if (!zone && !DEFAULT_YARD_CONFIG.lados.includes(lado as (typeof DEFAULT_YARD_CONFIG.lados)[number])) {
@@ -2758,6 +2847,20 @@ export class WarehouseService {
               }));
             const problem = stackLengthError(zone, plan.ghosts, stacked, unit.type, ruma, columna, nivel, storedHalf);
             if (problem) throw new ConflictException(problem);
+            if (input.stacker) {
+              if (unit.lado && unit.lado !== AISLE_SIDE && unit.lado !== FENCE_SIDE && unit.ruma && unit.columna && unit.nivel) {
+                const from = movesToReach(plan.zones, plan.ghosts, stacked, unit.lado, unit.ruma, unit.columna, unit.nivel, unit.iso, asBayHalf(unit.bayHalf), unit.type);
+                if (from.total) throw new ConflictException(accessBlockMessage(from.above, from.beside));
+              }
+              if (unit.lado === FENCE_SIDE && unit.columna && unit.nivel) {
+                const fenceLevel = unit.nivel;
+                const side = plan.perimeter.sides[(unit.ruma || 1) - 1];
+                const covered = side && plan.perimeter.cells.some((cell) => cell.sideId === side.id && cell.slot === unit.columna && cell.level > fenceLevel && cell.iso !== unit.iso && fenceCellsOverlap(cell.half, unit.bayHalf));
+                if (covered) throw new ConflictException(accessBlockMessage(1, 0));
+              }
+              const into = movesToReach(plan.zones, plan.ghosts, stacked, lado, ruma, columna, nivel, unit.iso, storedHalf, unit.type);
+              if (into.total) throw new ConflictException(STACKER_PLACE_MESSAGE);
+            }
           }
           if (zone && input.regularize) {
             if (taken) throw new ConflictException(`${taken.iso} ya ocupa esa posición.`);

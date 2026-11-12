@@ -1,5 +1,5 @@
 import { yardScenario } from "./yard-scenarios";
-import { defaultYardPlan, ghostsWithSupport, leftToCustomer, movesAbove, movesToReach, normalizeYardPlan, stackLengthError, zoneSlotError } from "./yard-plan";
+import { defaultYardPlan, ghostsWithSupport, leftToCustomer, movesAbove, movesToReach, normalizeYardPlan, reachBlockers, stackLengthError, zoneSlotError } from "./yard-plan";
 
 describe("yard plan", () => {
   it("arranca con una zona 3×4 de altura 5 y un pasillo", () => {
@@ -150,6 +150,19 @@ describe("yard plan", () => {
     expect(top.beside).toBe(0);
   });
 
+  it("marca el 40 que está encima del 20 y los de la fila que tapa", () => {
+    const zones = [{ id: "b", name: "Zona B", rows: 3, cols: 1, levels: 5, gridRow: 1, gridCol: 1, closedSide: "frente" as const }];
+    const occupied = [
+      { zoneName: "Zona B", row: 1, col: 1, level: 4, iso: "CUARENTA", type: "40DC" },
+      { zoneName: "Zona B", row: 1, col: 1, level: 5, iso: "TOPE", type: "40DC" },
+      { zoneName: "Zona B", row: 1, col: 1, level: 3, iso: "CORTO", type: "20DC", half: "A" as const },
+      { zoneName: "Zona B", row: 2, col: 1, level: 5, iso: "AL_LADO", type: "40DC" },
+    ];
+    const blockers = reachBlockers(zones, [], occupied, "Zona B", 1, 1, 3, "CORTO", "A", "20DC");
+    expect(blockers.map((item) => item.iso).sort()).toEqual(["AL_LADO", "CUARENTA", "TOPE"]);
+    expect(reachBlockers(zones, [], occupied, "Zona B", 1, 1, 5, "TOPE", null, "40DC")).toEqual([]);
+  });
+
   it("un 20 de la otra mitad no tapa la vista", () => {
     const zones = [{ id: "a", name: "Zona A", rows: 2, cols: 1, levels: 5, gridRow: 1, gridCol: 1, closedSide: "fondo" as const }];
     const occupied = [
@@ -166,7 +179,8 @@ describe("yard plan", () => {
     const open = yardScenario("seis", false);
     const saved = yardScenario("guardado", true);
     expect(four?.plan.zones).toHaveLength(4);
-    expect(four?.plan.perimeter.sides.every((side) => side.kind === "pared")).toBe(true);
+    expect(four?.plan.perimeter.sides.map((side) => side.kind)).toEqual(["contenedores", "pared", "contenedores", "pared"]);
+    expect(four?.plan.perimeter.sides[0].levels).toBe(2);
     expect(four?.plan.zones.map((zone) => zone.closedSide)).toEqual(["frente", "frente", "fondo", "fondo"]);
     expect(six?.plan.zones).toHaveLength(6);
     expect(six?.plan.perimeter.sides).toHaveLength(4);

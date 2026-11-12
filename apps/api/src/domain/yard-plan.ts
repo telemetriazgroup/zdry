@@ -503,6 +503,97 @@ export function movesToReach(
   return { above, beside, total: above + beside };
 }
 
+export type ReachBlocker = {
+  zoneName: string;
+  row: number;
+  col: number;
+  level: number;
+  iso?: string;
+  half?: "A" | "B" | null;
+};
+
+function cellsAlong(
+  zone: YardZone,
+  ghosts: YardGhost[],
+  occupied: StackCell[],
+  row: number,
+  col: number,
+  level: number,
+  iso: string | undefined,
+  span: BaySpan,
+  axis: "row" | "col",
+  towardLow: boolean,
+): ReachBlocker[] {
+  const limit = axis === "row" ? zone.rows : zone.cols;
+  const index = axis === "row" ? row : col;
+  const from = towardLow ? 1 : index + 1;
+  const to = towardLow ? index - 1 : limit;
+  const found: ReachBlocker[] = [];
+  for (let cursor = from; cursor <= to; cursor += 1) {
+    const atRow = axis === "row" ? cursor : row;
+    const atCol = axis === "col" ? cursor : col;
+    for (const cell of occupied) {
+      if (cell.zoneName !== zone.name || cell.row !== atRow || cell.col !== atCol || cell.level <= level || cell.iso === iso) continue;
+      if (!spansOverlap(baySpan(cell.type, cell.half), span)) continue;
+      found.push({ zoneName: zone.name, row: atRow, col: atCol, level: cell.level, iso: cell.iso, half: cell.half || null });
+    }
+    for (const ghost of ghosts) {
+      if (ghost.zoneId !== zone.id || ghost.row !== atRow || ghost.col !== atCol || ghost.level <= level) continue;
+      if (!spansOverlap(baySpan(ghost.typeCode, ghost.half), span)) continue;
+      found.push({ zoneName: zone.name, row: atRow, col: atCol, level: ghost.level, iso: ghost.code, half: ghost.half || null });
+    }
+  }
+  return found;
+}
+
+/** Equipos que el stacker tiene que mover para llegar a ese puesto. Un 40 encima de un 20 cuenta. */
+export function reachBlockers(
+  zones: YardZone[],
+  ghosts: YardGhost[],
+  occupied: StackCell[],
+  lado: string,
+  row: number,
+  col: number,
+  level: number,
+  iso?: string,
+  half?: string | null,
+  type?: string | null,
+): ReachBlocker[] {
+  const zone = zones.find((item) => item.name === lado);
+  const span = type || half ? baySpan(type, half) : "full";
+  const above = occupied
+    .filter((cell) => cell.zoneName === lado && cell.row === row && cell.col === col && cell.level > level && cell.iso !== iso && spansOverlap(baySpan(cell.type, cell.half), span))
+    .map((cell) => ({ zoneName: lado, row, col, level: cell.level, iso: cell.iso, half: cell.half || null }));
+  if (zone) {
+    for (const ghost of ghosts) {
+      if (ghost.zoneId !== zone.id || ghost.row !== row || ghost.col !== col || ghost.level <= level) continue;
+      if (!spansOverlap(baySpan(ghost.typeCode, ghost.half), span)) continue;
+      above.push({ zoneName: lado, row, col, level: ghost.level, iso: ghost.code, half: ghost.half || null });
+    }
+  }
+  if (!zone) return above;
+  const closed = zone.closedSide || "";
+  const options: ReachBlocker[][] = [];
+  if (closed === "izquierda" || closed === "derecha") {
+    options.push(cellsAlong(zone, ghosts, occupied, row, col, level, iso, span, "col", closed === "derecha"));
+  } else {
+    if (closed !== "frente") options.push(cellsAlong(zone, ghosts, occupied, row, col, level, iso, span, "row", true));
+    if (closed !== "fondo") options.push(cellsAlong(zone, ghosts, occupied, row, col, level, iso, span, "row", false));
+  }
+  const beside = options.reduce((best, list) => (list.length < best.length ? list : best), options[0] || []);
+  const seen = new Set<string>();
+  const all: ReachBlocker[] = [];
+  for (const cell of [...above, ...beside]) {
+    const key = `${cell.row}:${cell.col}:${cell.level}:${cell.iso || ""}:${cell.half || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    all.push(cell);
+  }
+  return all;
+}
+
+export const STACKER_PLACE_MESSAGE = "El stacker no llega a esa posición. Mueve antes los que están encima o los que tapan la vista.";
+
 export function accessBlockMessage(above: number, beside: number) {
   if (above && beside) return "Hay equipos encima y la fila de al lado le tapa la vista al stacker. Muévelos antes de sacar este.";
   if (beside) return "La fila de al lado le tapa la vista al stacker. Mueve los que están más altos antes de sacar este.";

@@ -148,40 +148,50 @@ function movesAbove(zones, units, ghosts, zone, row, col, level, iso, half, type
   return unitsAbove + ghostsAbove;
 }
 
-function boxesAlong(zone, units, ghosts, row, col, level, iso, span, axis, towardLow) {
+function blockerKeys(zone, units, ghosts, row, col, level, iso, span, axis, towardLow) {
   const limit = axis === "row" ? Number(zone.rows) : Number(zone.cols);
   const index = axis === "row" ? row : col;
   const from = towardLow ? 1 : index + 1;
   const to = towardLow ? index - 1 : limit;
-  let count = 0;
+  const keys = [];
   for (let cursor = from; cursor <= to; cursor += 1) {
     const atRow = axis === "row" ? cursor : row;
     const atCol = axis === "col" ? cursor : col;
-    count += (units || []).filter(
-      (unit) => unit.lado === zone.name && unit.ruma === atRow && unit.columna === atCol && unit.nivel > level && unit.iso !== iso
-        && spansOverlap(baySpan(unit.type, unit.bayHalf), span),
-    ).length;
-    count += ghosts.filter(
-      (ghost) => ghost.zoneId === zone.id && ghost.row === atRow && ghost.col === atCol && ghost.level > level
-        && spansOverlap(baySpan(ghost.typeCode, ghost.half), span),
-    ).length;
+    (units || []).forEach((unit) => {
+      if (unit.lado === zone.name && unit.ruma === atRow && unit.columna === atCol && unit.nivel > level && unit.iso !== iso && spansOverlap(baySpan(unit.type, unit.bayHalf), span)) keys.push(unit.iso);
+    });
+    ghosts.forEach((ghost) => {
+      if (ghost.zoneId === zone.id && ghost.row === atRow && ghost.col === atCol && ghost.level > level && spansOverlap(baySpan(ghost.typeCode, ghost.half), span)) {
+        keys.push(`g-${zone.id}-${atRow}-${atCol}-${ghost.level}-${ghost.half || "F"}`);
+      }
+    });
   }
-  return count;
+  return keys;
 }
 
 function movesToReach(zones, units, ghosts, zone, row, col, level, iso, half, type) {
   const above = movesAbove(zones, units, ghosts, zone, row, col, level, iso, half, type);
   const closed = zone.closedSide || "";
   const span = type || half ? baySpan(type, half) : "full";
+  const marked = [];
+  (units || []).forEach((unit) => {
+    if (unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel > level && unit.iso !== iso && spansOverlap(baySpan(unit.type, unit.bayHalf), span)) marked.push(unit.iso);
+  });
+  ghosts.forEach((ghost) => {
+    if (ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level > level && spansOverlap(baySpan(ghost.typeCode, ghost.half), span)) {
+      marked.push(`g-${zone.id}-${row}-${col}-${ghost.level}-${ghost.half || "F"}`);
+    }
+  });
   const options = [];
   if (closed === "izquierda" || closed === "derecha") {
-    options.push(boxesAlong(zone, units, ghosts, row, col, level, iso, span, "col", closed === "derecha"));
+    options.push(blockerKeys(zone, units, ghosts, row, col, level, iso, span, "col", closed === "derecha"));
   } else {
-    if (closed !== "frente") options.push(boxesAlong(zone, units, ghosts, row, col, level, iso, span, "row", true));
-    if (closed !== "fondo") options.push(boxesAlong(zone, units, ghosts, row, col, level, iso, span, "row", false));
+    if (closed !== "frente") options.push(blockerKeys(zone, units, ghosts, row, col, level, iso, span, "row", true));
+    if (closed !== "fondo") options.push(blockerKeys(zone, units, ghosts, row, col, level, iso, span, "row", false));
   }
-  const beside = options.length ? Math.min(...options) : 0;
-  return { above, beside, total: above + beside };
+  const besideKeys = options.reduce((best, list) => (list.length < best.length ? list : best), options[0] || []);
+  const beside = options.length ? Math.min(...options.map((list) => list.length)) : 0;
+  return { above, beside, total: above + beside, blockers: [...new Set([...marked, ...besideKeys])] };
 }
 
 function accessText(reach) {
@@ -691,14 +701,18 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     }
     const unit = exact || hits[0];
     const pending = (layout.exits || []).some((item) => item.iso === unit.iso);
+    const zone = draft.zones.find((entry) => entry.name === unit.lado);
     setError("");
-    setPicked({
-      key: unit.iso,
-      code: unit.iso,
-      typeLabel: unit.typeLabel || unit.type,
-      where: unit.lado ? unit.posLabel : "Sin posición en el patio",
-      note: [unit.status, pending ? "Salida pendiente de regularizar" : ""].filter(Boolean).join(" · "),
-    });
+    if (zone && unit.ruma && unit.columna && unit.nivel) setPicked(cellPick(zone, unit.ruma, unit.columna, unit.nivel, unit, null));
+    else {
+      setPicked({
+        key: unit.iso,
+        code: unit.iso,
+        typeLabel: unit.typeLabel || unit.type,
+        where: unit.lado ? unit.posLabel : "Sin posición en el patio",
+        note: [unit.status, pending ? "Salida pendiente de regularizar" : ""].filter(Boolean).join(" · "),
+      });
+    }
     if (mode === "despachar") setExitIso(unit.iso);
   }
 
@@ -745,6 +759,8 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         where,
         access,
         cost,
+        blocked: reach.total > 0,
+        blockers: reach.blockers,
         note: `${occupant.status || ""}. ${access} ${cost}`,
       };
     }
@@ -759,6 +775,8 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       where,
       access,
       cost,
+      blocked: reach.total > 0,
+      blockers: reach.blockers,
       note: named
         ? `${ghost.note ? `${ghost.note}. ` : ""}Equipo ajeno a ZDRY, ${feetName(ghost.typeCode)}. ${access} ${cost}`
         : `Desconocido. ${access} ${cost}`,
@@ -870,7 +888,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       const placeHalf = clickedHalf(moving?.type, half);
       await api("/yard/place", {
         method: "POST",
-        body: { iso, depotId: layout.depotId, lado: zoneName, ruma: row, columna: col, nivel: level, regularize: true, ...(placeHalf ? { half: placeHalf } : {}) },
+        body: { iso, depotId: layout.depotId, lado: zoneName, ruma: row, columna: col, nivel: level, regularize: true, stacker: true, ...(placeHalf ? { half: placeHalf } : {}) },
       });
       setTransferIso(null);
       await onReload();
@@ -961,6 +979,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             columna: unit.columna,
             nivel: unit.nivel,
             regularize: true,
+            ...(mode === "regularizar" ? {} : { stacker: true }),
             ...(centering ? {} : { half }),
           },
         });
@@ -1039,6 +1058,10 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
 
   async function splitPicked() {
     if (!picked?.ghost || picked.ghost.half) return;
+    if (picked.blocked) {
+      setError(picked.access);
+      return;
+    }
     setError("");
     try {
       await api("/yard/ghost", {
@@ -1236,7 +1259,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
           ) : (
             <>
           <p className="section-sub">
-            Elige un equipo de la lista y toca la altura. Un 40 ocupa A y B. Un 20 ocupa solo la mitad que toques, y al lado puede ir otro 20. Lo que queda debajo sin identificar se ve como un 40. Si esa fila son dos de 20, usa Dividir en dos de 20. Doble clic en un equipo lo devuelve a sin posición.
+            Aquí se arman las rumas como están en el patio: se puede cerrar Regularizar y volver a abrirlo para seguir una línea. Un 40 ocupa A y B. Un 20 ocupa solo la mitad que toques. Doble clic en un equipo lo devuelve a sin posición. Fuera de esta vista, el traslado solo entra en un puesto libre al que llega el stacker.
             {selectedIso ? ` Seleccionado: ${selectedIso}.` : ""}
           </p>
           <div className="guest-form">
@@ -1364,8 +1387,14 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
                                                         onClick={() => {
                                                           if (mode === "trasladar") {
                                                             if (occupant) {
+                                                              const pick = cellPick(zone, row, col, level, occupant, null);
+                                                              setPicked(pick);
+                                                              if (pick.blocked) {
+                                                                setTransferIso(null);
+                                                                setError(pick.access);
+                                                                return;
+                                                              }
                                                               setTransferIso(occupant.iso);
-                                                              setPicked(cellPick(zone, row, col, level, occupant, null));
                                                               loadHistory(occupant.iso);
                                                               return;
                                                             }
@@ -1408,7 +1437,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       ) : (
         <>
           <p className="section-sub yard-help">
-            La vista muestra las rumas como las ve el operario. Un 40 ocupa la columna. Un 20 o un 10 ocupa una mitad, y dos de 20 aguantan un 40 encima. El color es el del código. Sin color, el equipo se ve gris. El rayado es un espacio ocupado sin identificar.
+            La vista muestra las rumas como las ve el operario. No se saca un equipo si hay otros encima o si una fila le tapa la vista al stacker: esos se marcan en naranja. El cuadro amarillo es un puesto libre al que el stacker llega. El rayado es un espacio ocupado sin identificar.
           </p>
           <div className="guest-form">
             <label className="zone-field">Buscar en el patio
@@ -1430,6 +1459,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             incomingType={layout.units.find((unit) => unit.iso === transferIso)?.type || ""}
             movingIso={transferIso || ""}
             transferring={Boolean(transferIso)}
+            blockers={picked?.blockers || []}
             fenceHint={(() => {
               if (!transferIso) return "";
               const moving = layout.units.find((unit) => unit.iso === transferIso);
@@ -1441,6 +1471,11 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             history={history}
             onTransfer={() => {
               if (!picked?.code || picked.unknown) return;
+              if (picked.blocked) {
+                setError(picked.access);
+                return;
+              }
+              setError("");
               setTransferIso(picked.code);
               loadHistory(picked.code);
             }}
@@ -1456,8 +1491,14 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               if (!actions.length) return;
               setMenu({ x, y, actions, ghost: pick.ghost });
             }}
-            onPark={() => transferIso && parkUnit(transferIso)}
-            onRelease={() => transferIso && returnUnit(transferIso)}
+            onPark={() => {
+              if (picked?.blocked) { setError(picked.access); return; }
+              if (transferIso) parkUnit(transferIso);
+            }}
+            onRelease={() => {
+              if (picked?.blocked) { setError(picked.access); return; }
+              if (transferIso) returnUnit(transferIso);
+            }}
             onClose={() => { setPicked(null); setTransferIso(null); }}
             onPick={(item) => {
               if (item.empty && item.fence && transferIso) {
