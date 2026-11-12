@@ -30,11 +30,11 @@ export class YardController {
 
   @Post("release")
   release(
-    @Body() body: { iso?: string; depotId?: string },
+    @Body() body: { iso?: string; depotId?: string; regularize?: boolean },
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
-    return this.warehouse.release(body.iso || "", body.depotId || "", user, req.ip);
+    return this.warehouse.release(body.iso || "", body.depotId || "", user, req.ip, body.regularize === true);
   }
 
   @Post("aisle")

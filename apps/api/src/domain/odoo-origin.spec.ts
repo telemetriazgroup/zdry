@@ -302,6 +302,19 @@ describe("lotAvailability", () => {
     expect(lotAvailability(aphuMoves).availability).toBe("reserved");
   });
 
+  it("una entrada posterior a existencias lo deja a la mano aunque el despacho viejo no tenga cliente", () => {
+    const jxlu: LotMoveFact[] = [
+      { state: "done", pickingState: "done", pickingCode: "incoming", pickingName: "ZGROU/IN/04674", srcUsage: "supplier", destUsage: "internal", destName: "ZGROU/Existencias", date: "2026-05-16 17:55:15" },
+      { state: "done", pickingState: "done", pickingCode: "outgoing", pickingName: "ZGROU/OUT/04471", srcUsage: "internal", srcName: "ZGROU/Existencias", destUsage: "customer", date: "2026-05-16 17:57:48" },
+      { state: "done", pickingState: "done", pickingCode: "incoming", pickingName: "ZGROU/IN/04691", destUsage: "internal", destName: "ZGROU/Existencias", date: "2026-05-16 18:27:07" },
+      { state: "done", pickingState: "done", pickingCode: "outgoing", pickingName: "ZGROU/OUT/04476", srcUsage: "internal", srcName: "ZGROU/Existencias", destName: "", date: "2026-05-16 18:29:46" },
+      { state: "done", pickingState: "done", pickingCode: "incoming", pickingName: "ZGROU/IN/07534", destName: "ZGROU/Existencias", date: "2026-09-14 09:56:37" },
+      { state: "done", pickingState: "done", pickingCode: "internal", pickingName: "ZGROU/INT/00157", srcUsage: "internal", srcName: "ZGROU/Existencias", destUsage: "internal", destName: "Piura/Existencias", date: "2026-09-14 10:00:52" },
+    ];
+    expect(lotAvailability(jxlu)).toMatchObject({ availability: "stock" });
+    expect(availabilityAfterStock(jxlu, 1).availability).toBe("stock");
+  });
+
   it("un retorno posterior a existencias vuelve a stock", () => {
     const back: LotMoveFact = {
       state: "done",

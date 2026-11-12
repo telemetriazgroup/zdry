@@ -172,26 +172,36 @@ function isOpen(m: LotMoveFact): boolean {
   return state !== "done" && state !== "cancel" && state !== "cancelled";
 }
 
-/** La salida a cliente más reciente cierra el equipo. Un retorno posterior lo vuelve a stock. */
+/** Una entrada o un traslado posterior deja el equipo otra vez en una ubicación interna. Una reparación no. */
+function backInStock(m: LotMoveFact): boolean {
+  if (!isDone(m) || isRepairMove(m) || dossierKindForMove(m) === "picking_out") return false;
+  if (m.destUsage === "internal") return true;
+  return m.pickingCode === "incoming" && m.destUsage !== "customer" && m.destUsage !== "supplier";
+}
+
+/**
+ * La salida a cliente más reciente cierra el equipo solo si después no volvió
+ * a una ubicación interna. El regreso puede ser una entrada o un traslado,
+ * aunque el origen no diga "cliente".
+ */
 export function lotAvailability(moves: LotMoveFact[] | null | undefined): {
   availability: LotAvailability;
   pickingName: string | null;
   destName: string | null;
 } {
-  const list = (Array.isArray(moves) ? moves : []).filter((m) => m.pickingName || m.reference);
-  const departures = list.filter((m) => dossierKindForMove(m) === "picking_out");
-  const done = departures.filter(isDone).sort((a, b) => moveStamp(b) - moveStamp(a));
-  const latestOut = done[0];
+  const list = (Array.isArray(moves) ? moves : []).filter((m) => (m.pickingName || m.reference) && !isRepairMove(m));
+  const done = list.filter(isDone).sort((a, b) => moveStamp(b) - moveStamp(a));
+  const latestOut = done.find((m) => dossierKindForMove(m) === "picking_out");
   if (latestOut) {
-    const back = list
-      .filter((m) => isDone(m) && m.srcUsage === "customer" && (m.destUsage === "internal" || m.pickingCode === "incoming"))
-      .sort((a, b) => moveStamp(b) - moveStamp(a))[0];
-    if (!back || moveStamp(back) <= moveStamp(latestOut)) {
+    const back = done.find((m) => backInStock(m) && moveStamp(m) > moveStamp(latestOut));
+    if (!back) {
       return { availability: "left", pickingName: latestOut.pickingName || latestOut.reference || null, destName: latestOut.destName || null };
     }
   }
-  const open = departures.filter(isOpen).sort((a, b) => moveStamp(b) - moveStamp(a))[0];
-  if (open) {
+  const open = list
+    .filter((m) => dossierKindForMove(m) === "picking_out" && isOpen(m))
+    .sort((a, b) => moveStamp(b) - moveStamp(a))[0];
+  if (open && !done.some((m) => backInStock(m) && moveStamp(m) > moveStamp(open))) {
     return { availability: "reserved", pickingName: open.pickingName || open.reference || null, destName: open.destName || null };
   }
   return { availability: "stock", pickingName: null, destName: null };

@@ -762,7 +762,7 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
   return root;
 }
 
-export default function YardScene({ zones, units, ghosts, perimeter, typeColor, onPick, picked, onClose, targets, incomingType, movingIso, transferring, blockers, onTransfer, onSlide, onSplit, onContextMenu, onPark, onRelease, history, fenceHint }) {
+export default function YardScene({ zones, units, ghosts, perimeter, typeColor, onPick, picked, onClose, targets, incomingType, movingIso, transferring, blockers, onTransfer, onSlide, onUnplace, onSplit, onContextMenu, onPark, onRelease, history, fenceHint }) {
   const mountRef = useRef(null);
   const pickRef = useRef(onPick);
   const menuRef = useRef(onContextMenu);
@@ -1116,6 +1116,7 @@ export default function YardScene({ zones, units, ghosts, perimeter, typeColor, 
                     <button className={side === "A" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => onSlide("A")}>A la izquierda</button>
                     <button className={!side ? "btn-primary" : "btn-ghost"} type="button" onClick={() => onSlide("center")}>Al centro</button>
                     <button className={side === "B" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => onSlide("B")}>A la derecha</button>
+                    {onUnplace ? <button className="btn-ghost" type="button" onClick={onUnplace}>Volver a sin sitio</button> : null}
                   </div>
                 </>
               );

@@ -868,10 +868,11 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     }
   }
 
-  async function returnUnit(iso) {
+  async function returnUnit(iso, regularize = false) {
+    if (!iso) return;
     setError("");
     try {
-      await api("/yard/release", { method: "POST", body: { iso, depotId: layout.depotId } });
+      await api("/yard/release", { method: "POST", body: { iso, depotId: layout.depotId, ...(regularize ? { regularize: true } : {}) } });
       setPicked(null);
       setTransferIso(null);
       await onReload();
@@ -879,6 +880,19 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     } catch (e) {
       setError(e.message);
     }
+  }
+
+  function unplacePicked() {
+    if (!picked?.code) return;
+    if (mode !== "regularizar" && picked.blocked) {
+      setError(picked.access);
+      return;
+    }
+    if (picked.ghost) {
+      clearPicked();
+      return;
+    }
+    returnUnit(picked.code, mode === "regularizar");
   }
 
   async function moveUnit(iso, zoneName, row, col, level, half) {
@@ -1113,6 +1127,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
                 <button className={side === "A" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => slideTo("A")}>A la izquierda</button>
                 <button className={!side ? "btn-primary" : "btn-ghost"} type="button" onClick={() => slideTo("center")}>Al centro</button>
                 <button className={side === "B" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => slideTo("B")}>A la derecha</button>
+                <button className="btn-ghost" type="button" onClick={unplacePicked}>Volver a sin sitio</button>
               </div>
             );
           })()}
@@ -1259,7 +1274,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
           ) : (
             <>
           <p className="section-sub">
-            Aquí se arman las rumas como están en el patio: se puede cerrar Regularizar y volver a abrirlo para seguir una línea. Un 40 ocupa A y B. Un 20 ocupa solo la mitad que toques. Doble clic en un equipo lo devuelve a sin posición. Fuera de esta vista, el traslado solo entra en un puesto libre al que llega el stacker.
+            Aquí se arman las rumas como están en el patio: se puede cerrar Regularizar y volver a abrirlo para seguir una línea. Un 40 ocupa A y B. Un 20 ocupa solo la mitad que toques. Volver a sin sitio, o un doble clic, lo saca de la ruma aunque otro equipo le tape la vista. Si hay equipos encima, primero hay que moverlos. Fuera de esta vista, el traslado solo entra en un puesto libre al que llega el stacker.
             {selectedIso ? ` Seleccionado: ${selectedIso}.` : ""}
           </p>
           <div className="guest-form">
@@ -1404,9 +1419,9 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
                                                           onCell(zone, row, col, level, occupant, ghost, slot.half || undefined);
                                                         }}
                                                         onContextMenu={(event) => openCellMenu(event, zone, row, col, level, occupant, ghost)}
-                                                        onDoubleClick={() => {
-                                                          if (mode === "regularizar" && occupant) returnUnit(occupant.iso);
-                                                        }}
+                      onDoubleClick={() => {
+                        if (mode === "regularizar" && occupant) returnUnit(occupant.iso, true);
+                      }}
                                                       >
                                                         {occupant ? occupant.iso.slice(-4) : named ? ghost.code.slice(-4) : ghost ? (String(ghost.typeCode || "").startsWith("20") ? "20" : "?") : slot.half === "center" ? "Medio" : slot.half || (incomingFeet >= 40 ? "A+B" : level)}
                                                         {slot.span ? <small>{slot.center ? "centro" : "A+B"}</small> : null}
@@ -1480,6 +1495,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               loadHistory(picked.code);
             }}
             onSlide={(half) => slideTo(half)}
+            onUnplace={() => unplacePicked()}
             onSplit={() => splitPicked()}
             onContextMenu={(pick, x, y) => {
               if (!pick?.ghost) return;

@@ -2450,7 +2450,7 @@ export class WarehouseService {
     });
   }
 
-  private async leaveDemo(depotId: string, iso: string, nextSide: string | null, user: AuthUser, ip?: string) {
+  private async leaveDemo(depotId: string, iso: string, nextSide: string | null, user: AuthUser, ip?: string, regularize = false) {
     this.assertYardDemo(user);
     return this.locks.withYardLock(depotId, async () => {
       const sim = await this.readYardSim(depotId);
@@ -2480,7 +2480,7 @@ export class WarehouseService {
         const access = zone
           ? movesToReach(plan.zones, plan.ghosts, stacked, unit.lado, unit.ruma, unit.columna, unit.nivel, iso, unit.half, typeOf.get(iso))
           : { above: sameColumn, beside: 0, total: sameColumn };
-        if (access.total) throw new ConflictException(accessBlockMessage(access.above, access.beside));
+        if (access.above || (!regularize && access.total)) throw new ConflictException(accessBlockMessage(access.above, regularize ? 0 : access.beside));
       }
       const fromLabel = posLabel(unit);
       const rest = sim.placements.filter((item) => item.iso !== iso);
@@ -3216,8 +3216,8 @@ export class WarehouseService {
     await tx.appSetting.update({ where: { key }, data: { value: { ...plan, perimeter: { ...plan.perimeter, cells } } } });
   }
 
-  release(iso: string, depotId: string, user: AuthUser, ip?: string) {
-    return this.leaveYard(iso, depotId, null, user, ip);
+  release(iso: string, depotId: string, user: AuthUser, ip?: string, regularize = false) {
+    return this.leaveYard(iso, depotId, null, user, ip, regularize);
   }
 
   holdInAisle(iso: string, depotId: string, user: AuthUser, ip?: string) {
@@ -3299,10 +3299,10 @@ export class WarehouseService {
     });
   }
 
-  private async leaveYard(iso: string, depotId: string, nextSide: string | null, user: AuthUser, ip?: string) {
+  private async leaveYard(iso: string, depotId: string, nextSide: string | null, user: AuthUser, ip?: string, regularize = false) {
     const code = (iso || "").trim().toUpperCase();
     if (!code || !depotId) throw new BadRequestException("iso y depósito son obligatorios.");
-    if (isYardDemo(depotId)) return this.leaveDemo(depotId, code, nextSide, user, ip);
+    if (isYardDemo(depotId)) return this.leaveDemo(depotId, code, nextSide, user, ip, regularize);
     const plan = await this.getYardPlan(depotId);
     return this.locks.withYardLock(depotId, async () => {
       const out = await this.prisma.$transaction(async (tx) => {
@@ -3332,7 +3332,7 @@ export class WarehouseService {
           const access = zone
             ? movesToReach(plan.zones, plan.ghosts, stacked, unit.lado || "", unit.ruma, unit.columna, unit.nivel, unit.iso, unit.bayHalf, unit.type)
             : { above: sameColumn, beside: 0, total: sameColumn };
-          if (access.total) throw new ConflictException(accessBlockMessage(access.above, access.beside));
+          if (access.above || (!regularize && access.total)) throw new ConflictException(accessBlockMessage(access.above, regularize ? 0 : access.beside));
         }
         const fromLabel = posLabel(unit);
         await tx.containerPosition.updateMany({
