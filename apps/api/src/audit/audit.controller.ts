@@ -20,8 +20,8 @@ export class AuditController {
     @CurrentUser() user: AuthUser,
     @Query("from") from?: string,
     @Query("to") to?: string,
-    @Query("take") take?: string,
+    @Query("skip") skip?: string,
   ) {
-    return this.audit.list(from, to, take ? Number(take) : 2000, user);
+    return this.audit.list(from, to, skip ? Number(skip) : 0, user);
   }
 }

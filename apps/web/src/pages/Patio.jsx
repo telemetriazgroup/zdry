@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
 import YardBuild from "./YardBuild.jsx";
+import { NoticeModal } from "../notice.jsx";
 
 export default function Patio() {
   const { user } = useAuth();
@@ -14,6 +15,7 @@ export default function Patio() {
   const [scenario, setScenario] = useState("guardado");
   const [withPerimeter, setWithPerimeter] = useState(true);
   const [ruma, setRuma] = useState("cargado");
+  const [ask, setAsk] = useState(null);
 
   const depotId = params.get("depotId") || layout?.depotId || "";
 
@@ -58,64 +60,71 @@ export default function Patio() {
     return (
       <>
         <h2 className="section-title">Layout de patio</h2>
-        {error ? <div className="err">{error}</div> : <p className="section-sub">Cargando…</p>}
+        {error ? <NoticeModal title="Aviso" text={error} onClose={() => setError("")} /> : <p className="section-sub">Cargando…</p>}
       </>
     );
   }
 
   const placed = layout.units.filter((unit) => unit.lado);
 
+  function confirmAction(title, text, run, confirmLabel = "Confirmar") {
+    setAsk({ title, text, confirmLabel, run });
+  }
+
   async function resetDepot() {
     const text = layout.simulation
       ? "Reiniciar la simulación: los equipos vuelven a sin posición y se borran los huecos desconocidos. Las zonas se conservan. El patio real no cambia."
       : `Devolver a sin posición todos los equipos de ${layout.depotName}. El plano de zonas se conserva.`;
-    if (!window.confirm(text)) return;
-    setBusy(true);
-    setError("");
-    try {
-      await api("/yard/reset", { method: "POST", body: { depotId: layout.depotId } });
-      setSelectedIso(null);
-      await load(layout.depotId);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
+    confirmAction(layout.simulation ? "Reiniciar simulación" : "Vaciar posiciones", text, async () => {
+      setBusy(true);
+      setError("");
+      try {
+        await api("/yard/reset", { method: "POST", body: { depotId: layout.depotId } });
+        setSelectedIso(null);
+        await load(layout.depotId);
+      } catch (e) {
+        setError(e.message);
+      } finally {
+        setBusy(false);
+      }
+    }, layout.simulation ? "Reiniciar" : "Vaciar");
   }
 
   async function loadScenario() {
     const chosen = (layout.scenarios || []).find((item) => item.id === scenario);
     const name = chosen?.name || "el escenario";
     const fence = withPerimeter ? "con perímetro" : "sin perímetro";
-    if (!window.confirm(`Cargar ${name}, ${fence}. Se arman las rumas y, si hay perímetro, el cerco. Un 40 queda sobre un 40 o sobre dos de 20.`)) return;
-    setBusy(true);
-    setError("");
-    try {
-      await api("/yard/scenario", { method: "POST", body: { depotId: layout.depotId, scenario, withPerimeter } });
-      setSelectedIso(null);
-      await load(layout.depotId);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
+    confirmAction("Cargar escenario", `Cargar ${name}, ${fence}. Se arman las rumas y, si hay perímetro, el cerco. Un 40 queda sobre un 40 o sobre dos de 20.`, async () => {
+      setBusy(true);
+      setError("");
+      try {
+        await api("/yard/scenario", { method: "POST", body: { depotId: layout.depotId, scenario, withPerimeter } });
+        setSelectedIso(null);
+        await load(layout.depotId);
+      } catch (e) {
+        setError(e.message);
+      } finally {
+        setBusy(false);
+      }
+    }, "Cargar");
   }
 
   async function loadRumas() {
     const chosen = (layout.rumas || []).find((item) => item.id === ruma);
     const name = chosen?.name || "la plantilla";
-    if (!window.confirm(`Cargar ${name}. Se arman las rumas y el cerco. Un 40 queda sobre un 40 o sobre dos de 20. El patio real no cambia.`)) return;
-    setBusy(true);
-    setError("");
-    try {
-      await api("/yard/rumas", { method: "POST", body: { depotId: layout.depotId, template: ruma } });
-      setSelectedIso(null);
-      await load(layout.depotId);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
+    confirmAction("Cargar rumas", `Cargar ${name}. Se arman las rumas y el cerco. Un 40 queda sobre un 40 o sobre dos de 20. El patio real no cambia.`, async () => {
+      setBusy(true);
+      setError("");
+      try {
+        await api("/yard/rumas", { method: "POST", body: { depotId: layout.depotId, template: ruma } });
+        setSelectedIso(null);
+        await load(layout.depotId);
+      } catch (e) {
+        setError(e.message);
+      } finally {
+        setBusy(false);
+      }
+    }, "Cargar");
   }
 
   async function restoreScenario() {
@@ -196,7 +205,8 @@ export default function Patio() {
           <button className="btn-ghost" type="button" disabled={busy || !layout.activeScenario} onClick={restoreScenario}>Volver a poner las zonas</button>
         </div>
       ) : null}
-      {error ? <div className="err">{error}</div> : null}
+      <NoticeModal title="Aviso" text={error} onClose={() => setError("")} />
+      <NoticeModal title={ask?.title || "Confirmar"} text={ask?.text || ""} confirmLabel={ask?.confirmLabel || "Confirmar"} onClose={() => setAsk(null)} onConfirm={ask ? () => { const run = ask.run; setAsk(null); run(); } : null} />
       <YardBuild
         layout={layout}
         selectedIso={selectedIso}

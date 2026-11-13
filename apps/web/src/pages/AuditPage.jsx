@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { useAuth } from "../auth.jsx";
 import { downloadAuditExcel, downloadAuditPdf } from "../audit-export.js";
+import { NoticeModal } from "../notice.jsx";
 
 function defaultFrom() {
   const d = new Date();
@@ -18,22 +19,26 @@ export default function AuditPage() {
   const adminView = user?.role === "admin";
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
-  const [data, setData] = useState({ rows: [], total: 0, truncated: false });
+  const [data, setData] = useState({ rows: [], total: 0, skip: 0, take: 50, page: 1, pages: 1 });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function load(nextFrom = from, nextTo = to) {
+  async function load(nextFrom = from, nextTo = to, skip = 0) {
     setBusy(true);
     setError("");
     try {
       const q = new URLSearchParams();
       if (nextFrom) q.set("from", nextFrom);
       if (nextTo) q.set("to", nextTo);
+      q.set("skip", String(Math.max(0, skip)));
       const out = await api(`/audit?${q.toString()}`);
       setData({
-        rows: Array.isArray(out?.rows) ? out.rows : Array.isArray(out) ? out : [],
-        total: out?.total ?? (Array.isArray(out) ? out.length : 0),
-        truncated: !!out?.truncated,
+        rows: Array.isArray(out?.rows) ? out.rows : [],
+        total: out?.total ?? 0,
+        skip: out?.skip ?? skip,
+        take: out?.take ?? 50,
+        page: out?.page ?? 1,
+        pages: out?.pages ?? 1,
       });
     } catch (e) {
       setError(e.message);
@@ -52,7 +57,7 @@ export default function AuditPage() {
       setError("La fecha inicial no puede ser mayor que la final.");
       return;
     }
-    load();
+    load(from, to, 0);
   }
 
   const rows = data.rows || [];
@@ -61,12 +66,10 @@ export default function AuditPage() {
     <>
       <h2 className="section-title">Auditoría</h2>
       <p className="section-sub">
-        {adminView
-          ? "Lo que hacen los usuarios. No incluye las acciones del superadmin."
-          : "Registro de logins, maestros, personas y cambios de sistema."}
-        {" "}Busca por rango de fechas (hora de Lima) y descarga el reporte.
+        Movimientos de inventario y del patio, de 50 en 50. Las dos primeras páginas son los últimos 100. Si pides otra, se consulta la base de nuevo y no se carga el historial completo.
+        {adminView ? " No incluye las acciones del superadmin." : ""}
       </p>
-      {error ? <div className="err">{error}</div> : null}
+      <NoticeModal title="Aviso" text={error} onClose={() => setError("")} />
 
       <div className="panel" style={{ marginBottom: 18 }}>
         <form className="form-grid" onSubmit={onSearch}>
@@ -91,9 +94,12 @@ export default function AuditPage() {
           </button>
         </div>
         <p className="section-sub" style={{ marginTop: 10 }}>
-          {data.total} evento(s) en el rango
-          {data.truncated ? ` · se muestran los ${rows.length} más recientes` : ""}.
+          {data.total} movimiento(s) en el rango. Página {data.page} de {data.pages}, {rows.length} en esta consulta.
         </p>
+        <div className="action-row">
+          <button className="btn-ghost" type="button" disabled={busy || data.page <= 1} onClick={() => load(from, to, Math.max(0, data.skip - data.take))}>Anterior</button>
+          <button className="btn-ghost" type="button" disabled={busy || data.page >= data.pages} onClick={() => load(from, to, data.skip + data.take)}>Siguiente</button>
+        </div>
       </div>
 
       <div className="panel">

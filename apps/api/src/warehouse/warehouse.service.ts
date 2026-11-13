@@ -64,7 +64,7 @@ import {
   posLabel,
   validateMove,
 } from "../domain/yard";
-import { AISLE_SIDE, FENCE_SIDE, STACKER_PLACE_MESSAGE, accessBlockMessage, accessPlaceNote, asBayHalf, baySpan, fenceSlotCount, fenceWithout, feetOf, ghostsWithSupport, movesToReach, normalizeYardPlan, spansOverlap, stackLengthError, zoneSlotError, type YardPlan } from "../domain/yard-plan";
+import { AISLE_SIDE, FENCE_SIDE, STACKER_PLACE_MESSAGE, accessBlockMessage, accessPlaceNote, asBayHalf, baySpan, fenceBays, fenceSlotCount, fenceWithout, feetOf, ghostsWithSupport, movesToReach, normalizeYardPlan, spansOverlap, stackLengthError, zoneSlotError, type YardPlan } from "../domain/yard-plan";
 import { YARD_SCENARIOS, yardScenario } from "../domain/yard-scenarios";
 import { YARD_RUMA_TEMPLATES, fillPerimeter, fillRumaTemplate, yardRumaTemplate } from "../domain/yard-rumas";
 import { readMovementPolicy } from "../domain/freight-stub";
@@ -167,9 +167,9 @@ function stockDemoYard(
   return { placed, fence };
 }
 
-function fenceLevelSupported(cells: { sideId: string; slot: number; level: number; iso: string; half?: string | null }[], sideId: string, slot: number, level: number, half: "A" | "B" | null, iso: string) {
+function fenceLevelSupported(cells: { sideId: string; slot: number; level: number; iso: string; half?: string | null; row?: number; unknown?: boolean }[], sideId: string, slot: number, level: number, half: "A" | "B" | null, iso: string, row = 1) {
   if (level <= 1) return true;
-  const below = cells.filter((cell) => cell.sideId === sideId && cell.slot === slot && cell.level === level - 1 && cell.iso !== iso);
+  const below = cells.filter((cell) => cell.sideId === sideId && cell.slot === slot && cell.level === level - 1 && (cell.row || 1) === row && (cell.unknown || cell.iso !== iso));
   if (!half) {
     return below.some((cell) => !cell.half) || (below.some((cell) => cell.half === "A") && below.some((cell) => cell.half === "B"));
   }
@@ -279,25 +279,73 @@ export class WarehouseService {
       const depot = await this.prisma.depot.findUnique({ where: { id: depotId } });
       if (!depot) throw new NotFoundException("Depósito no encontrado.");
     }
-    const value = normalizeYardPlan(input);
-    await this.prisma.appSetting.upsert({
-      where: { key: yardPlanKey(depotId) },
-      update: { value },
-      create: { key: yardPlanKey(depotId), value },
+    return this.locks.withYardLock(depotId, async () => {
+      const previous = await this.getYardPlan(depotId);
+      const value = normalizeYardPlan(input);
+      const removed = previous.zones.filter((zone) => !value.zones.some((next) => next.id === zone.id));
+      await this.releaseRemovedZones(depotId, removed.map((zone) => zone.name));
+      await this.prisma.appSetting.upsert({
+        where: { key: yardPlanKey(depotId) },
+        update: { value },
+        create: { key: yardPlanKey(depotId), value },
+      });
+      await this.audit.log({
+        user,
+        action: "update",
+        entity: "AppSetting",
+        entityId: yardPlanKey(depotId),
+        after: value as object,
+        ip,
+      });
+      return value;
     });
-    await this.audit.log({
-      user,
-      action: "update",
-      entity: "AppSetting",
-      entityId: yardPlanKey(depotId),
-      after: value as object,
-      ip,
+  }
+
+  private async releaseRemovedZones(depotId: string, names: string[]) {
+    const zones = [...new Set(names.map((name) => name.trim()).filter((name) => name && name !== FENCE_SIDE && name !== AISLE_SIDE))];
+    if (!zones.length) return;
+    if (isYardDemo(depotId)) {
+      const sim = await this.readYardSim(depotId);
+      const freed = sim.placements.filter((item) => zones.includes(item.lado));
+      if (!freed.length) return;
+      const now = new Date().toISOString();
+      await this.writeYardSim(depotId, {
+        placements: sim.placements.filter((item) => !zones.includes(item.lado)),
+        history: [
+          ...freed.map((item) => ({
+            id: randomUUID(),
+            iso: item.iso,
+            type: "Movimiento",
+            detail: `Simulación: volvió a sin sitio porque se quitó la zona ${item.lado}.`,
+            createdAt: now,
+          })),
+          ...sim.history,
+        ],
+        ...simMeta(sim),
+      });
+      return;
+    }
+    const units = await this.prisma.container.findMany({
+      where: { depotId, lado: { in: zones }, archivedAt: null },
+      select: { iso: true, lado: true },
     });
-    return value;
+    if (!units.length) return;
+    await this.prisma.$transaction(async (tx) => {
+      for (const unit of units) {
+        await tx.containerPosition.updateMany({ where: { iso: unit.iso, closedAt: null }, data: { closedAt: new Date() } });
+        await tx.container.update({
+          where: { iso: unit.iso },
+          data: { lado: null, ruma: null, columna: null, nivel: null, bayHalf: null },
+        });
+        await tx.containerHistory.create({
+          data: { iso: unit.iso, type: "Movimiento", detail: `Volvió a sin sitio porque se quitó la zona ${unit.lado}.` },
+        });
+      }
+    });
   }
 
   async setYardGhost(
-    input: { depotId?: string; zoneId?: string; row?: number; col?: number; level?: number; occupied?: boolean; code?: string; typeCode?: string; color?: string; note?: string; half?: string; split?: boolean; merge?: boolean },
+    input: { depotId?: string; zoneId?: string; row?: number; col?: number; level?: number; occupied?: boolean; code?: string; typeCode?: string; color?: string; note?: string; kind?: string; half?: string; split?: boolean; merge?: boolean },
     user: AuthUser,
     ip?: string,
   ) {
@@ -339,7 +387,7 @@ export class WarehouseService {
       if (problem) throw new ConflictException(problem);
     }
     const code = String(input.code || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 20);
-    if (code && input.occupied !== false) {
+    if (code && code !== "DESCONOCIDO" && input.occupied !== false) {
       const existing = await this.prisma.container.findUnique({
         where: { iso: code },
         select: { iso: true, depotId: true, archivedAt: true },
@@ -371,7 +419,9 @@ export class WarehouseService {
           .filter((item) => item.lado && item.ruma && item.columna && item.nivel)
           .map((item) => ({ zoneName: item.lado || "", row: item.ruma || 0, col: item.columna || 0, level: item.nivel || 0, iso: item.iso, type: item.type, half: asBayHalf(item.bayHalf) })),
       );
-      return this.saveYardPlan(depotId, { ...plan, ghosts: supported }, user, ip);
+      const saved = await this.saveYardPlan(depotId, { ...plan, ghosts: supported }, user, ip);
+      await this.audit.log({ user, action: "fusionar puesto", entity: "Yard", entityId: zone.name, after: { depotId, row, col, level }, ip });
+      return saved;
     }
     if (input.split) {
       const busy = positions.some((item) => sameLevel(item));
@@ -390,15 +440,19 @@ export class WarehouseService {
           .filter((item) => item.lado && item.ruma && item.columna && item.nivel)
           .map((item) => ({ zoneName: item.lado || "", row: item.ruma || 0, col: item.columna || 0, level: item.nivel || 0, iso: item.iso, type: item.type, half: asBayHalf(item.bayHalf) })),
       );
-      return this.saveYardPlan(depotId, { ...plan, ghosts: supported }, user, ip);
+      const saved = await this.saveYardPlan(depotId, { ...plan, ghosts: supported }, user, ip);
+      await this.audit.log({ user, action: "dividir puesto", entity: "Yard", entityId: zone.name, after: { depotId, row, col, level }, ip });
+      return saved;
     }
+    const previous = plan.ghosts.find((ghost) => ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level === level && spansOverlap(baySpan(ghost.typeCode, ghost.half), span));
     const ghosts = plan.ghosts.filter(
       (ghost) => !(ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && ghost.level === level && spansOverlap(baySpan(ghost.typeCode, ghost.half), span)),
     );
     if (input.occupied !== false) {
       const color = /^#[0-9a-fA-F]{6}$/.test(String(input.color || "")) ? String(input.color).toLowerCase() : "";
       const note = String(input.note || "").trim().slice(0, 120);
-      const mark = { ...(half ? { half } : {}), ...(color ? { color } : {}), ...(note ? { note } : {}) };
+      const kind = String(input.kind || "").trim().toUpperCase().replace(/\s+/g, " ").slice(0, 24);
+      const mark = { ...(half ? { half } : {}), ...(color ? { color } : {}), ...(note ? { note } : {}), ...(kind ? { kind } : {}) };
       ghosts.push(code
         ? { zoneId: zone.id, row, col, level, code, typeCode, ...mark }
         : { zoneId: zone.id, row, col, level, ...mark });
@@ -411,7 +465,132 @@ export class WarehouseService {
         .filter((item) => item.lado && item.ruma && item.columna && item.nivel)
         .map((item) => ({ zoneName: item.lado || "", row: item.ruma || 0, col: item.columna || 0, level: item.nivel || 0, iso: item.iso, type: item.type, half: asBayHalf(item.bayHalf) })),
     );
-    return this.saveYardPlan(depotId, { ...plan, ghosts: supported }, user, ip);
+    const saved = await this.saveYardPlan(depotId, { ...plan, ghosts: supported }, user, ip);
+    const pending = !code || code === "DESCONOCIDO";
+    const action = input.occupied === false
+      ? (previous?.code && previous.code !== "DESCONOCIDO" ? "eliminar equipo" : "quitar desconocido")
+      : pending
+        ? (previous ? "modificar desconocido" : "ocupar desconocido")
+        : (previous?.code === code ? "modificar equipo" : "ubicar equipo");
+    await this.audit.log({
+      user,
+      action,
+      entity: "Yard",
+      entityId: code || previous?.code || "DESCONOCIDO",
+      after: { depotId, zone: zone.name, row, col, level, kind: String(input.kind || ""), note: String(input.note || "") },
+      ip,
+    });
+    return saved;
+  }
+
+  async saveOutsider(
+    input: { depotId?: string; id?: string; code?: string; feet?: number; color?: string; note?: string; kind?: string; remove?: boolean },
+    user: AuthUser,
+    ip?: string,
+  ) {
+    const depotId = input.depotId || "";
+    if (isYardDemo(depotId)) this.assertYardDemo(user);
+    else {
+      const depot = await this.prisma.depot.findUnique({ where: { id: depotId } });
+      if (!depot) throw new NotFoundException("Depósito no encontrado.");
+    }
+    const code = String(input.code || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 20);
+    return this.locks.withYardLock(depotId, async () => {
+      const plan = await this.getYardPlan(depotId);
+      const outsiders = [...plan.outsiders];
+      if (input.remove) {
+        const current = outsiders.find((item) => item.id === input.id);
+        if (!current) throw new NotFoundException("Ese equipo no está en el depósito.");
+        for (const item of current.media || []) {
+          await this.storage.delete(item.storageKey).catch(() => undefined);
+        }
+        const value = {
+          ...plan,
+          outsiders: outsiders.filter((item) => item.id !== current.id),
+          ghosts: plan.ghosts.filter((ghost) => ghost.code !== current.code),
+          perimeter: { ...plan.perimeter, cells: plan.perimeter.cells.filter((cell) => !(cell.unknown && cell.iso === current.code)) },
+        };
+        await this.prisma.appSetting.upsert({
+          where: { key: yardPlanKey(depotId) },
+          update: { value },
+          create: { key: yardPlanKey(depotId), value },
+        });
+        await this.audit.log({ user, action: "eliminar equipo", entity: "Yard", entityId: current.code, after: { depotId, kind: current.kind }, ip });
+        return normalizeYardPlan(value);
+      }
+      if (!code || code === "DESCONOCIDO") throw new BadRequestException("Escribe el código del equipo que no es ZDRY.");
+      const feet: 10 | 20 | 40 = Number(input.feet) === 10 ? 10 : Number(input.feet) === 40 ? 40 : 20;
+      const color = /^#[0-9a-fA-F]{6}$/.test(String(input.color || "")) ? String(input.color).toLowerCase() : "";
+      const note = String(input.note || "").trim().slice(0, 120);
+      const kind = String(input.kind || "").trim().toUpperCase().replace(/\s+/g, " ").slice(0, 24) || "OTROS";
+      const existingUnit = await this.prisma.container.findUnique({ where: { iso: code }, select: { archivedAt: true } });
+      if (existingUnit && !existingUnit.archivedAt) throw new ConflictException("Ese código ya está en el inventario ZDRY.");
+      const current = input.id ? outsiders.find((item) => item.id === input.id) : undefined;
+      if (input.id && !current) throw new NotFoundException("Ese equipo no está en el depósito.");
+      if (outsiders.some((item) => item.code === code && item.id !== current?.id)) throw new ConflictException("Ese código ya está asimilado en este depósito.");
+      const row = {
+        id: current?.id || randomUUID(),
+        code,
+        feet,
+        ...(color ? { color } : {}),
+        ...(note ? { note } : {}),
+        kind,
+        ...(current?.media?.length ? { media: current.media } : {}),
+      };
+      const previousCode = current?.code;
+      const typeCode = String(feet);
+      const ghosts = plan.ghosts.map((ghost) => {
+        if (!previousCode || ghost.code !== previousCode) return ghost;
+        return {
+          zoneId: ghost.zoneId,
+          row: ghost.row,
+          col: ghost.col,
+          level: ghost.level,
+          code,
+          typeCode,
+          ...(ghost.half ? { half: ghost.half } : {}),
+          ...(color ? { color } : {}),
+          ...(note ? { note } : {}),
+          kind,
+        };
+      });
+      const cells = plan.perimeter.cells.map((cell) => {
+        if (!previousCode || !cell.unknown || cell.iso !== previousCode) return cell;
+        return {
+          sideId: cell.sideId,
+          slot: cell.slot,
+          level: cell.level,
+          iso: code,
+          unknown: true as const,
+          typeCode,
+          ...(cell.half ? { half: cell.half } : {}),
+          ...(cell.row ? { row: cell.row } : {}),
+          ...(color ? { color } : {}),
+          ...(note ? { note } : {}),
+          kind,
+        };
+      });
+      const value = {
+        ...plan,
+        outsiders: current ? outsiders.map((item) => (item.id === current.id ? row : item)) : [...outsiders, row],
+        ghosts,
+        perimeter: { ...plan.perimeter, cells },
+      };
+      await this.prisma.appSetting.upsert({
+        where: { key: yardPlanKey(depotId) },
+        update: { value },
+        create: { key: yardPlanKey(depotId), value },
+      });
+      await this.audit.log({
+        user,
+        action: current ? "modificar equipo" : "crear equipo",
+        entity: "Yard",
+        entityId: code,
+        after: { depotId, kind, feet, note },
+        ip,
+      });
+      return normalizeYardPlan(value);
+    });
   }
 
   async meta(user?: AuthUser) {
@@ -2970,7 +3149,7 @@ export class WarehouseService {
 
   private async assignFenceDemo(
     depotId: string,
-    input: { sideId?: string; slot?: number; level?: number; iso?: string; wall?: boolean; move?: boolean; half?: string },
+    input: { sideId?: string; slot?: number; level?: number; row?: number; iso?: string; wall?: boolean; move?: boolean; half?: string; unknown?: boolean; color?: string; typeCode?: string; note?: string; kind?: string; clear?: boolean },
     user: AuthUser,
     ip: string | undefined,
     plan: YardPlan,
@@ -3000,12 +3179,59 @@ export class WarehouseService {
         const freed = new Set(plan.perimeter.cells.filter((cell) => cell.sideId === sideId && cell.slot === slot).map((cell) => cell.iso));
         placements = placements.filter((item) => !freed.has(item.iso));
         cells = cells.filter((cell) => !(cell.sideId === sideId && cell.slot === slot));
+      } else if (input.clear) {
+        const bay = fenceBays(side).find((item) => item.slot === slot);
+        if (!bay) throw new BadRequestException("Ese puesto no cabe en el lado.");
+        const depth = input.row === 2 || input.row === 3 ? input.row : 1;
+        const half = input.half === "A" || input.half === "B" ? input.half : null;
+        const spot = (cell: { sideId: string; slot: number; level: number; row?: number; half?: string | null }) => cell.sideId === sideId && cell.slot === slot && cell.level === level && (cell.row || 1) === depth && fenceCellsOverlap(cell.half, half);
+        const target = plan.perimeter.cells.filter((cell) => spot(cell) && cell.unknown);
+        if (!target.length) throw new BadRequestException("Ese puesto no tiene un desconocido ni un equipo para quitar.");
+        const covered = plan.perimeter.cells.some((cell) => cell.sideId === sideId && cell.slot === slot && cell.level > level && (cell.row || 1) === depth && fenceCellsOverlap(cell.half, half));
+        if (covered) throw new ConflictException("Hay un contenedor encima. Muévelo antes de sacar este.");
+        cells = plan.perimeter.cells.filter((cell) => !target.includes(cell));
+      } else if (iso && input.unknown) {
+        const bay = fenceBays(side).find((item) => item.slot === slot);
+        if (!bay) throw new BadRequestException("Ese puesto no cabe en el lado.");
+        const depth = input.row === 2 || input.row === 3 ? input.row : 1;
+        if (depth > bay.rows) throw new BadRequestException("Ese puesto no tiene tantas filas. Guarda el plano con las filas que elegiste.");
+        const wanted = String(input.typeCode || "").startsWith("20") ? 20 : bay.feet;
+        const half = fenceHalfFor(bay.feet, wanted, input.half);
+        const color = /^#[0-9a-fA-F]{6}$/.test(String(input.color || "")) ? String(input.color).toLowerCase() : "";
+        const note = String(input.note || "").trim().slice(0, 120);
+        const kind = String(input.kind || "").trim().toUpperCase().replace(/\s+/g, " ").slice(0, 24);
+        const displaced = plan.perimeter.cells.filter((cell) => cell.sideId === sideId && cell.slot === slot && cell.level === level && (cell.row || 1) === depth && fenceCellsOverlap(cell.half, half));
+        const covered = plan.perimeter.cells.some((cell) => cell.sideId === sideId && cell.slot === slot && cell.level > level && (cell.row || 1) === depth && fenceCellsOverlap(cell.half, half));
+        if (input.move && displaced.length && covered) throw new ConflictException("Hay un contenedor encima. Muévelo antes de cambiar este puesto.");
+        if (!fenceLevelSupported(plan.perimeter.cells, sideId, slot, level, half, iso, depth)) {
+          throw new BadRequestException("Ese puesto no tiene base. Un 40 necesita debajo el puesto completo, o las dos mitades de 20.");
+        }
+        const dropped = new Set(displaced.filter((cell) => !cell.unknown).map((cell) => cell.iso));
+        cells = plan.perimeter.cells.filter((cell) => !displaced.includes(cell));
+        placements = placements.filter((item) => !dropped.has(item.iso));
+        cells.push({
+          sideId,
+          slot,
+          level,
+          iso,
+          ...(half ? { half } : {}),
+          ...(depth > 1 ? { row: depth } : {}),
+          unknown: true,
+          ...(wanted === 20 ? { typeCode: "20" } : { typeCode: "40" }),
+          ...(color ? { color } : {}),
+          ...(note ? { note } : {}),
+          ...(kind ? { kind } : {}),
+        });
       } else if (iso) {
         const unit = await this.prisma.container.findUnique({ where: { iso }, select: { iso: true, type: true, archivedAt: true } });
         if (!unit || unit.archivedAt) throw new NotFoundException("Contenedor no encontrado.");
         const feet = feetOf(unit.type);
         if (feet !== 20 && feet !== 40) throw new BadRequestException("En el cerco solo entra un contenedor de 20 o de 40 pies.");
-        const half = fenceHalfFor(side.containerFeet, feet, input.half);
+        const bay = fenceBays(side).find((item) => item.slot === slot);
+        if (!bay) throw new BadRequestException("Ese puesto no cabe en el lado.");
+        const depth = input.row === 2 || input.row === 3 ? input.row : 1;
+        if (depth > bay.rows) throw new BadRequestException("Ese puesto no tiene tantas filas. Guarda el plano con las filas que elegiste.");
+        const half = fenceHalfFor(bay.feet, feet, input.half);
         const current = sim.placements.find((item) => item.iso === iso);
         if (current?.lado && !input.move) throw new BadRequestException("Ese contenedor ya está en el patio. Para llevarlo al cerco usa Trasladar.");
         const typed = sim.placements.length
@@ -3027,16 +3253,16 @@ export class WarehouseService {
           const access = movesToReach(plan.zones, plan.ghosts, stacked, current.lado, current.ruma, current.columna, current.nivel, iso, current.half, unit.type);
           if (access.total) throw new ConflictException(accessBlockMessage(access.above, access.beside));
         }
-        const sameLevel = plan.perimeter.cells.filter((cell) => cell.sideId === sideId && cell.slot === slot && cell.level === level && cell.iso !== iso);
+        const sameLevel = plan.perimeter.cells.filter((cell) => cell.sideId === sideId && cell.slot === slot && cell.level === level && (cell.row || 1) === depth && (cell.unknown || cell.iso !== iso));
         const blocked = sameLevel.filter((cell) => fenceCellsOverlap(cell.half, half));
-        const aboveCell = plan.perimeter.cells.some((cell) => cell.sideId === sideId && cell.slot === slot && cell.level > level && cell.iso !== iso && fenceCellsOverlap(cell.half, half));
-        if (blocked.length && aboveCell) throw new ConflictException("Hay un contenedor encima. Muévelo antes de cambiar este puesto.");
-        if (!fenceLevelSupported(plan.perimeter.cells, sideId, slot, level, half, iso)) {
+        const aboveCell = plan.perimeter.cells.some((cell) => cell.sideId === sideId && cell.slot === slot && cell.level > level && (cell.row || 1) === depth && (cell.unknown || cell.iso !== iso) && fenceCellsOverlap(cell.half, half));
+        if (input.move && blocked.length && aboveCell) throw new ConflictException("Hay un contenedor encima. Muévelo antes de cambiar este puesto.");
+        if (!fenceLevelSupported(plan.perimeter.cells, sideId, slot, level, half, iso, depth)) {
           throw new BadRequestException("Ese puesto no tiene base. Un 40 necesita debajo el puesto completo, o las dos mitades de 20.");
         }
-        const dropped = new Set(blocked.map((cell) => cell.iso));
-        cells = plan.perimeter.cells.filter((cell) => cell.iso !== iso && !dropped.has(cell.iso));
-        cells.push({ sideId, slot, level, iso, ...(half ? { half } : {}) });
+        const dropped = new Set(blocked.filter((cell) => !cell.unknown).map((cell) => cell.iso));
+        cells = plan.perimeter.cells.filter((cell) => cell.iso !== iso && !dropped.has(cell.iso) && !blocked.includes(cell));
+        cells.push({ sideId, slot, level, iso, ...(half ? { half } : {}), ...(depth > 1 ? { row: depth } : {}) });
         placements = sim.placements.filter((item) => item.iso !== iso && !dropped.has(item.iso));
         placements.push({ iso, lado: FENCE_SIDE, ruma: sideIndex + 1, columna: slot, nivel: level, half });
       } else throw new BadRequestException("Indica el código del contenedor.");
@@ -3054,13 +3280,23 @@ export class WarehouseService {
         history: iso ? [{ id: randomUUID(), iso, type: "Movimiento", detail, createdAt: new Date().toISOString() }, ...sim.history] : sim.history,
         ...simMeta(sim),
       });
-      await this.audit.log({ user, action: input.wall ? "fence_wall" : "fence_place", entity: "YardDemo", entityId: iso || sideId, after: { sideId, slot, level }, ip });
+      const cleared = input.clear ? plan.perimeter.cells.filter((cell) => cell.sideId === sideId && cell.slot === slot && cell.level === level).map((cell) => cell.iso).join(",") : "";
+      const yardAction = input.wall
+        ? "pasar a pared"
+        : input.clear
+          ? (cleared === "DESCONOCIDO" ? "quitar desconocido" : "eliminar equipo")
+          : iso === "DESCONOCIDO"
+            ? "ocupar desconocido"
+            : input.unknown
+              ? "ubicar equipo"
+              : "fence_place";
+      await this.audit.log({ user, action: yardAction, entity: "Yard", entityId: iso || cleared || sideId, after: { depotId, side: side.name, slot, level }, ip });
       return { ok: true };
     });
   }
 
   async assignFence(
-    input: { depotId?: string; sideId?: string; slot?: number; level?: number; iso?: string; wall?: boolean; move?: boolean; half?: string },
+    input: { depotId?: string; sideId?: string; slot?: number; level?: number; row?: number; iso?: string; wall?: boolean; move?: boolean; half?: string; unknown?: boolean; color?: string; typeCode?: string; note?: string; kind?: string; clear?: boolean },
     user: AuthUser,
     ip?: string,
   ) {
@@ -3074,7 +3310,7 @@ export class WarehouseService {
     const sideIndex = plan.perimeter.sides.findIndex((side) => side.id === sideId);
     const side = plan.perimeter.sides[sideIndex];
     if (!side) throw new BadRequestException("Ese lado no está en el perímetro. Guarda el plano primero.");
-    const slots = fenceSlotCount(side);
+    const slots = fenceBays(side).length;
     if (slot < 1 || slot > slots) throw new BadRequestException("Ese puesto no cabe en el lado.");
     if (level < 1 || level > side.levels) throw new BadRequestException(`Ese lado tiene ${side.levels} nivel${side.levels === 1 ? "" : "es"}.`);
     if (isYardDemo(depotId)) return this.assignFenceDemo(depotId, input, user, ip, plan, side, sideIndex);
@@ -3093,11 +3329,55 @@ export class WarehouseService {
       let cells = input.wall === true
         ? plan.perimeter.cells.filter((cell) => !(cell.sideId === sideId && cell.slot === slot))
         : [...plan.perimeter.cells];
-      if (!iso && input.wall !== true && input.wall !== false) throw new BadRequestException("Indica el código del contenedor.");
+      if (!iso && input.wall !== true && input.wall !== false && !input.clear) throw new BadRequestException("Indica el código del contenedor.");
       if (input.wall) {
-        const freed = plan.perimeter.cells.filter((cell) => cell.sideId === sideId && cell.slot === slot);
+        const freed = plan.perimeter.cells.filter((cell) => cell.sideId === sideId && cell.slot === slot && !cell.unknown);
         for (const cell of freed) await this.clearYardSpot(tx, cell.iso, depotId);
         cells = cells.filter((cell) => !(cell.sideId === sideId && cell.slot === slot));
+      } else if (input.clear) {
+        const bay = fenceBays(side).find((item) => item.slot === slot);
+        if (!bay) throw new BadRequestException("Ese puesto no cabe en el lado.");
+        const depth = input.row === 2 || input.row === 3 ? input.row : 1;
+        const half = input.half === "A" || input.half === "B" ? input.half : null;
+        const spot = (cell: { sideId: string; slot: number; level: number; row?: number; half?: string | null }) => cell.sideId === sideId && cell.slot === slot && cell.level === level && (cell.row || 1) === depth && fenceCellsOverlap(cell.half, half);
+        const target = cells.filter((cell) => spot(cell) && cell.unknown);
+        if (!target.length) throw new BadRequestException("Ese puesto no tiene un desconocido ni un equipo para quitar.");
+        const covered = cells.some((cell) => cell.sideId === sideId && cell.slot === slot && cell.level > level && (cell.row || 1) === depth && fenceCellsOverlap(cell.half, half));
+        if (covered) throw new ConflictException("Hay un contenedor encima. Muévelo antes de sacar este.");
+        cells = cells.filter((cell) => !target.includes(cell));
+      } else if (iso && input.unknown) {
+        const bay = fenceBays(side).find((item) => item.slot === slot);
+        if (!bay) throw new BadRequestException("Ese puesto no cabe en el lado.");
+        const depth = input.row === 2 || input.row === 3 ? input.row : 1;
+        if (depth > bay.rows) throw new BadRequestException("Ese puesto no tiene tantas filas. Guarda el plano con las filas que elegiste.");
+        const wanted = String(input.typeCode || "").startsWith("20") ? 20 : bay.feet;
+        const half = fenceHalfFor(bay.feet, wanted, input.half);
+        const color = /^#[0-9a-fA-F]{6}$/.test(String(input.color || "")) ? String(input.color).toLowerCase() : "";
+        const note = String(input.note || "").trim().slice(0, 120);
+        const kind = String(input.kind || "").trim().toUpperCase().replace(/\s+/g, " ").slice(0, 24);
+        const displaced = cells.filter((cell) => cell.sideId === sideId && cell.slot === slot && cell.level === level && (cell.row || 1) === depth && fenceCellsOverlap(cell.half, half));
+        const covered = cells.some((cell) => cell.sideId === sideId && cell.slot === slot && cell.level > level && (cell.row || 1) === depth && fenceCellsOverlap(cell.half, half));
+        if (input.move && displaced.length && covered) throw new ConflictException("Hay un contenedor encima. Muévelo antes de cambiar este puesto.");
+        if (!fenceLevelSupported(plan.perimeter.cells, sideId, slot, level, half, iso, depth)) {
+          throw new BadRequestException("Ese puesto no tiene base. Un 40 necesita debajo el puesto completo, o las dos mitades de 20.");
+        }
+        for (const cell of displaced) {
+          if (!cell.unknown) await this.clearYardSpot(tx, cell.iso, depotId);
+        }
+        cells = cells.filter((cell) => !displaced.includes(cell));
+        cells.push({
+          sideId,
+          slot,
+          level,
+          iso,
+          ...(half ? { half } : {}),
+          ...(depth > 1 ? { row: depth } : {}),
+          unknown: true,
+          ...(wanted === 20 ? { typeCode: "20" } : { typeCode: "40" }),
+          ...(color ? { color } : {}),
+          ...(note ? { note } : {}),
+          ...(kind ? { kind } : {}),
+        });
       } else if (iso) {
         const unit = await tx.container.findUnique({ where: { iso } });
         if (!unit || unit.depotId !== depotId) throw new NotFoundException("Ese contenedor no está en este almacén.");
@@ -3106,7 +3386,11 @@ export class WarehouseService {
         }
         const feet = feetOf(unit.type);
         if (feet !== 20 && feet !== 40) throw new BadRequestException("En el cerco solo entra un contenedor de 20 o de 40 pies.");
-        const half = fenceHalfFor(side.containerFeet, feet, input.half);
+        const bay = fenceBays(side).find((item) => item.slot === slot);
+        if (!bay) throw new BadRequestException("Ese puesto no cabe en el lado.");
+        const depth = input.row === 2 || input.row === 3 ? input.row : 1;
+        if (depth > bay.rows) throw new BadRequestException("Ese puesto no tiene tantas filas. Guarda el plano con las filas que elegiste.");
+        const half = fenceHalfFor(bay.feet, feet, input.half);
         if (unit.lado && !input.move) throw new BadRequestException("Ese contenedor ya está en el patio. Para llevarlo al cerco usa Trasladar.");
         if (unit.lado && unit.lado !== AISLE_SIDE && unit.ruma && unit.columna && unit.nivel) {
           const zone = plan.zones.find((item) => item.name === unit.lado);
@@ -3131,16 +3415,18 @@ export class WarehouseService {
             : { above: sameColumn, beside: 0, total: sameColumn };
           if (access.total) throw new ConflictException(accessBlockMessage(access.above, access.beside));
         }
-        const sameLevel = plan.perimeter.cells.filter((cell) => cell.sideId === sideId && cell.slot === slot && cell.level === level && cell.iso !== iso);
+        const sameLevel = plan.perimeter.cells.filter((cell) => cell.sideId === sideId && cell.slot === slot && cell.level === level && (cell.row || 1) === depth && (cell.unknown || cell.iso !== iso));
         const blocked = sameLevel.filter((cell) => fenceCellsOverlap(cell.half, half));
-        const aboveCell = plan.perimeter.cells.some((cell) => cell.sideId === sideId && cell.slot === slot && cell.level > level && cell.iso !== iso && fenceCellsOverlap(cell.half, half));
-        if (blocked.length && aboveCell) throw new ConflictException("Hay un contenedor encima. Muévelo antes de cambiar este puesto.");
-        if (!fenceLevelSupported(plan.perimeter.cells, sideId, slot, level, half, iso)) {
+        const aboveCell = plan.perimeter.cells.some((cell) => cell.sideId === sideId && cell.slot === slot && cell.level > level && (cell.row || 1) === depth && (cell.unknown || cell.iso !== iso) && fenceCellsOverlap(cell.half, half));
+        if (input.move && blocked.length && aboveCell) throw new ConflictException("Hay un contenedor encima. Muévelo antes de cambiar este puesto.");
+        if (!fenceLevelSupported(plan.perimeter.cells, sideId, slot, level, half, iso, depth)) {
           throw new BadRequestException("Ese puesto no tiene base. Un 40 necesita debajo el puesto completo, o las dos mitades de 20.");
         }
-        for (const cell of blocked) await this.clearYardSpot(tx, cell.iso, depotId);
-        cells = cells.filter((cell) => cell.iso !== iso && !blocked.some((item) => item.iso === cell.iso));
-        cells.push({ sideId, slot, level, iso, ...(half ? { half } : {}) });
+        for (const cell of blocked) {
+          if (!cell.unknown) await this.clearYardSpot(tx, cell.iso, depotId);
+        }
+        cells = cells.filter((cell) => cell.iso !== iso && !blocked.includes(cell));
+        cells.push({ sideId, slot, level, iso, ...(half ? { half } : {}), ...(depth > 1 ? { row: depth } : {}) });
         if (unit.lado) {
           await tx.containerPosition.updateMany({ where: { iso, closedAt: null }, data: { closedAt: new Date() } });
         }
@@ -3161,7 +3447,17 @@ export class WarehouseService {
         update: { value: { ...plan, perimeter } },
         create: { key: yardPlanKey(depotId), value: { ...plan, perimeter } },
       });
-      await this.audit.log({ user, action: input.wall ? "fence_wall" : "fence_place", entity: "Container", entityId: iso || sideId, after: { depotId, sideId, slot, level, wall: !!input.wall }, ip });
+      const cleared = input.clear ? plan.perimeter.cells.filter((cell) => cell.sideId === sideId && cell.slot === slot && cell.level === level).map((cell) => cell.iso).join(",") : "";
+      const yardAction = input.wall
+        ? "pasar a pared"
+        : input.clear
+          ? (cleared === "DESCONOCIDO" ? "quitar desconocido" : "eliminar equipo")
+          : iso === "DESCONOCIDO"
+            ? "ocupar desconocido"
+            : input.unknown
+              ? "ubicar equipo"
+              : "fence_place";
+      await this.audit.log({ user, action: yardAction, entity: "Yard", entityId: iso || cleared || sideId, after: { depotId, side: side.name, slot, level }, ip });
       return { ok: true };
     }));
   }
@@ -3578,6 +3874,172 @@ export class WarehouseService {
       dataMissing: inspectDataMissing(c),
       suggested,
     };
+  }
+
+  async addGearMedia(
+    depotId: string,
+    outsiderId: string,
+    files: { buffer: Buffer; originalname: string; size: number }[],
+    user: AuthUser,
+    ip?: string,
+  ) {
+    if (!depotId || !outsiderId) throw new BadRequestException("Indica el depósito y el equipo.");
+    if (!files.length) throw new BadRequestException("Selecciona al menos una foto o un video.");
+    if (files.length > 12) throw new BadRequestException("Se pueden cargar hasta 12 archivos a la vez.");
+    const prepared = files.map((file) => {
+      let mime = "";
+      let kind: "photo" | "video" = "photo";
+      try {
+        mime = sniffInspectionPhotoMime(file.buffer);
+      } catch {
+        mime = "";
+      }
+      if (mime) {
+        if (file.size > MAX_INSPECTION_PHOTO_BYTES) throw new BadRequestException("La foto supera el máximo de 8 MB.");
+      } else {
+        try {
+          mime = sniffInspectionVideoMime(file.buffer);
+          kind = "video";
+        } catch (e) {
+          throw new BadRequestException((e as Error).message);
+        }
+        if (file.size > MAX_INSPECTION_VIDEO_BYTES) throw new BadRequestException("El video supera el máximo de 40 MB.");
+      }
+      return { ...file, mime, kind };
+    });
+    return this.locks.withYardLock(depotId, async () => {
+      const plan = await this.getYardPlan(depotId);
+      const gear = plan.outsiders.find((item) => item.id === outsiderId);
+      if (!gear) throw new NotFoundException("Ese equipo no está en el depósito.");
+      const media = [...(gear.media || [])];
+      if (media.length + prepared.length > 40) throw new BadRequestException("Ese equipo ya tiene el máximo de 40 archivos.");
+      for (const file of prepared) {
+        const id = randomUUID();
+        const ext = extForInspectionMime(file.mime);
+        const storageKey = `yard-gear/${depotId}/${gear.id}/${id}.${ext}`;
+        await this.storage.put(storageKey, file.buffer, file.mime);
+        media.push({
+          id,
+          kind: file.kind,
+          storageKey,
+          mime: file.mime,
+          name: String(file.originalname || `archivo.${ext}`).replace(/[/\\]/g, "_").slice(0, 180),
+        });
+      }
+      const value = {
+        ...plan,
+        outsiders: plan.outsiders.map((item) => (item.id === gear.id ? { ...item, media } : item)),
+      };
+      await this.prisma.appSetting.upsert({
+        where: { key: yardPlanKey(depotId) },
+        update: { value },
+        create: { key: yardPlanKey(depotId), value },
+      });
+      await this.audit.log({
+        user,
+        action: "cargar archivos",
+        entity: "Yard",
+        entityId: gear.code,
+        after: { depotId, added: prepared.length },
+        ip,
+      });
+      return normalizeYardPlan(value);
+    });
+  }
+
+  async assignGearMedia(
+    input: { depotId?: string; outsiderId?: string; mediaId?: string; slot?: number | null },
+    user: AuthUser,
+    ip?: string,
+  ) {
+    const depotId = input.depotId || "";
+    const outsiderId = input.outsiderId || "";
+    const mediaId = String(input.mediaId || "").trim();
+    const rawSlot = input.slot;
+    const clearing = rawSlot == null || rawSlot === ("" as unknown);
+    const slot = clearing ? null : Number(rawSlot);
+    if (!clearing && (!Number.isInteger(slot) || (slot as number) < 0 || (slot as number) > 8)) {
+      throw new BadRequestException("Elige una casilla del 1 al 9.");
+    }
+    return this.locks.withYardLock(depotId, async () => {
+      const plan = await this.getYardPlan(depotId);
+      const gear = plan.outsiders.find((item) => item.id === outsiderId);
+      if (!gear) throw new NotFoundException("Ese equipo no está en el depósito.");
+      const current = (gear.media || []).find((item) => item.id === mediaId);
+      if (!current) throw new NotFoundException("Ese archivo no está en el equipo.");
+      if (!clearing && current.kind !== "photo") throw new BadRequestException("Solo una foto puede ocupar una casilla de la vista.");
+      const media = (gear.media || []).map((item) => {
+        if (item.id === current.id) {
+          if (clearing) {
+            const { slot: _slot, ...rest } = item;
+            return rest;
+          }
+          return { ...item, slot: slot as number };
+        }
+        if (!clearing && item.slot === slot) {
+          const { slot: _slot, ...rest } = item;
+          return rest;
+        }
+        return item;
+      });
+      const value = {
+        ...plan,
+        outsiders: plan.outsiders.map((item) => (item.id === gear.id ? { ...item, media } : item)),
+      };
+      await this.prisma.appSetting.upsert({
+        where: { key: yardPlanKey(depotId) },
+        update: { value },
+        create: { key: yardPlanKey(depotId), value },
+      });
+      await this.audit.log({
+        user,
+        action: clearing ? "quitar foto de casilla" : "asignar foto",
+        entity: "Yard",
+        entityId: gear.code,
+        after: { depotId, mediaId, slot },
+        ip,
+      });
+      return normalizeYardPlan(value);
+    });
+  }
+
+  async removeGearMedia(depotId: string, outsiderId: string, mediaId: string, user: AuthUser, ip?: string) {
+    return this.locks.withYardLock(depotId, async () => {
+      const plan = await this.getYardPlan(depotId);
+      const gear = plan.outsiders.find((item) => item.id === outsiderId);
+      if (!gear) throw new NotFoundException("Ese equipo no está en el depósito.");
+      const current = (gear.media || []).find((item) => item.id === mediaId);
+      if (!current) throw new NotFoundException("Ese archivo no está en el equipo.");
+      await this.storage.delete(current.storageKey).catch(() => undefined);
+      const media = (gear.media || []).filter((item) => item.id !== current.id);
+      const value = {
+        ...plan,
+        outsiders: plan.outsiders.map((item) => (item.id === gear.id ? { ...item, ...(media.length ? { media } : {}) } : item)),
+      };
+      if (!media.length) {
+        value.outsiders = value.outsiders.map((item) => {
+          if (item.id !== gear.id) return item;
+          const { media: _media, ...rest } = item;
+          return rest;
+        });
+      }
+      await this.prisma.appSetting.upsert({
+        where: { key: yardPlanKey(depotId) },
+        update: { value },
+        create: { key: yardPlanKey(depotId), value },
+      });
+      await this.audit.log({ user, action: "quitar archivo", entity: "Yard", entityId: gear.code, after: { depotId, mediaId }, ip });
+      return normalizeYardPlan(value);
+    });
+  }
+
+  async openGearMedia(depotId: string, outsiderId: string, mediaId: string) {
+    const plan = await this.getYardPlan(depotId);
+    const gear = plan.outsiders.find((item) => item.id === outsiderId);
+    const media = gear?.media?.find((item) => item.id === mediaId);
+    if (!media || !media.storageKey.startsWith(`yard-gear/${depotId}/`)) throw new NotFoundException("Ese archivo no está.");
+    const obj = await this.storage.get(media.storageKey);
+    return { ...obj, contentType: media.mime || obj.contentType };
   }
 }
 

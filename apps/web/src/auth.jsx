@@ -66,6 +66,7 @@ export const ROLE_NAV = {
     { to: "/app/almacen/odoo", label: "Odoo — regularizar" },
     { to: "/app/almacen/campo", label: "Patio — campo" },
     { to: "/app/almacen/patio", label: "Patio" },
+    { to: "/app/almacen/equipos", label: "Equipos que no son DRY" },
     { to: "/app/catalogo-media", label: "Ficha catálogo" },
     { to: "/app/evaluaciones", label: "Evaluaciones" },
     { to: "/app/enlaces-catalogo", label: "Enlaces catálogo" },
@@ -105,6 +106,7 @@ export const ROLE_NAV = {
     { to: "/app/almacen/visitas", label: "Conductores" },
     { to: "/app/almacen/campo", label: "Patio — campo" },
     { to: "/app/almacen/patio", label: "Patio" },
+    { to: "/app/almacen/equipos", label: "Equipos que no son DRY" },
   ],
   almacen: [
     { to: "/app", label: "Inicio", end: true },

@@ -1152,6 +1152,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   box-shadow: 0 0 0 3px rgba(217, 98, 47, .28);
 }
 .overlay { position: fixed; inset: 0; background: rgba(12,18,32,.55); display: none; align-items: flex-start; justify-content: center; z-index: 60; padding: 32px 16px; overflow: auto; }
+.overlay.notice-overlay { z-index: 240; align-items: center; }
 .overlay.open { display: flex; }
 .modal { background: #fff; border-radius: 14px; max-width: 980px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,.35); overflow: hidden; }
 .modal.quote-modal { max-width: 640px; }
@@ -2058,7 +2059,11 @@ button.tile.dry-click { display: block; }
   padding: 12px 0;
   border-bottom: 1px solid var(--line);
 }
-.fence-card .section-sub { grid-column: 1 / -1; margin: 0; }
+.fence-card .section-sub, .fence-fold { grid-column: 1 / -1; }
+.fence-card .section-sub { margin: 0; }
+.fence-fold { justify-self: start; width: auto; }
+.fence-head { display: flex; align-items: center; gap: 10px; }
+.fence-head .btn-ghost { width: auto; margin: 0; }
 .fence-slots { grid-column: 1 / -1; display: grid; gap: 8px; }
 .fence-slot { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafc; }
 .fence-slot-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -2074,9 +2079,23 @@ button.tile.dry-click { display: block; }
 .fence-moves { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
 .fence-moves span { width: 100%; font-size: 13px; color: var(--text-2); }
 .yard-fence-plan { margin-top: 14px; }
-.yard-fence-plan > b { display: block; margin-bottom: 2px; }
+.yard-fence-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.yard-fence-head .btn-ghost { width: auto; margin: 0; }
+.yard-fence-line { display: flex; flex-direction: column; gap: 12px; }
+.yard-fence-line .zone-board { width: 100%; min-width: 0; }
+.yard-fence-line .zone-cols { overflow-x: auto; padding-bottom: 4px; }
+.fence-depth { display: flex; flex-direction: column; gap: 3px; }
+.fence-depth > span { font-size: 10px; font-weight: 700; color: #667085; text-align: center; }
+.yard-outsiders { margin-top: 12px; }
+.yard-outsiders > b { display: block; margin-bottom: 6px; }
+.yard-kind-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.yard-kind-list li.on { background: #12203a; border-radius: 8px; }
+.yard-kind-list li.on .btn-ghost { color: #fff; border-color: transparent; }
+.yard-kind-list li span { flex: 1 1 180px; }
+.yard-kind-list .btn-ghost { width: auto; margin: 0; }
 .yard-cell.fence-target { background: #f0c14a; color: #1c2433; border-color: #d4a017; }
-.guest-form { display: grid; grid-template-columns: minmax(160px, 240px) minmax(120px, 160px) 72px minmax(160px, 1fr); gap: 10px; margin-top: 8px; align-items: end; }
+.yard-cell.fence-skip { opacity: 0.38; }
+.guest-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-top: 8px; align-items: end; }
 .guest-form input[type="color"] { height: 38px; padding: 4px; }
 .yard-info { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafc; }
 .yard-info b { font-size: 16px; color: var(--navy, #12203a); }
@@ -2161,7 +2180,15 @@ button.tile.dry-click { display: block; }
 .yard-detail-slot.has { border-style: solid; border-color: #d0d5dd; background: #fff; }
 .yard-detail-slot img { width: 100%; height: 92px; object-fit: cover; border-radius: 6px; }
 .yard-detail-slot .n { font-size: 22px; font-weight: 800; color: #98a2b3; }
-.yard-detail-slot span:last-child { font-size: 12px; font-weight: 700; }
+.yard-detail-slot > span { font-size: 12px; font-weight: 700; }
+.gear-media h3 { margin: 16px 0 8px; }
+.gear-upload { display: inline-flex; margin: 8px 0 12px; cursor: pointer; }
+.action-row a.btn-ghost { text-decoration: none; display: inline-flex; align-items: center; }
+.gear-files { display: flex; flex-wrap: wrap; gap: 8px; }
+.gear-file { width: 168px; display: flex; flex-direction: column; gap: 4px; }
+.gear-file img, .gear-file video { width: 100%; height: 96px; object-fit: cover; border-radius: 6px; background: #eef2f6; }
+.gear-file span { font-size: 12px; overflow-wrap: anywhere; }
+.yard-detail-slot select { font-size: 12px; }
 @media (max-width: 960px) {
   .zone-card { grid-template-columns: 1fr 1fr; }
   .guest-form { grid-template-columns: 1fr 1fr; }

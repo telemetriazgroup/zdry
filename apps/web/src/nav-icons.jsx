@@ -45,6 +45,7 @@ export function iconFor(path) {
   if (path.includes("almacen/odoo")) return "boxes";
   if (path.includes("recepcion")) return "inbox";
   if (path.includes("campo")) return "camera";
+  if (path.includes("almacen/equipos")) return "camera";
   if (path.includes("patio")) return "grid";
   if (path.includes("estadistica-dry")) return "clipboard";
   if (path.includes("integraciones")) return "gear";

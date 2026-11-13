@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuthUser } from "../auth/auth.types";
 
-const MAX_ROWS = 5000;
+const PAGE_SIZE = 50;
 
 export function auditDateRange(from?: string | null, to?: string | null) {
   const ok = (v?: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
@@ -52,9 +52,11 @@ export class AuditService {
     });
   }
 
-  async list(from?: string, to?: string, take = 2000, viewer?: Pick<AuthUser, "role"> | null) {
+  async list(from?: string, to?: string, skip = 0, viewer?: Pick<AuthUser, "role"> | null) {
     const range = auditDateRange(from, to);
-    const where: Prisma.AuditLogWhereInput = {};
+    const where: Prisma.AuditLogWhereInput = {
+      entity: { in: ["Container", "YardDemo", "Yard"] },
+    };
     if (viewer?.role === "admin") {
       where.NOT = { user: { role: "superadmin" } };
     }
@@ -64,11 +66,12 @@ export class AuditService {
         ...(range.to ? { lte: range.to } : {}),
       };
     }
-    const limit = Math.min(MAX_ROWS, Math.max(1, Number(take) || 2000));
+    const offset = Math.max(0, Math.floor(Number(skip) || 0));
     const [rows, total] = await Promise.all([
       this.prisma.auditLog.findMany({
         where,
-        take: limit,
+        skip: offset,
+        take: PAGE_SIZE,
         orderBy: { createdAt: "desc" },
         include: { user: { select: { email: true, name: true, role: true } } },
       }),
@@ -78,7 +81,10 @@ export class AuditService {
       from: range.fromDay,
       to: range.toDay,
       total,
-      truncated: total > rows.length,
+      skip: offset,
+      take: PAGE_SIZE,
+      page: Math.floor(offset / PAGE_SIZE) + 1,
+      pages: Math.max(1, Math.ceil(total / PAGE_SIZE)),
       rows,
       hidesSuperadmin: viewer?.role === "admin",
     };

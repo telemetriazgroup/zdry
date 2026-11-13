@@ -1,5 +1,5 @@
 import { yardScenario } from "./yard-scenarios";
-import { defaultYardPlan, ghostsWithSupport, leftToCustomer, movesAbove, movesToReach, normalizeYardPlan, reachBlockers, stackLengthError, zoneSlotError } from "./yard-plan";
+import { defaultYardPlan, fenceBays, ghostsWithSupport, leftToCustomer, movesAbove, movesToReach, normalizeYardPlan, reachBlockers, stackLengthError, zoneSlotError } from "./yard-plan";
 
 describe("yard plan", () => {
   it("arranca con una zona 3×4 de altura 5 y un pasillo", () => {
@@ -87,6 +87,51 @@ describe("yard plan", () => {
     expect(withHalves.zones[0]).toMatchObject({ xM: 6, zM: 8 });
     expect(withHalves.perimeter.cells.map((cell) => cell.half || "full")).toEqual(["full", "A", "B"]);
     expect(normalizeYardPlan({ zones: [{ id: "a", name: "A", rows: 2, cols: 2, levels: 2 }] }).perimeter).toEqual({ sides: [], gates: [], cells: [] });
+  });
+
+  it("mezcla 20 y 40 en un lado y guarda un desconocido con su color y su fila", () => {
+    const side = { lengthM: 36.6, kind: "contenedores" as const, containerFeet: 40 as const, wallM: 0, bays: [{ feet: 40 as const, rows: 1 }, { feet: 20 as const, rows: 2 }, { feet: 40 as const, rows: 1 }] };
+    expect(fenceBays(side).map((bay) => [bay.feet, bay.rows])).toEqual([[40, 1], [20, 2], [40, 1], [20, 1]]);
+    const plan = normalizeYardPlan({
+      zones: [{ id: "a", name: "A", rows: 2, cols: 2, levels: 2, gridRow: 1, gridCol: 1 }],
+      perimeter: {
+        sides: [
+          { id: "fondo", name: "Fondo", lengthM: 36.6, turnDeg: 90, kind: "contenedores", containerFeet: 40, levels: 3, bays: side.bays },
+          { id: "este", name: "Este", lengthM: 20, turnDeg: 90, kind: "pared" },
+          { id: "oeste", name: "Oeste", lengthM: 20, turnDeg: 90, kind: "pared" },
+        ],
+        cells: [
+          { sideId: "fondo", slot: 2, level: 1, row: 2, iso: "sin-ficha", unknown: true, color: "#F76707", typeCode: "20", note: "naranja", kind: "reefer" },
+        ],
+      },
+    });
+    expect(plan.perimeter.sides[0].levels).toBe(3);
+    expect(plan.perimeter.sides[0].bays).toEqual([{ feet: 40, rows: 1 }, { feet: 20, rows: 2 }, { feet: 40, rows: 1 }]);
+    expect(plan.perimeter.cells[0]).toMatchObject({ slot: 2, row: 2, unknown: true, color: "#f76707", typeCode: "20", iso: "SIN-FICHA", kind: "REEFER" });
+    expect(plan.equipmentKinds).toEqual(["REEFER", "TUNEL", "POWERPACK", "MODULO", "OTROS"]);
+    const withGear = normalizeYardPlan({
+      zones: [{ id: "a", name: "A", rows: 2, cols: 2, levels: 2 }],
+      outsiders: [{ id: "eq-1", code: "pp-9", feet: 20, kind: "powerpack", note: "patio" }, { code: "DESCONOCIDO", kind: "OTROS" }],
+    });
+    expect(withGear.outsiders).toEqual([{ id: "eq-1", code: "PP-9", feet: 20, kind: "POWERPACK", note: "patio" }]);
+    const withMedia = normalizeYardPlan({
+      zones: [{ id: "a", name: "A", rows: 2, cols: 2, levels: 2 }],
+      outsiders: [{
+        id: "eq-1",
+        code: "PP-9",
+        feet: 20,
+        kind: "POWERPACK",
+        media: [
+          { id: "m1", kind: "photo", slot: 0, storageKey: "yard-gear/d/eq-1/m1.jpg", mime: "image/jpeg", name: "frente.jpg" },
+          { id: "m2", kind: "photo", slot: 0, storageKey: "yard-gear/d/eq-1/m2.jpg", mime: "image/jpeg", name: "otra.jpg" },
+          { id: "malo", kind: "photo", storageKey: "otro/sitio.jpg", mime: "image/jpeg" },
+        ],
+      }],
+    });
+    expect(withMedia.outsiders[0].media).toEqual([
+      { id: "m1", kind: "photo", slot: 0, storageKey: "yard-gear/d/eq-1/m1.jpg", mime: "image/jpeg", name: "frente.jpg" },
+      { id: "m2", kind: "photo", storageKey: "yard-gear/d/eq-1/m2.jpg", mime: "image/jpeg", name: "otra.jpg" },
+    ]);
   });
 
   it("rellena con desconocidos los niveles debajo y cuenta los de encima", () => {

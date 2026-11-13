@@ -39,8 +39,31 @@ export type YardGhost = {
   typeCode?: string;
   color?: string;
   note?: string;
+  /** Clase del equipo ajeno: REEFER, TUNEL, POWERPACK, MODULO, OTROS u otra del patio. */
+  kind?: string;
   /** Mitad del puesto de 40 pies. Vacío: el equipo ocupa el puesto entero. */
   half?: "A" | "B";
+};
+
+/** Foto o video de un equipo que no es ZDRY. La casilla 0–8 es la vista (frontal, lateral…). */
+export type YardGearMedia = {
+  id: string;
+  kind: "photo" | "video";
+  slot?: number;
+  storageKey: string;
+  mime: string;
+  name: string;
+};
+
+/** Equipo que no es un contenedor ZDRY, asimilado al depósito. Puede estar sin ubicar. */
+export type YardOutsider = {
+  id: string;
+  code: string;
+  feet: 10 | 20 | 40;
+  color?: string;
+  note?: string;
+  kind: string;
+  media?: YardGearMedia[];
 };
 
 export type YardPlan = {
@@ -48,7 +71,13 @@ export type YardPlan = {
   aisles: YardAisle[];
   ghosts: YardGhost[];
   perimeter: YardPerimeter;
+  /** Equipos que no son ZDRY y ya pertenecen a este depósito. */
+  outsiders: YardOutsider[];
+  /** Clases de equipo que no está en ZDRY. Se eligen al regularizar. */
+  equipmentKinds: string[];
 };
+
+export const DEFAULT_EQUIPMENT_KINDS = ["REEFER", "TUNEL", "POWERPACK", "MODULO", "OTROS"];
 
 export type FenceKind = "pared" | "contenedores" | "mixto";
 
@@ -67,6 +96,16 @@ export type YardFenceSide = {
   levels: number;
   /** Puestos de contenedor que pasaron a ser pared. */
   wallSlots: number[];
+  /**
+   * Elección de cada puesto, en orden. Si un puesto no está, usa containerFeet y una fila.
+   * Una fila es la línea del cerco; la segunda y la tercera entran hacia el patio.
+   */
+  bays?: FenceBayChoice[];
+};
+
+export type FenceBayChoice = {
+  feet: 20 | 40;
+  rows: number;
 };
 
 export type YardGate = {
@@ -92,6 +131,15 @@ export type YardFenceCell = {
   iso: string;
   /** En un puesto de 40 pies, la mitad que ocupa un contenedor de 20. */
   half?: "A" | "B";
+  /** 1 es la línea del cerco. 2 y 3 son filas hacia adentro, del mismo largo. */
+  row?: number;
+  /** No está en el catálogo. El 3D lo dibuja llenando el puesto. */
+  unknown?: boolean;
+  typeCode?: string;
+  color?: string;
+  note?: string;
+  /** Clase del equipo ajeno a ZDRY. */
+  kind?: string;
 };
 
 export const FENCE_SIDE = "CERCO";
@@ -108,6 +156,8 @@ export function defaultYardPlan(): YardPlan {
     aisles: [{ id: "pasillo-1", name: "Pasillo 1", afterZoneId: "zona-a" }],
     ghosts: [],
     perimeter: { sides: [], gates: [], cells: [] },
+    outsiders: [],
+    equipmentKinds: [...DEFAULT_EQUIPMENT_KINDS],
   };
 }
 
@@ -185,16 +235,100 @@ export function normalizeYardPlan(raw: unknown): YardPlan {
     const typeCode = String(row.typeCode || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 12);
     const color = /^#[0-9a-fA-F]{6}$/.test(String(row.color || "")) ? String(row.color).toLowerCase() : "";
     const note = String(row.note || "").trim().slice(0, 120);
+    const kind = equipmentKind(row.kind);
     const half: "A" | "B" | "" = row.half === "A" ? "A" : row.half === "B" ? "B" : "";
     const key = `${ghost.zoneId}:${ghost.row}:${ghost.col}:${ghost.level}:${half || "F"}`;
     if (ghostSeen.has(key)) return;
     ghostSeen.add(key);
     const named = code
-      ? { ...ghost, code, typeCode, ...(color ? { color } : {}), ...(note ? { note } : {}), ...(half ? { half } : {}) }
+      ? { ...ghost, code, typeCode, ...(color ? { color } : {}), ...(note ? { note } : {}), ...(kind ? { kind } : {}), ...(half ? { half } : {}) }
       : { ...ghost, ...(half ? { half } : {}) };
     ghosts.push(named);
   });
-  return { zones, aisles, ghosts, perimeter: normalizePerimeter(source.perimeter) };
+  return {
+    zones,
+    aisles,
+    ghosts,
+    perimeter: normalizePerimeter(source.perimeter),
+    outsiders: outsidersOf(source.outsiders),
+    equipmentKinds: equipmentKindsOf(source.equipmentKinds),
+  };
+}
+
+function outsiderFeet(value: unknown): 10 | 20 | 40 {
+  const raw = String(value || "");
+  if (raw === "10" || Number(value) === 10) return 10;
+  if (raw === "40" || raw.startsWith("40") || Number(value) === 40) return 40;
+  return 20;
+}
+
+function outsidersOf(raw: unknown): YardOutsider[] {
+  const outsiders: YardOutsider[] = [];
+  const seen = new Set<string>();
+  (Array.isArray(raw) ? raw : []).slice(0, 200).forEach((item, index) => {
+    const row = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+    const code = String(row.code || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 20);
+    if (!code || code === "DESCONOCIDO" || seen.has(code)) return;
+    seen.add(code);
+    const id = text(row.id, `equipo-${index + 1}`).toLowerCase().replace(/[^a-z0-9-]/g, "") || `equipo-${index + 1}`;
+    const color = /^#[0-9a-fA-F]{6}$/.test(String(row.color || "")) ? String(row.color).toLowerCase() : "";
+    const note = String(row.note || "").trim().slice(0, 120);
+    const kind = equipmentKind(row.kind) || "OTROS";
+    const media = gearMediaOf(row.media);
+    outsiders.push({
+      id,
+      code,
+      feet: outsiderFeet(row.feet ?? row.typeCode),
+      ...(color ? { color } : {}),
+      ...(note ? { note } : {}),
+      kind,
+      ...(media.length ? { media } : {}),
+    });
+  });
+  return outsiders;
+}
+
+function gearMediaOf(raw: unknown): YardGearMedia[] {
+  const media: YardGearMedia[] = [];
+  const seen = new Set<string>();
+  const usedSlots = new Set<number>();
+  (Array.isArray(raw) ? raw : []).slice(0, 40).forEach((item) => {
+    const row = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+    const id = String(row.id || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
+    const storageKey = String(row.storageKey || "").trim();
+    const kind = row.kind === "video" ? "video" : row.kind === "photo" ? "photo" : "";
+    const mime = String(row.mime || "").trim().slice(0, 80);
+    if (!id || seen.has(id) || !kind || !mime || !storageKey.startsWith("yard-gear/")) return;
+    seen.add(id);
+    const slot = Number(row.slot);
+    const placed = kind === "photo" && Number.isInteger(slot) && slot >= 0 && slot <= 8 && !usedSlots.has(slot);
+    if (placed) usedSlots.add(slot);
+    media.push({
+      id,
+      kind,
+      storageKey: storageKey.slice(0, 240),
+      mime,
+      name: String(row.name || "").replace(/[/\\]/g, "_").slice(0, 180),
+      ...(placed ? { slot } : {}),
+    });
+  });
+  return media;
+}
+
+function equipmentKind(value: unknown) {
+  return String(value || "").trim().toUpperCase().replace(/\s+/g, " ").slice(0, 24);
+}
+
+function equipmentKindsOf(raw: unknown) {
+  const kinds: string[] = [];
+  const seen = new Set<string>();
+  (Array.isArray(raw) ? raw : []).slice(0, 24).forEach((item) => {
+    const name = equipmentKind(item);
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    kinds.push(name);
+  });
+  return kinds.length ? kinds : [...DEFAULT_EQUIPMENT_KINDS];
 }
 
 function fenceId(value: unknown, fallback: string) {
@@ -223,7 +357,8 @@ export function normalizePerimeter(raw: unknown): YardPerimeter {
     const containerFeet: 20 | 40 = Number(row.containerFeet) === 20 ? 20 : 40;
     const wallM = clamp(row.wallM, 0, lengthM, 0);
     const levels = clamp(row.levels, 1, 3, 1);
-    const slotCount = fenceSlotCount({ lengthM, kind, containerFeet, wallM });
+    const bays = fenceBayChoices(row.bays);
+    const slotCount = fenceBays({ lengthM, kind, containerFeet, wallM, bays }).length;
     const wallSlots = [...new Set((Array.isArray(row.wallSlots) ? row.wallSlots : []).map((item) => Math.round(Number(item))).filter((item) => item >= 1 && item <= slotCount))].slice(0, 80);
     sides.push({
       id,
@@ -235,6 +370,7 @@ export function normalizePerimeter(raw: unknown): YardPerimeter {
       wallM,
       levels,
       wallSlots,
+      ...(bays.length ? { bays } : {}),
     });
   });
   if (sides.length && sides.length < 3) return { sides: [], gates: [], cells: [] };
@@ -258,13 +394,35 @@ export function normalizePerimeter(raw: unknown): YardPerimeter {
     const row = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
     const side = sides.find((itemSide) => itemSide.id === String(row.sideId || ""));
     if (!side || side.wallSlots.includes(Math.round(Number(row.slot)))) return;
-    const slot = inside(row.slot, 1, fenceSlotCount(side));
+    const slot = inside(row.slot, 1, fenceBays(side).length);
     const level = inside(row.level, 1, side.levels);
     const iso = String(row.iso || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 20);
     const half = row.half === "A" || row.half === "B" ? row.half : "";
-    if (!slot || !level || !iso || usedIso.has(iso)) return;
-    usedIso.add(iso);
-    cells.push({ sideId: side.id, slot, level, iso, ...(half ? { half } : {}) });
+    const depth = row.row === 2 || row.row === 3 || row.row === "2" || row.row === "3" ? Number(row.row) : 1;
+    const bay = fenceBays(side).find((item) => item.slot === slot);
+    if (bay && depth > bay.rows) return;
+    const rowDepth = depth;
+    const unknown = row.unknown === true;
+    const typeCode = String(row.typeCode || "").trim().toUpperCase().replace(/\s+/g, "").slice(0, 12);
+    const color = /^#[0-9a-fA-F]{6}$/.test(String(row.color || "")) ? String(row.color).toLowerCase() : "";
+    const note = String(row.note || "").trim().slice(0, 120);
+    const kind = equipmentKind(row.kind);
+    if (!slot || !level || !iso) return;
+    if (!unknown && usedIso.has(iso)) return;
+    if (!unknown) usedIso.add(iso);
+    cells.push({
+      sideId: side.id,
+      slot,
+      level,
+      iso,
+      ...(half ? { half } : {}),
+      ...(rowDepth > 1 ? { row: rowDepth } : {}),
+      ...(unknown ? { unknown: true } : {}),
+      ...(typeCode ? { typeCode } : {}),
+      ...(color ? { color } : {}),
+      ...(note ? { note } : {}),
+      ...(kind ? { kind } : {}),
+    });
   });
   return { sides, gates, cells };
 }
@@ -279,6 +437,44 @@ export function fenceSlotCount(side: { lengthM: number; kind: FenceKind; contain
   const feet = side.containerFeet === 20 ? 6.1 : 12.2;
   const wall = side.kind === "mixto" ? Math.min(side.wallM, side.lengthM) : 0;
   return Math.max(0, Math.floor((side.lengthM - wall + 0.05) / feet));
+}
+
+function fenceBayChoices(raw: unknown): FenceBayChoice[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 80).map((item) => {
+    const row = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+    const feet: 20 | 40 = Number(row.feet) === 20 ? 20 : 40;
+    const rows = clamp(row.rows, 1, 3, 1);
+    return { feet, rows };
+  });
+}
+
+export type FenceBay = { slot: number; feet: 20 | 40; rows: number; fromM: number };
+
+/** Recorre el lado y deja cada puesto con su largo. Sin elección previa, todos usan el largo del lado y una fila. */
+export function fenceBays(side: { lengthM: number; kind: FenceKind; containerFeet: 20 | 40; wallM: number; bays?: FenceBayChoice[] }): FenceBay[] {
+  if (side.kind === "pared") return [];
+  const length = side.lengthM;
+  const wall = side.kind === "mixto" ? Math.min(side.wallM, length) : 0;
+  const fallback: 20 | 40 = side.containerFeet === 20 ? 20 : 40;
+  const choices = side.bays || [];
+  const out: FenceBay[] = [];
+  let cursor = wall;
+  let index = 0;
+  while (out.length < 80) {
+    const choice = choices[index];
+    let feet: 20 | 40 = choice ? choice.feet : fallback;
+    let width = feet === 20 ? 6.1 : 12.2;
+    if (cursor + width > length + 0.05) {
+      if (choice || feet === 20 || cursor + 6.1 > length + 0.05) break;
+      feet = 20;
+      width = 6.1;
+    }
+    out.push({ slot: out.length + 1, feet, rows: choice ? choice.rows : 1, fromM: cursor });
+    cursor += width;
+    index += 1;
+  }
+  return out;
 }
 
 /** Las zonas sin fila ni columna quedan en la primera fila, de izquierda a derecha. */

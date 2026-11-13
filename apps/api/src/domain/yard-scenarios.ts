@@ -1,4 +1,4 @@
-import { normalizeYardPlan, type YardPlan, type YardZone, type ZoneClosedSide } from "./yard-plan";
+import { DEFAULT_EQUIPMENT_KINDS, normalizeYardPlan, type YardPlan, type YardZone, type ZoneClosedSide } from "./yard-plan";
 
 export type YardScenarioId = "guardado" | "cuatro" | "seis";
 
@@ -18,6 +18,7 @@ const SAVED_DEMO: YardPlan = {
   ],
   aisles: [],
   ghosts: [],
+  outsiders: [],
   perimeter: {
     sides: [
       { id: "lado-norte", name: "Norte", lengthM: 116, turnDeg: 90, kind: "contenedores", containerFeet: 40, wallM: 0, levels: 2, wallSlots: [] },
@@ -31,6 +32,7 @@ const SAVED_DEMO: YardPlan = {
     ],
     cells: [],
   },
+  equipmentKinds: [...DEFAULT_EQUIPMENT_KINDS],
 };
 
 function block(id: string, name: string, gridRow: number, gridCol: number, closedSide: ZoneClosedSide): YardZone {

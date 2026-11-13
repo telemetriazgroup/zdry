@@ -11,6 +11,61 @@ export const LAYOUT_STATUS_COLOR = {
   llena: "#1971c2",
 };
 
+const PAINT = {
+  blanco: "#f4f4f4",
+  gris: "#9aa0a6",
+  verde: "#2f9e44",
+  azul: "#1c7ed6",
+  rojo: "#e03131",
+  naranja: "#f76707",
+  marron: "#8d6e63",
+  marrón: "#8d6e63",
+  beige: "#e6d3b3",
+  crema: "#f3e5ab",
+  corten: "#b85c38",
+};
+
+/** Color de la ficha del contenedor. Blanco se pinta blanco y naranja, naranja. */
+export function paintColor(name, fallback = "") {
+  const raw = String(name || "").trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw.toLowerCase();
+  const key = raw.toLowerCase();
+  if (PAINT[key]) return PAINT[key];
+  if (key.startsWith("corten")) return PAINT.corten;
+  return fallback;
+}
+
+export function boxColor(unit, fallback = "#8a90a2") {
+  return paintColor(unit?.color, "") || unit?.typeColor || fallback;
+}
+
+/** Misma cuenta que fenceBays del API. Sin bays, todo el lado usa un solo largo y una fila. */
+export function fenceBays(side) {
+  if (!side || side.kind === "pared") return [];
+  const length = Number(side.lengthM) || 0;
+  const wall = side.kind === "mixto" ? Math.min(Number(side.wallM) || 0, length) : 0;
+  const fallback = Number(side.containerFeet) === 20 ? 20 : 40;
+  const choices = Array.isArray(side.bays) ? side.bays : [];
+  const out = [];
+  let cursor = wall;
+  let index = 0;
+  while (out.length < 80) {
+    const choice = choices[index];
+    let feet = choice ? (Number(choice.feet) === 20 ? 20 : 40) : fallback;
+    let width = feet === 20 ? 6.1 : 12.2;
+    if (cursor + width > length + 0.05) {
+      if (choice || feet === 20 || cursor + 6.1 > length + 0.05) break;
+      feet = 20;
+      width = 6.1;
+    }
+    const rows = Math.min(3, Math.max(1, Number(choice?.rows) || 1));
+    out.push({ slot: out.length + 1, feet, rows, fromM: cursor });
+    cursor += width;
+    index += 1;
+  }
+  return out;
+}
+
 export function sizeGroup(type) {
   if (type.startsWith("20")) return "20";
   if (type.startsWith("40")) return "40";
