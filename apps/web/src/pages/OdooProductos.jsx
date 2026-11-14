@@ -75,7 +75,7 @@ export default function OdooProductos() {
       <p className="section-sub">
         La búsqueda sigue tomando la categoría Contenedor Dry y todo producto cuyo nombre lleva DRY.
         Aquí se agregan productos concretos que no tienen DRY, por ejemplo módulo de revestimiento.
-        Al guardar, ZDRY vuelve a sincronizar y asimila las series que existan. Cada producto muestra cuántos está tomando.
+        Guardar y sincronizar busca ese producto en ese momento, aunque el expediente se esté actualizando. Entran las series con al menos 1 a la mano. Al terminar, siguen los equipos nuevos cada 5 minutos y los expedientes cada 10.
       </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}

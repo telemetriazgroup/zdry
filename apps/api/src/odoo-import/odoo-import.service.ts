@@ -38,10 +38,12 @@ import { planOdooRelink } from "../domain/odoo-reconcile";
 import { freshOdooLotIds, normalizeOdooWatch, ODOO_WATCH_KEY, type OdooWatchMode } from "../domain/odoo-import-watch";
 import {
   countCustomProducts,
+  customSearchTerms,
   normalizeOdooCustomProducts,
   ODOO_CUSTOM_PRODUCTS_KEY,
   odooNamePattern,
   phraseHitsName,
+  phraseHitsProduct,
   type OdooCustomCount,
 } from "../domain/odoo-custom-products";
 import { equipmentTypeCode, explicitEquipmentType, OTHER_EQUIPMENT_TYPE, type TypeMaster } from "../domain/type-from-product";
@@ -412,11 +414,44 @@ export class OdooImportService {
     });
     let sync: { ok: boolean; running?: boolean; message?: string } = { ok: false, message: "No se pudo buscar en Odoo." };
     try {
-      sync = await this.sync(user, ip);
+      sync = await this.syncCustomNow(user, ip);
     } catch (e) {
       sync = { ok: false, message: (e as Error).message || sync.message };
     }
     return { ...(await this.customProducts()), sync };
+  }
+
+  /** Busca solo los productos personalizados y asimila los que tienen al menos 1 a la mano. No espera al expediente. */
+  async syncCustomNow(user: AuthUser, ip?: string) {
+    const phrases = (await this.readCustomProducts()).phrases;
+    if (!phrases.length) return { ok: true, running: false, message: "No hay productos personalizados para buscar." };
+    if (this.runId) {
+      return { ok: true, running: true, message: "Ya hay una asimilación en curso. El diario se actualiza abajo." };
+    }
+    const probe = await this.odoo.probe();
+    if (!probe.ok) throw new BadRequestException(probe.message);
+    const run = await this.logs.start("sync", user.name);
+    this.abortFlag = false;
+    this.aborted.delete(run.id);
+    this.runId = run.id;
+    await this.writeProgress({
+      status: "running",
+      step: "lotes",
+      current: 0,
+      total: 5,
+      iso: "",
+      message: "Buscando ahora los productos personalizados en Odoo…",
+    });
+    await this.logs.add(run.id, { level: "info", step: "lotes", message: `${user.name || "admin"} busca productos personalizados, sin esperar al expediente.` });
+    void this.runCustomSync(run.id, user, ip).finally(() => {
+      if (this.runId === run.id) this.runId = null;
+    });
+    return {
+      ok: true,
+      running: true,
+      runId: run.id,
+      message: "La búsqueda de esos productos empezó ahora. El expediente sigue cuando esta asimilación termine.",
+    };
   }
 
   private async readCustomProducts() {
@@ -428,10 +463,10 @@ export class OdooImportService {
     if (!phrases.length) return [];
     const rows = await this.prisma.odooLotCandidate.findMany({
       where: { status: { in: ["pending", "qty_anomaly", "assimilated"] } },
-      select: { productName: true, status: true },
+      select: { productName: true, productCode: true, status: true },
     });
     return phrases.map((phrase) => {
-      const hit = rows.filter((row) => phraseHitsName(phrase, row.productName));
+      const hit = rows.filter((row) => phraseHitsProduct(phrase, row.productName, row.productCode));
       return {
         phrase,
         pending: hit.filter((row) => row.status !== "assimilated").length,
@@ -463,7 +498,7 @@ export class OdooImportService {
   async syncNewOnly() {
     const running = await this.logs.currentRunning();
     const live = await this.progress();
-    if (running || live.status === "running" || this.runId || this.expedienteJob.status === "running") {
+    if (running || live.status === "running" || this.runId) {
       return { ok: true, skipped: true as const, message: "Ya hay una pasada en curso." };
     }
     const actor = await this.autoActor();
@@ -480,9 +515,188 @@ export class OdooImportService {
     await this.writeProgress({ status: "running", step: "lotes", current: 0, total: 5, iso: "", message: "Buscando equipos nuevos en Odoo…" });
     void this.runSyncNew(run.id, actor).finally(() => {
       if (this.runId === run.id) this.runId = null;
-      void this.refreshExpedientesIfAuto();
     });
     return { ok: true, running: true, runId: run.id, message: "Buscando solo equipos nuevos." };
+  }
+
+  private async runCustomSync(runId: string, user: AuthUser, ip?: string) {
+    this.runId = runId;
+    try {
+      const phrases = (await this.readCustomProducts()).phrases;
+      const products = await this.loadCustomProducts(phrases);
+      await this.publishCustomCounts(runId, products, []);
+      if (!products.length) {
+        const message = phrases.length
+          ? `Ningún producto personalizado está en Odoo: ${phrases.map((phrase) => `"${phrase}"`).join(", ")}.`
+          : "No hay productos personalizados para buscar.";
+        await this.logs.finish(runId, message);
+        await this.writeProgress({ status: "done", step: "listo", current: 5, total: 5, iso: "", message });
+        return;
+      }
+      const productIds = products.map((row) => Number(row.id));
+      const productMap = new Map(products.map((row) => [Number(row.id), row]));
+      const quants = await this.searchAll(
+        "stock.quant",
+        [["product_id", "in", productIds], ["quantity", ">", 0], ["lot_id", "!=", false], ["location_id.usage", "=", "internal"]],
+        ["id", "lot_id", "location_id", "quantity", "product_id"],
+      );
+      if (this.isAborted(runId)) return;
+      await this.publishCustomCounts(runId, products, quants);
+      const available = new Set<number>();
+      for (const row of quants) {
+        const lotId = this.relId(row.lot_id);
+        if (lotId && this.sumQty(quants, lotId) >= 1) available.add(lotId);
+      }
+      const lotIds = [...available];
+      if (!lotIds.length) {
+        const message = "Esos productos están en Odoo, pero ninguno tiene al menos 1 a la mano.";
+        await this.logs.finish(runId, message);
+        await this.writeProgress({ status: "done", step: "listo", current: 5, total: 5, iso: "", message });
+        return;
+      }
+      const [knownCands, knownBoxes] = await Promise.all([
+        this.prisma.odooLotCandidate.findMany({ select: { odooLotId: true } }),
+        this.prisma.container.findMany({ where: { odooLotId: { not: null } }, select: { odooLotId: true } }),
+      ]);
+      const fresh = freshOdooLotIds(lotIds, [...knownCands.map((row) => row.odooLotId), ...knownBoxes.map((row) => row.odooLotId || 0)]);
+      const lotMeta = await this.lotMeta();
+      const typeMasters = await this.loadTypeMasters();
+      const lots = fresh.length ? await this.hydrateLots(fresh, lotMeta) : [];
+      const lotMap = new Map(lots.map((lot) => [Number(lot.id), lot]));
+      const now = new Date();
+      const created: number[] = [];
+      for (const lotId of fresh) {
+        if (this.isAborted(runId)) return;
+        const q = quants.find((row) => this.relId(row.lot_id) === lotId);
+        const lot = lotMap.get(lotId);
+        const product = productMap.get(this.relId(q?.product_id) || this.relId(lot?.product_id));
+        const attrs = readLotAttrs(lot, lotMeta.fields);
+        const serialRaw = attrs.serialRaw || this.relName(q?.lot_id);
+        const iso = inspectOdooIso(serialRaw);
+        if (!iso.isoNormalized) {
+          await this.logs.add(runId, { level: "warn", step: "lotes", serialRaw, odooLotId: lotId, message: "Sin serial normalizable; se omite." });
+          continue;
+        }
+        const qty = this.sumQty(quants, lotId);
+        const locationName = this.relName(q?.location_id);
+        const productName = String(product?.name || this.relName(lot?.product_id) || "");
+        const productCode = String(product?.default_code || "");
+        try {
+          await this.prisma.odooLotCandidate.create({
+            data: {
+              odooLotId: lotId,
+              odooWriteDate: this.asDate(lot?.write_date),
+              serialRaw,
+              isoNormalized: iso.isoNormalized,
+              iso6346Ok: iso.iso6346Ok,
+              productName,
+              productCode,
+              locationName,
+              odooWarehouse: warehouseFromLocation(locationName),
+              locationOdooId: this.relId(q?.location_id) || null,
+              qtyOnHand: qty,
+              color: attrs.color,
+              tareKg: attrs.tareKg,
+              mgwKg: attrs.mgwKg,
+              year: attrs.year,
+              manufacturer: attrs.manufacturer,
+              dua: attrs.dua,
+              originCountry: attrs.originCountry,
+              material: attrs.material,
+              zgroupCode: attrs.zgroupCode,
+              odooDescription: attrs.description || "",
+              payload: { lot, quantLocation: q?.location_id, attrs, fieldMap: lotMeta.map, productName, productCode } as Prisma.InputJsonValue,
+              lastSyncedAt: now,
+              status: "pending",
+              zdryType: this.matchedTypeCode(productName, productCode, typeMasters),
+              zdryCat: inferCatFromProduct(productName, "ASIS"),
+            },
+          });
+          created.push(lotId);
+          await this.logs.add(runId, {
+            level: "ok",
+            step: "lotes",
+            iso: iso.isoNormalized,
+            serialRaw,
+            odooLotId: lotId,
+            product: `${productCode ? `[${productCode}] ` : ""}${productName}`.trim(),
+            message: `A la mano ${qty} · ${locationName || "sin almacén"}`,
+          });
+        } catch (e) {
+          const { message, detail } = errorDetail(e);
+          await this.logs.add(runId, { level: "error", step: "lotes", iso: iso.isoNormalized, serialRaw, odooLotId: lotId, message, detail });
+        }
+      }
+      if (this.isAborted(runId)) return;
+      if (created.length) {
+        try {
+          await this.attachPurchaseRefs(created);
+          await this.attachIntakeOrigins(created);
+          await this.attachFabricationLineage(created);
+        } catch (e) {
+          const { message, detail } = errorDetail(e);
+          await this.logs.add(runId, { level: "error", step: "origenes", message, detail });
+        }
+        await this.hydrateDossiers(created);
+        await this.hydrateMoCosts(created);
+        await this.pullMissingNotes(created);
+      }
+      const pending = await this.prisma.odooLotCandidate.findMany({
+        where: { status: "pending", iso6346Ok: true, qtyOnHand: { gte: 1 } },
+      });
+      const ready = pending.filter((row) => created.includes(row.odooLotId) || phrases.some((phrase) => phraseHitsProduct(phrase, row.productName, row.productCode)));
+      let assimilated = 0;
+      let index = 0;
+      for (const cand of ready) {
+        if (this.isAborted(runId)) return;
+        index += 1;
+        await this.writeProgress({
+          status: "running",
+          step: "assimilate",
+          current: index,
+          total: ready.length,
+          iso: cand.isoNormalized,
+          message: `Asimilando ${index}/${ready.length} · ${cand.isoNormalized}`,
+        });
+        try {
+          const item = await this.assimilateOne(cand, user, ip);
+          assimilated += 1;
+          await this.logs.add(runId, {
+            level: "ok",
+            step: "assimilate",
+            iso: item.iso,
+            serialRaw: cand.serialRaw,
+            odooLotId: cand.odooLotId,
+            product: cand.productName,
+            message: item.created ? "Creado en Recepción." : `Ya existía ${item.iso}; se marcó asimilado.`,
+          });
+        } catch (e) {
+          const { message, detail } = errorDetail(e);
+          await this.logs.add(runId, { level: "error", step: "assimilate", iso: cand.isoNormalized, odooLotId: cand.odooLotId, message, detail });
+        }
+      }
+      const message = [
+        `${products.length} producto(s) en Odoo.`,
+        `${lotIds.length} serie(s) con al menos 1 a la mano.`,
+        `${created.length} nueva(s).`,
+        `${assimilated} asimilada(s) a Recepción.`,
+        "El control vuelve a la búsqueda de cada 5 minutos y al expediente de cada 10.",
+      ].join(" ");
+      await this.logs.finish(runId, message);
+      await this.logs.add(runId, { level: "info", step: "listo", message });
+      await this.writeProgress({ status: "done", step: "listo", current: 5, total: 5, iso: "", message });
+      await this.audit.log({
+        user,
+        action: "odoo_custom_products_sync",
+        entity: "OdooLotCandidate",
+        after: { phrases, newLots: created.length, assimilated },
+        ip,
+      });
+    } catch (e) {
+      if (this.isAborted(runId)) return;
+      await this.writeProgress({ status: "error", step: "error", message: (e as Error).message || "No se pudieron buscar los productos personalizados." });
+      await this.logs.fail(runId, e, "sync");
+    }
   }
 
   private async runSync(runId: string, user: AuthUser, ip?: string) {
@@ -3022,7 +3236,7 @@ export class OdooImportService {
     return this.expedienteJob;
   }
 
-  /** Con «Cada 5 minutos» también recorre salidas de las series ya asimiladas. */
+  /** Cada 10 minutos recorre salidas de las series ya asimiladas. No corre al terminar la búsqueda de equipos nuevos. */
   async refreshExpedientesIfAuto() {
     const state = await this.watchState();
     if (state.mode !== "auto") return { ok: true, skipped: true as const };
@@ -4376,7 +4590,7 @@ export class OdooImportService {
     const phrases = (await this.readCustomProducts()).phrases;
     if (!phrases.length) return "";
     const counts = countCustomProducts(
-      products.map((row) => ({ id: Number(row.id), name: String(row.name || "") })),
+      products.map((row) => ({ id: Number(row.id), name: String(row.name || ""), code: String(row.default_code || "") })),
       quants
         .map((row) => ({ productId: this.relId(row.product_id), lotId: this.relId(row.lot_id) }))
         .filter((row) => row.productId > 0 && row.lotId > 0),
@@ -4417,12 +4631,32 @@ export class OdooImportService {
       push(await this.searchAll("product.product", [["categ_id", "child_of", id]], fields));
     }
     push(await this.searchAll("product.product", [["name", "ilike", "dry"]], fields));
-    for (const phrase of custom) {
-      const pattern = odooNamePattern(phrase);
-      if (pattern.replace(/_/g, "").length < 3) continue;
-      push(await this.searchAll("product.product", [["name", "ilike", pattern]], fields));
-    }
+    push(await this.loadCustomProducts(custom));
     return { products, missingCategory: !ids.length && products.length === 0 };
+  }
+
+  private async loadCustomProducts(phrases: string[]) {
+    const fields = ["id", "name", "default_code", "categ_id"];
+    const products: Record<string, unknown>[] = [];
+    const seen = new Set<number>();
+    const push = (rows: Record<string, unknown>[]) => {
+      for (const row of rows) {
+        const productId = Number(row.id);
+        if (!productId || seen.has(productId)) continue;
+        seen.add(productId);
+        products.push(row);
+      }
+    };
+    for (const phrase of phrases) {
+      const term = customSearchTerms(phrase);
+      if (term.code) push(await this.searchAll("product.product", [["default_code", "ilike", term.code]], fields));
+      const name = term.name || (term.code ? "" : phrase);
+      const pattern = name ? odooNamePattern(name) : "";
+      if (pattern.replace(/_/g, "").length >= 3) {
+        push(await this.searchAll("product.product", [["name", "ilike", pattern]], fields));
+      }
+    }
+    return products;
   }
 
   private async ensureOtherType() {

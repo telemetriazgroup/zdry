@@ -412,8 +412,8 @@ export default function OdooBandeja() {
         </div>
         <p className="section-sub">
           {watch.mode === "auto"
-            ? "Cada 5 minutos asimila equipos nuevos y, al terminar, actualiza el expediente de los ya asimilados. Si detecta una salida a cliente, el equipo pasa a Equipos con salida y a Recepción · Venta / en cliente."
-            : "Como ahora: el stock y los expedientes se recorren solo cuando pulsas Buscar en Odoo o Actualizar expedientes."}
+            ? "Cada 5 minutos asimila equipos nuevos. Los expedientes de los ya asimilados se actualizan cada 10 minutos, aparte. Si detecta una salida a cliente, el equipo pasa a Equipos con salida y a Recepción · Venta / en cliente."
+            : "Como ahora: el stock se recorre cuando pulsas Buscar en Odoo. Los expedientes, con Actualizar expedientes."}
           {watch.lastRunAt ? ` Última revisión: ${new Date(watch.lastRunAt).toLocaleString("es-PE")}. ${watch.lastMessage || ""}` : ""}
         </p>
       </div>

@@ -1,4 +1,4 @@
-import { countCustomProducts, normalizeOdooCustomProducts, odooNamePattern, phraseHitsName } from "./odoo-custom-products";
+import { countCustomProducts, customSearchTerms, normalizeOdooCustomProducts, odooNamePattern, phraseHitsName, phraseHitsProduct } from "./odoo-custom-products";
 
 describe("productos personalizados de Odoo", () => {
   it("acepta un nombre sin DRY y no repite el mismo texto", () => {
@@ -30,5 +30,13 @@ describe("productos personalizados de Odoo", () => {
       ["modulo de revestimiento"],
     );
     expect(counts).toEqual([{ phrase: "modulo de revestimiento", products: 2, series: 2 }]);
+  });
+
+  it("separa el código del nombre que muestra Odoo", () => {
+    expect(customSearchTerms("[MDND0004] MODULO CON REVESTIMIENTO 20 DC REV")).toEqual({
+      code: "MDND0004",
+      name: "MODULO CON REVESTIMIENTO 20 DC REV",
+    });
+    expect(phraseHitsProduct("[MDND0004] MODULO CON REVESTIMIENTO 20 DC REV", "MODULO CON REVESTIMIENTO 20 DC REV", "MDND0004")).toBe(true);
   });
 });

@@ -1,5 +1,6 @@
 export const ODOO_WATCH_KEY = "odoo_import_watch";
 export const ODOO_WATCH_MS = 5 * 60 * 1000;
+export const ODOO_EXPEDIENTE_MS = 10 * 60 * 1000;
 
 export type OdooWatchMode = "manual" | "auto";
 
