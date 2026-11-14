@@ -483,14 +483,45 @@ function PerimeterEditor({ draft, setDraft, busy, units, onSave, onFence, onWarn
   const [slotHalf, setSlotHalf] = useState({});
   const [openSides, setOpenSides] = useState({});
   const [gatesOpen, setGatesOpen] = useState(false);
+  const [ask, setAsk] = useState(null);
   const gap = closureGap(perimeter.sides);
   const setPerimeter = (next) => setDraft((current) => ({ ...current, perimeter: next }));
+  function askRemoveSide(side, index) {
+    const name = side.name || `lado ${index + 1}`;
+    const onSide = cells.filter((item) => item.sideId === side.id && String(item.iso || "").trim());
+    const placed = (units || []).filter((unit) => unit.lado === "CERCO" && Number(unit.ruma) === index + 1 && !onSide.some((item) => item.iso === unit.iso));
+    if (onSide.length || placed.length) {
+      setAsk({
+        title: "No se puede quitar el lado",
+        text: `El lado ${name} tiene contenedores. Hay que vaciarlos antes de quitar el lado.`,
+      });
+      return;
+    }
+    setAsk({
+      title: "Quitar lado",
+      text: `¿Seguro que quieres quitar el lado ${name}?`,
+      confirmLabel: "Quitar lado",
+      run: () => setPerimeter({
+        ...perimeter,
+        sides: perimeter.sides.filter((item) => item.id !== side.id),
+        gates: perimeter.gates.filter((gate) => gate.sideId !== side.id),
+        cells: cells.filter((item) => item.sideId !== side.id),
+      }),
+    });
+  }
   const updateSide = (id, patch) => setPerimeter({
     ...perimeter,
     sides: perimeter.sides.map((side) => (side.id === id ? { ...side, ...patch } : side)),
   });
   return (
     <div>
+      <NoticeModal
+        title={ask?.title || ""}
+        text={ask?.text || ""}
+        confirmLabel={ask?.confirmLabel}
+        onClose={() => setAsk(null)}
+        onConfirm={ask?.run ? () => { const run = ask.run; setAsk(null); run(); } : null}
+      />
       <p className="section-sub">
         El perímetro es el cerco del depósito, aparte de las zonas. Puede tener de 3 a 8 lados. Cada lado es pared, contenedores del almacén, o una mezcla, y se apila hasta 3 niveles.
         En un mismo lado se alternan puestos de 20 y de 40 pies. Un puesto puede tener, si hace falta, 2 o 3 filas hacia adentro, del mismo largo. Un código que no está en el catálogo queda como desconocido, con el color que elijas, y en el 3D llena ese espacio. El color de la ficha (blanco, naranja) es el color del contenedor. Guarda el plano después de cambiar largos o filas.
@@ -660,12 +691,7 @@ function PerimeterEditor({ draft, setDraft, busy, units, onSave, onFence, onWarn
                 </div>
               ) : null}
               {perimeter.sides.length > 3 ? (
-                <button className="btn-ghost" type="button" onClick={() => setPerimeter({
-                  ...perimeter,
-                  sides: perimeter.sides.filter((item) => item.id !== side.id),
-                  gates: perimeter.gates.filter((gate) => gate.sideId !== side.id),
-                  cells: cells.filter((item) => item.sideId !== side.id),
-                })}>Quitar lado</button>
+                <button className="btn-ghost" type="button" onClick={() => askRemoveSide(side, index)}>Quitar lado</button>
               ) : null}
             </div>
           ))}
