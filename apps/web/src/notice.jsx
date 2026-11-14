@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-export function NoticeModal({ title, text, confirmLabel, onClose, onConfirm }) {
+export function NoticeModal({ title, text, confirmLabel, altLabel, onClose, onConfirm, onAlt }) {
   if (!text) return null;
   return (
     <div className="overlay open notice-overlay" role="presentation">
@@ -13,6 +13,7 @@ export function NoticeModal({ title, text, confirmLabel, onClose, onConfirm }) {
           <p>{text}</p>
           <div className="action-row">
             {onConfirm ? <button className="btn-ghost" type="button" onClick={onClose}>Cancelar</button> : null}
+            {onAlt ? <button className="btn-ghost" type="button" onClick={onAlt}>{altLabel || "Otra opción"}</button> : null}
             <button className="btn-primary" type="button" onClick={onConfirm || onClose}>{confirmLabel || "Entendido"}</button>
           </div>
         </div>

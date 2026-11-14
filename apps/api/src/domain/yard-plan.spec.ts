@@ -1,5 +1,5 @@
 import { yardScenario } from "./yard-scenarios";
-import { defaultYardPlan, fenceBays, fenceDepthOf, fenceSeat, fenceSideIndex, ghostsWithSupport, leftToCustomer, movesAbove, movesToReach, normalizeYardPlan, reachBlockers, stackLengthError, zoneSlotError } from "./yard-plan";
+import { defaultYardPlan, fenceBays, fenceDepthOf, fenceSeat, fenceSideIndex, ghostsWithSupport, leftToCustomer, movesAbove, movesToReach, normalizeYardPlan, reachBlockers, readYardBackup, resizeZone, stackLengthError, yardBackupFile, zoneSlotError } from "./yard-plan";
 
 describe("yard plan", () => {
   it("separa las filas del cerco para que dos puestos del mismo nivel no choquen", () => {
@@ -94,6 +94,8 @@ describe("yard plan", () => {
       },
     });
     expect(withHalves.zones[0]).toMatchObject({ xM: 6, zM: 8 });
+    expect(normalizeYardPlan({ zones: [{ id: "c", name: "C", rows: 3, cols: 1, levels: 5, gridRow: 2, gridCol: 1, turn: 90 }] }).zones[0].turn).toBe(90);
+    expect(normalizeYardPlan({ zones: [{ id: "c", name: "C", rows: 3, cols: 1, levels: 5, turn: 45 }] }).zones[0].turn).toBeUndefined();
     expect(withHalves.perimeter.cells.map((cell) => cell.half || "full")).toEqual(["full", "A", "B"]);
     expect(normalizeYardPlan({ zones: [{ id: "a", name: "A", rows: 2, cols: 2, levels: 2 }] }).perimeter).toEqual({ sides: [], gates: [], cells: [] });
   });
@@ -155,6 +157,66 @@ describe("yard plan", () => {
     ];
     const stacked = ghostsWithSupport(zones, ghosts, buried).filter((ghost) => ghost.level !== 2);
     expect(movesAbove(zones, stacked, buried, "Zona B", 3, 3, 2, "HHXU3465956")).toBe(3);
+  });
+
+  it("arma un respaldo del depósito y lo rechaza en otro depósito", () => {
+    const plan = defaultYardPlan();
+    const file = yardBackupFile({
+      depotId: "yard-demo",
+      depotName: "Depósito demo",
+      simulation: true,
+      plan,
+      seats: [{ iso: "msku1", lado: plan.zones[0].name, ruma: 1, columna: 1, nivel: 1, half: null }],
+      exportedAt: "2026-11-14T00:00:00.000Z",
+    });
+    expect(file.kind).toBe("zdry-deposito");
+    expect(file.seats[0].iso).toBe("MSKU1");
+    const loaded = readYardBackup(file, "yard-demo", true);
+    expect(loaded.error).toBe("");
+    expect(loaded.seats).toHaveLength(1);
+    expect(readYardBackup(file, "otro", true).error).toContain("Depósito demo");
+    expect(readYardBackup(file, "yard-demo", false).error).toContain("demo");
+    const outside = { ...file, seats: [{ iso: "MSKU1", lado: plan.zones[0].name, ruma: 99, columna: 1, nivel: 1 }] };
+    expect(readYardBackup(outside, "yard-demo", true).error).toContain("fila 99");
+  });
+
+  it("agrega una fila al frente y no quita una fila con contenedores", () => {
+    const zone = { id: "c", name: "Zona C", rows: 3, cols: 1, levels: 5, gridRow: 2, gridCol: 1 };
+    const ghosts = [{ zoneId: "c", row: 2, col: 1, level: 1 }];
+    const grown = resizeZone(zone, ghosts, [], { axis: "fila", op: "agregar", side: "adelante" });
+    expect(grown.error).toBe("");
+    expect(grown.zone.rows).toBe(4);
+    expect(grown.shift).toEqual({ axis: "row", delta: 1, from: 1 });
+    expect(grown.ghosts[0].row).toBe(3);
+    const back = resizeZone(zone, ghosts, [], { axis: "fila", op: "agregar", side: "atras" });
+    expect(back.zone.rows).toBe(4);
+    expect(back.shift).toBeNull();
+    expect(back.ghosts[0].row).toBe(2);
+    const blocked = resizeZone(zone, ghosts, [{ row: 2, col: 1 }], { axis: "fila", op: "quitar", index: 2 });
+    expect(blocked.error).toContain("Regularízalos");
+    expect(blocked.zone.rows).toBe(3);
+    const cleared = resizeZone(zone, ghosts, [], { axis: "columna", op: "agregar", side: "izquierda" });
+    expect(cleared.zone.cols).toBe(2);
+    expect(cleared.ghosts[0].col).toBe(2);
+    const trimmed = resizeZone(zone, ghosts, [], { axis: "fila", op: "quitar", index: 1 });
+    expect(trimmed.zone.rows).toBe(2);
+    expect(trimmed.shift).toEqual({ axis: "row", delta: -1, from: 2 });
+    expect(trimmed.ghosts[0].row).toBe(1);
+  });
+
+  it("rellena con un 20 desconocido solo la mitad que tiene equipo encima", () => {
+    const zones = [{ id: "a", name: "Zona A", rows: 4, cols: 3, levels: 5, gridRow: 1, gridCol: 1 }];
+    const occupied = [
+      { zoneName: "Zona A", row: 2, col: 3, level: 1, type: "20DC", half: "A" as const },
+      { zoneName: "Zona A", row: 2, col: 3, level: 2, type: "20DC", half: "A" as const },
+      { zoneName: "Zona A", row: 2, col: 3, level: 3, type: "20DC", half: "A" as const },
+      { zoneName: "Zona A", row: 2, col: 3, level: 3, type: "20DC", half: "B" as const },
+    ];
+    const ghosts = ghostsWithSupport(zones, [], occupied);
+    const support = ghosts.filter((ghost) => ghost.half === "B");
+    expect(support.map((ghost) => ghost.level).sort()).toEqual([1, 2]);
+    expect(support.every((ghost) => ghost.typeCode === "20" && ghost.code === "DESCONOCIDO")).toBe(true);
+    expect(ghosts.some((ghost) => !ghost.half)).toBe(false);
   });
 
   it("deja un 20 sobre un 40 y rechaza un 40 sobre un 20", () => {

@@ -2041,9 +2041,17 @@ button.tile.dry-click { display: block; }
 .dry-file-img img { width: 140px; height: 100px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); background: #f1f5f9; }
 .dry-file-img span { display: block; margin-top: 4px; word-break: break-all; }
 .dry-file-doc { display: inline-block; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-size: 13px; }
+.shape-panel { margin: 16px 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #f8fafc; }
+.shape-panel > b { display: block; margin-bottom: 4px; }
+.shape-compare { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 8px; }
+.shape-board b { display: block; margin-bottom: 6px; font-size: 13px; }
+.shape-grid { display: grid; gap: 3px; }
+.shape-cell { width: 22px; height: 16px; border-radius: 3px; background: #e6edf5; }
+.shape-cell.busy { background: #24556f; }
+.shape-cell.fresh { background: #e07a2f; }
 .zone-card {
   display: grid;
-  grid-template-columns: minmax(150px, 1.5fr) repeat(5, minmax(78px, .7fr)) auto;
+  grid-template-columns: minmax(140px, 1.3fr) repeat(7, minmax(86px, .7fr)) auto;
   gap: 8px 10px;
   align-items: end;
   padding: 12px 0;

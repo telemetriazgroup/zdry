@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
@@ -16,6 +16,7 @@ export default function Patio() {
   const [withPerimeter, setWithPerimeter] = useState(true);
   const [ruma, setRuma] = useState("cargado");
   const [ask, setAsk] = useState(null);
+  const backupFile = useRef(null);
 
   const depotId = params.get("depotId") || layout?.depotId || "";
 
@@ -127,6 +128,65 @@ export default function Patio() {
     }, "Cargar");
   }
 
+  async function downloadBackup() {
+    setBusy(true);
+    setError("");
+    try {
+      const file = await api(`/yard/${layout.depotId}/backup`);
+      const blob = new Blob([JSON.stringify(file, null, 2)], { type: "application/json" });
+      const link = document.createElement("a");
+      const day = new Date().toISOString().slice(0, 10);
+      const name = String(file.depotName || layout.depotName || "deposito").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "deposito";
+      link.href = URL.createObjectURL(blob);
+      link.download = `zdry-${name}-${day}.json`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pickBackup(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    let backup;
+    try {
+      backup = JSON.parse(await file.text());
+    } catch {
+      setError("Ese archivo no es un JSON de respaldo.");
+      return;
+    }
+    if (backup?.depotId && backup.depotId !== layout.depotId) {
+      setError(`Este respaldo es de ${backup.depotName || "otro depósito"}. Ábrelo en ese depósito.`);
+      return;
+    }
+    const zones = Array.isArray(backup?.plan?.zones) ? backup.plan.zones.length : 0;
+    const seats = Array.isArray(backup?.seats) ? backup.seats.length : 0;
+    confirmAction(
+      "Cargar respaldo",
+      `La zona de ${layout.depotName} pasa a ser la de este archivo (${zones} zonas, ${seats} puestos). Los equipos que no estén en el respaldo vuelven a sin sitio.`,
+      async () => {
+        setBusy(true);
+        setError("");
+        try {
+          const result = await api("/yard/backup", { method: "POST", body: { depotId: layout.depotId, backup } });
+          setSelectedIso(null);
+          await load(layout.depotId);
+          const absent = result.missing?.length ? ` ${result.missing.length} equipos del archivo no están en este depósito.` : "";
+          setError(`Respaldo cargado. La zona quedó como en el archivo.${absent}`);
+        } catch (e) {
+          setError(e.message);
+        } finally {
+          setBusy(false);
+        }
+      },
+      "Cargar respaldo",
+    );
+  }
+
   async function restoreScenario() {
     if (!layout.activeScenario) return;
     setBusy(true);
@@ -163,6 +223,13 @@ export default function Patio() {
           <button className="btn-ghost" type="button" onClick={() => setSelectedIso(null)}>
             Cancelar selección ({selectedIso})
           </button>
+        ) : null}
+        {isSuperadmin(user) ? (
+          <>
+            <button className="btn-ghost" type="button" disabled={busy} onClick={downloadBackup}>Descargar respaldo</button>
+            <button className="btn-ghost" type="button" disabled={busy} onClick={() => backupFile.current?.click()}>Cargar respaldo</button>
+            <input ref={backupFile} type="file" accept="application/json,.json" hidden aria-label="Archivo de respaldo del depósito" onChange={pickBackup} />
+          </>
         ) : null}
         {(layout.simulation ? hasRole(user, "admin") : isSuperadmin(user)) ? (
           <button className="btn-ghost yard-reset" type="button" disabled={busy} onClick={resetDepot}>

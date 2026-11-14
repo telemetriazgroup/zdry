@@ -18,6 +18,8 @@ export type YardZone = {
    * Vacío: puede entrar por la fila 1 o por la última fila.
    */
   closedSide?: ZoneClosedSide;
+  /** 90: las filas corren de lado, como una pared a la izquierda o a la derecha. */
+  turn?: 0 | 90;
 };
 
 export type ZoneClosedSide = "" | "frente" | "fondo" | "izquierda" | "derecha";
@@ -206,6 +208,7 @@ export function normalizeYardPlan(raw: unknown): YardPlan {
     const xM = Number(row.xM);
     const zM = Number(row.zM);
     const closedSide = closedSideOf(row.closedSide);
+    const turn = Number(row.turn) === 90 ? 90 : 0;
     zones.push({
       id,
       name: text(row.name, `Zona ${index + 1}`),
@@ -217,6 +220,7 @@ export function normalizeYardPlan(raw: unknown): YardPlan {
       ...(Number.isFinite(xM) ? { xM } : {}),
       ...(Number.isFinite(zM) ? { zM } : {}),
       ...(closedSide ? { closedSide } : {}),
+      ...(turn ? { turn } : {}),
     });
   });
   if (!zones.length) return defaultYardPlan();
@@ -572,7 +576,29 @@ function isExplicitGhost(ghost: YardGhost, all: YardGhost[]) {
   );
 }
 
-/** Los niveles vacíos debajo de un equipo quedan ocupados sin identificar, para que la ruma no flote. */
+/** El hueco que deja un contenedor en regularización sigue ocupado, del mismo largo y de la misma mitad. */
+export function standInGhost(zoneId: string, row: number, col: number, level: number, type?: string | null, half?: string | null): YardGhost {
+  const span = baySpan(type, half);
+  if (span === "A" || span === "B") return { zoneId, row, col, level, half: span, typeCode: "20", code: "DESCONOCIDO" };
+  const feet = feetOf(type);
+  return { zoneId, row, col, level, code: "DESCONOCIDO", typeCode: feet > 0 && feet < 40 ? "20" : "40" };
+}
+
+function fillMissingSupport(next: YardGhost[], column: { zoneId: string; row: number; col: number }, level: number, here: Array<{ type?: string | null; half?: string | null }>, above: Array<{ type?: string | null; half?: string | null }>) {
+  const gap = (half: "A" | "B") => above.some((item) => occupiesHalf(item, half)) && !here.some((item) => occupiesHalf(item, half));
+  const gapA = gap("A");
+  const gapB = gap("B");
+  if (!gapA && !gapB) return;
+  const fullAbove = above.some((item) => baySpan(item.type, item.half) === "full");
+  if (gapA && gapB && fullAbove) {
+    next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level });
+    return;
+  }
+  if (gapA) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level, half: "A", typeCode: "20", code: "DESCONOCIDO" });
+  if (gapB) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level, half: "B", typeCode: "20", code: "DESCONOCIDO" });
+}
+
+/** Los niveles vacíos debajo de un equipo quedan ocupados sin identificar, para que la ruma no flote. Un 20 solo rellena su mitad. */
 export function ghostsWithSupport(zones: YardZone[], ghosts: YardGhost[], occupied: StackCell[]): YardGhost[] {
   const next = ghosts.filter((ghost) => isExplicitGhost(ghost, ghosts)).map((ghost) => ({ ...ghost }));
   const zoneByName = new Map(zones.map((zone) => [zone.name, zone]));
@@ -607,15 +633,9 @@ export function ghostsWithSupport(zones: YardZone[], ghosts: YardGhost[], occupi
       ...next.filter((ghost) => ghost.zoneId === column.zoneId && ghost.row === column.row && ghost.col === column.col).map((ghost) => ghost.level),
     );
     for (let level = 1; level < top; level += 1) {
-      const here = at(level);
-      const above = (half: "A" | "B") => {
-        for (let cursor = level + 1; cursor <= top; cursor += 1) {
-          if (at(cursor).some((item) => occupiesHalf(item, half))) return true;
-        }
-        return false;
-      };
-      const blocked = here.some((item) => occupiesHalf(item, "A") || occupiesHalf(item, "B"));
-      if (!blocked && (above("A") || above("B"))) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level });
+      const above = [];
+      for (let cursor = level + 1; cursor <= top; cursor += 1) above.push(...at(cursor));
+      fillMissingSupport(next, column, level, at(level), above);
     }
   }
   return next;
@@ -898,6 +918,173 @@ export function stackLengthError(
     }
   }
   return "";
+}
+
+export type ZoneResize = {
+  axis: "fila" | "columna";
+  op: "agregar" | "quitar";
+  side?: "adelante" | "atras" | "izquierda" | "derecha";
+  index?: number;
+};
+
+/** Agranda o recorta una zona. Quitar una fila o columna ocupada no se aplica. */
+export function resizeZone(
+  zone: YardZone,
+  ghosts: YardGhost[],
+  occupied: Array<{ row: number; col: number }>,
+  change: ZoneResize,
+): { zone: YardZone; ghosts: YardGhost[]; shift: { axis: "row" | "col"; delta: number; from: number } | null; error: string } {
+  const axis = change.axis === "columna" ? "columna" : "fila";
+  const op = change.op === "quitar" ? "quitar" : "agregar";
+  const rows = Math.max(1, zone.rows || 1);
+  const cols = Math.max(1, zone.cols || 1);
+  const limit = axis === "fila" ? rows : cols;
+  const max = axis === "fila" ? 40 : 20;
+  const name = axis === "fila" ? "fila" : "columna";
+  if (op === "agregar" && limit >= max) {
+    return { zone, ghosts, shift: null, error: `${zone.name} ya tiene el máximo de ${axis === "fila" ? "filas" : "columnas"}.` };
+  }
+  if (op === "quitar" && limit <= 1) {
+    return { zone, ghosts, shift: null, error: `${zone.name} necesita al menos una ${name}.` };
+  }
+  const side = change.side;
+  const index = op === "quitar"
+    ? Math.round(Number(change.index) || 0)
+    : axis === "fila"
+      ? (side === "adelante" ? 1 : rows + 1)
+      : (side === "izquierda" ? 1 : cols + 1);
+  if (op === "quitar" && (index < 1 || index > limit)) {
+    return { zone, ghosts, shift: null, error: `La ${name} ${index || ""} no existe en ${zone.name}.` };
+  }
+  if (op === "agregar" && axis === "fila" && side !== "adelante" && side !== "atras") {
+    return { zone, ghosts, shift: null, error: "Elige si la fila nueva va hacia adelante o hacia atrás." };
+  }
+  if (op === "agregar" && axis === "columna" && side !== "izquierda" && side !== "derecha") {
+    return { zone, ghosts, shift: null, error: "Elige si la columna nueva va a la izquierda o a la derecha." };
+  }
+  const hit = (cell: { row: number; col: number }) => (axis === "fila" ? cell.row : cell.col) === index;
+  if (op === "quitar" && occupied.some(hit)) {
+    return { zone, ghosts, shift: null, error: `La ${name} ${index} de ${zone.name} tiene contenedores. Regularízalos antes de quitarla.` };
+  }
+  const growAtStart = op === "agregar" && (side === "adelante" || side === "izquierda");
+  const shift = op === "quitar"
+    ? { axis: axis === "fila" ? "row" as const : "col" as const, delta: -1, from: index + 1 }
+    : growAtStart
+      ? { axis: axis === "fila" ? "row" as const : "col" as const, delta: 1, from: 1 }
+      : null;
+  const move = (value: number) => {
+    if (!shift || value < shift.from) return value;
+    return value + shift.delta;
+  };
+  const nextGhosts = ghosts.flatMap((ghost) => {
+    if (ghost.zoneId !== zone.id) return [ghost];
+    const value = axis === "fila" ? ghost.row : ghost.col;
+    if (op === "quitar" && value === index) return [];
+    if (axis === "fila") return [{ ...ghost, row: move(ghost.row) }];
+    return [{ ...ghost, col: move(ghost.col) }];
+  });
+  return {
+    zone: { ...zone, rows: axis === "fila" ? rows + (op === "agregar" ? 1 : -1) : rows, cols: axis === "columna" ? cols + (op === "agregar" ? 1 : -1) : cols },
+    ghosts: nextGhosts,
+    shift,
+    error: "",
+  };
+}
+
+export const YARD_BACKUP_KIND = "zdry-deposito";
+
+export type YardBackupSeat = {
+  iso: string;
+  lado: string;
+  ruma: number;
+  columna: number;
+  nivel: number;
+  half?: "A" | "B";
+};
+
+/** Archivo que el superadmin descarga para volver a armar el mismo depósito. */
+export function yardBackupFile(input: {
+  depotId: string;
+  depotName: string;
+  simulation: boolean;
+  plan: YardPlan;
+  seats: Array<{ iso?: string; lado?: string | null; ruma?: number | null; columna?: number | null; nivel?: number | null; half?: string | null }>;
+  exportedAt?: string;
+}) {
+  const plan = normalizeYardPlan(input.plan);
+  const seats: YardBackupSeat[] = [];
+  for (const row of input.seats) {
+    const iso = String(row.iso || "").trim().toUpperCase();
+    const lado = String(row.lado || "").trim();
+    const ruma = Math.round(Number(row.ruma));
+    const columna = Math.round(Number(row.columna));
+    const nivel = Math.round(Number(row.nivel));
+    if (!iso || !lado || ruma < 1 || columna < 1 || nivel < 1) continue;
+    const half = row.half === "A" || row.half === "B" ? row.half : undefined;
+    seats.push({ iso, lado, ruma, columna, nivel, ...(half ? { half } : {}) });
+  }
+  return {
+    kind: YARD_BACKUP_KIND,
+    version: 1,
+    exportedAt: input.exportedAt || new Date().toISOString(),
+    depotId: input.depotId,
+    depotName: input.depotName,
+    simulation: input.simulation === true,
+    plan,
+    seats,
+  };
+}
+
+/** Lee un respaldo y lo rechaza si no corresponde a este depósito o un puesto no cabe. */
+export function readYardBackup(raw: unknown, depotId: string, simulation: boolean): { plan: YardPlan; seats: YardBackupSeat[]; error: string } {
+  const empty = defaultYardPlan();
+  const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  if (!row || row.kind !== YARD_BACKUP_KIND || Number(row.version) !== 1) {
+    return { plan: empty, seats: [], error: "Ese archivo no es un respaldo de depósito ZDRY." };
+  }
+  if (String(row.depotId || "") !== depotId) {
+    const name = String(row.depotName || "otro depósito");
+    return { plan: empty, seats: [], error: `Este respaldo es de ${name}. Ábrelo en ese depósito.` };
+  }
+  if ((row.simulation === true) !== simulation) {
+    return { plan: empty, seats: [], error: simulation ? "Este respaldo es de un depósito real." : "Este respaldo es de un depósito demo." };
+  }
+  const source = row.plan && typeof row.plan === "object" ? (row.plan as Record<string, unknown>) : null;
+  if (!source || !Array.isArray(source.zones) || !source.zones.length) {
+    return { plan: empty, seats: [], error: "El respaldo no trae zonas." };
+  }
+  const plan = normalizeYardPlan(source);
+  const incoming = Array.isArray(row.seats) ? row.seats : null;
+  if (!incoming) return { plan, seats: [], error: "El respaldo no trae los puestos." };
+  if (incoming.length > 4000) return { plan, seats: [], error: "El respaldo trae demasiados equipos." };
+  const seats: YardBackupSeat[] = [];
+  const seen = new Set<string>();
+  for (const item of incoming) {
+    const seat = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+    const iso = String(seat.iso || "").trim().toUpperCase().replace(/\s+/g, "");
+    const lado = String(seat.lado || "").trim();
+    const ruma = Math.round(Number(seat.ruma));
+    const columna = Math.round(Number(seat.columna));
+    const nivel = Math.round(Number(seat.nivel));
+    const half: "A" | "B" | "" = seat.half === "A" ? "A" : seat.half === "B" ? "B" : "";
+    if (!iso || iso.length > 20 || !lado || ruma < 1 || columna < 1 || nivel < 1) {
+      return { plan, seats: [], error: "Hay un puesto incompleto en el respaldo." };
+    }
+    if (lado !== FENCE_SIDE && lado !== AISLE_SIDE) {
+      const zone = plan.zones.find((itemZone) => itemZone.name === lado);
+      if (!zone) return { plan, seats: [], error: `${iso} está en ${lado}, y esa zona no está en el respaldo.` };
+      const fit = zoneSlotError(zone, ruma, columna, nivel);
+      if (fit) return { plan, seats: [], error: `${iso}: ${fit}` };
+    }
+    const cell = `${lado}|${ruma}|${columna}|${nivel}`;
+    const key = `${cell}|${half || "F"}`;
+    if (seen.has(key) || (half && seen.has(`${cell}|F`)) || (!half && (seen.has(`${cell}|A`) || seen.has(`${cell}|B`)))) {
+      return { plan, seats: [], error: `Dos equipos ocupan el mismo puesto de ${lado}.` };
+    }
+    seen.add(key);
+    seats.push({ iso, lado, ruma, columna, nivel, ...(half ? { half } : {}) });
+  }
+  return { plan, seats, error: "" };
 }
 
 export function zoneSlotError(zone: YardZone, row: number, col: number, level: number) {

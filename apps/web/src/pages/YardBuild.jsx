@@ -131,14 +131,19 @@ function supportedGhosts(zones, units, ghosts) {
     );
     for (let level = 1; level < top; level += 1) {
       const here = at(level);
-      const above = (half) => {
-        for (let cursor = level + 1; cursor <= top; cursor += 1) {
-          if (at(cursor).some((item) => occupiesHalf(item, half))) return true;
-        }
-        return false;
-      };
-      const blocked = here.some((item) => occupiesHalf(item, "A") || occupiesHalf(item, "B"));
-      if (!blocked && (above("A") || above("B"))) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level });
+      const above = [];
+      for (let cursor = level + 1; cursor <= top; cursor += 1) above.push(...at(cursor));
+      const gap = (half) => above.some((item) => occupiesHalf(item, half)) && !here.some((item) => occupiesHalf(item, half));
+      const gapA = gap("A");
+      const gapB = gap("B");
+      if (!gapA && !gapB) continue;
+      const fullAbove = above.some((item) => baySpan(item.type, item.half) === "full");
+      if (gapA && gapB && fullAbove) {
+        next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level });
+        continue;
+      }
+      if (gapA) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level, half: "A", typeCode: "20", code: "DESCONOCIDO" });
+      if (gapB) next.push({ zoneId: column.zoneId, row: column.row, col: column.col, level, half: "B", typeCode: "20", code: "DESCONOCIDO" });
     }
   }
   return next;
@@ -221,12 +226,28 @@ function nextSeat(zones) {
 }
 
 function yardOutline(zones) {
-  const maxCols = Math.max(...zones.map((zone) => Number(zone.cols) || 1), 1);
-  const maxRows = Math.max(...zones.map((zone) => Number(zone.rows) || 1), 1);
-  const gridCols = Math.max(...zones.map((zone) => Number(zone.gridCol) || 1), 1);
-  const gridRows = Math.max(...zones.map((zone) => Number(zone.gridRow) || 1), 1);
-  const width = gridCols * maxCols * 12.9 + Math.max(0, gridCols - 1) * 8 + 16;
-  const depth = gridRows * maxRows * 2.99 + Math.max(0, gridRows - 1) * 8 + 16;
+  const bay = 12.9;
+  const rowPitch = 2.99;
+  const aisle = 8;
+  const spanOf = (zone) => {
+    const turned = Number(zone.turn) === 90;
+    const cols = Math.max(1, Number(zone.cols) || 1);
+    const rows = Math.max(1, Number(zone.rows) || 1);
+    return { width: turned ? rows * rowPitch : cols * bay, depth: turned ? cols * bay : rows * rowPitch };
+  };
+  const cols = [...new Set(zones.map((zone) => Number(zone.gridCol) || 1))];
+  const rows = [...new Set(zones.map((zone) => Number(zone.gridRow) || 1))];
+  const colW = new Map();
+  const rowD = new Map();
+  zones.forEach((zone) => {
+    const span = spanOf(zone);
+    const col = Number(zone.gridCol) || 1;
+    const row = Number(zone.gridRow) || 1;
+    colW.set(col, Math.max(colW.get(col) || 0, span.width));
+    rowD.set(row, Math.max(rowD.get(row) || 0, span.depth));
+  });
+  const width = [...colW.values()].reduce((sum, item) => sum + item, 0) + Math.max(0, cols.length - 1) * aisle + 16;
+  const depth = [...rowD.values()].reduce((sum, item) => sum + item, 0) + Math.max(0, rows.length - 1) * aisle + 16;
   return { width: Math.max(20, Math.round(width)), depth: Math.max(20, Math.round(depth)) };
 }
 
@@ -752,6 +773,161 @@ function PerimeterEditor({ draft, setDraft, busy, units, onSave, onFence, onWarn
   );
 }
 
+function shapePlan(zone, units, ghosts, action, index) {
+  const occupied = new Set();
+  (units || []).forEach((unit) => {
+    if (unit.lado === zone.name && unit.ruma && unit.columna) occupied.add(`${unit.ruma}:${unit.columna}`);
+  });
+  (ghosts || []).forEach((ghost) => {
+    if (ghost.zoneId === zone.id) occupied.add(`${ghost.row}:${ghost.col}`);
+  });
+  const rows = Math.max(1, Number(zone.rows) || 1);
+  const cols = Math.max(1, Number(zone.cols) || 1);
+  const lineBusy = (name, at) => [...occupied].some((key) => {
+    const [row, col] = key.split(":").map(Number);
+    return name === "fila" ? row === at : col === at;
+  });
+  if (action === "quitar-fila" || action === "quitar-col") {
+    const name = action === "quitar-fila" ? "fila" : "columna";
+    const limit = name === "fila" ? rows : cols;
+    if (limit <= 1) return { rows, cols, error: `${zone.name} necesita al menos una ${name}.`, fresh: new Set() };
+    if (index < 1 || index > limit) return { rows, cols, error: `Esa ${name} no existe.`, fresh: new Set() };
+    if (lineBusy(name, index)) return { rows, cols, error: `La ${name} ${index} de ${zone.name} tiene contenedores. Regularízalos antes de quitarla.`, fresh: new Set() };
+    return { rows: name === "fila" ? rows - 1 : rows, cols: name === "columna" ? cols - 1 : cols, error: "", fresh: new Set(), cut: { name, index } };
+  }
+  if (action === "fila-adelante" || action === "fila-atras") {
+    if (rows >= 40) return { rows, cols, error: `${zone.name} ya tiene el máximo de filas.`, fresh: new Set() };
+    const at = action === "fila-adelante" ? 1 : rows + 1;
+    const fresh = new Set(Array.from({ length: cols }, (_, col) => `${at}:${col + 1}`));
+    return { rows: rows + 1, cols, error: "", fresh };
+  }
+  if (cols >= 20) return { rows, cols, error: `${zone.name} ya tiene el máximo de columnas.`, fresh: new Set() };
+  const at = action === "col-izquierda" ? 1 : cols + 1;
+  const fresh = new Set(Array.from({ length: action === "col-izquierda" ? rows : rows }, (_, row) => `${row + 1}:${at}`));
+  return { rows, cols: cols + 1, error: "", fresh };
+}
+
+function ShapeBoard({ rows, cols, marks, fresh, title }) {
+  return (
+    <div className="shape-board">
+      <b>{title}</b>
+      <div className="shape-grid" style={{ gridTemplateColumns: `repeat(${cols}, 22px)` }}>
+        {Array.from({ length: rows * cols }, (_, cell) => {
+          const rowIndex = Math.floor(cell / cols);
+          const colIndex = cell % cols;
+          const key = `${rowIndex + 1}:${colIndex + 1}`;
+          const kind = fresh?.has(key) ? "fresh" : marks.has(key) ? "busy" : "";
+          return <span key={key} className={`shape-cell ${kind}`} title={`Fila ${rowIndex + 1} · columna ${colIndex + 1}`} />;
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ZoneShape({ zones, units, ghosts, depotId, busy, onDone, onWarn }) {
+  const [zoneId, setZoneId] = useState(zones[0]?.id || "");
+  const [action, setAction] = useState("fila-atras");
+  const [index, setIndex] = useState(1);
+  const zone = zones.find((item) => item.id === zoneId) || zones[0];
+  if (!zone) return null;
+  const span = action === "quitar-col" ? Math.max(1, Number(zone.cols) || 1) : Math.max(1, Number(zone.rows) || 1);
+  const at = Math.min(span, Math.max(1, index));
+  const marks = new Set();
+  (units || []).forEach((unit) => {
+    if (unit.lado === zone.name && unit.ruma && unit.columna) marks.add(`${unit.ruma}:${unit.columna}`);
+  });
+  (ghosts || []).forEach((ghost) => {
+    if (ghost.zoneId === zone.id) marks.add(`${ghost.row}:${ghost.col}`);
+  });
+  const plan = shapePlan(zone, units, ghosts, action, at);
+  const afterMarks = new Set();
+  if (!plan.error && plan.cut) {
+    marks.forEach((key) => {
+      const [row, col] = key.split(":").map(Number);
+      if (plan.cut.name === "fila") {
+        if (row === plan.cut.index) return;
+        afterMarks.add(`${row > plan.cut.index ? row - 1 : row}:${col}`);
+      } else {
+        if (col === plan.cut.index) return;
+        afterMarks.add(`${row}:${col > plan.cut.index ? col - 1 : col}`);
+      }
+    });
+  } else if (!plan.error && action === "fila-adelante") {
+    marks.forEach((key) => {
+      const [row, col] = key.split(":").map(Number);
+      afterMarks.add(`${row + 1}:${col}`);
+    });
+  } else if (!plan.error && action === "col-izquierda") {
+    marks.forEach((key) => {
+      const [row, col] = key.split(":").map(Number);
+      afterMarks.add(`${row}:${col + 1}`);
+    });
+  } else if (!plan.error) {
+    marks.forEach((key) => afterMarks.add(key));
+  }
+  const removing = action === "quitar-fila" || action === "quitar-col";
+  async function apply() {
+    if (plan.error) {
+      onWarn(plan.error);
+      return;
+    }
+    try {
+      await api("/yard/resize", {
+        method: "POST",
+        body: {
+          depotId,
+          zoneId: zone.id,
+          axis: action.includes("col") ? "columna" : "fila",
+          op: removing ? "quitar" : "agregar",
+          ...(removing ? { index: at } : { side: action.endsWith("adelante") ? "adelante" : action.endsWith("atras") ? "atras" : action.endsWith("izquierda") ? "izquierda" : "derecha" }),
+        },
+      });
+      await onDone();
+    } catch (e) {
+      onWarn(e.message);
+    }
+  }
+  return (
+    <div className="shape-panel">
+      <b>Modificación de zona</b>
+      <p className="section-sub">La fila 1 es el frente y la columna 1 es la izquierda. Una fila o columna con contenedores no se quita: esos puestos se regularizan antes. Al guardar, la zona pasa a tener esta medida.</p>
+      <div className="guest-form">
+        <label className="zone-field">Zona
+          <select aria-label="Zona a modificar" value={zone.id} onChange={(e) => { setZoneId(e.target.value); setIndex(1); }}>
+            {zones.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </label>
+        <label className="zone-field">Cambio
+          <select aria-label="Cambio de la zona" value={action} onChange={(e) => setAction(e.target.value)}>
+            <option value="fila-atras">Agregar fila hacia atrás</option>
+            <option value="fila-adelante">Agregar fila hacia adelante</option>
+            <option value="col-derecha">Agregar columna a la derecha</option>
+            <option value="col-izquierda">Agregar columna a la izquierda</option>
+            <option value="quitar-fila">Quitar una fila</option>
+            <option value="quitar-col">Quitar una columna</option>
+          </select>
+        </label>
+        {removing ? (
+          <label className="zone-field">{action === "quitar-fila" ? "Fila" : "Columna"}
+            <select aria-label="Tramo a quitar" value={at} onChange={(e) => setIndex(Number(e.target.value))}>
+              {Array.from({ length: action === "quitar-fila" ? zone.rows : zone.cols }, (_, item) => (
+                <option key={item + 1} value={item + 1}>{item + 1}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <button className="btn-primary" type="button" disabled={busy || Boolean(plan.error)} onClick={apply}>Guardar modificación</button>
+      </div>
+      {plan.error ? <p className="section-sub">{plan.error}</p> : null}
+      <div className="shape-compare">
+        <ShapeBoard rows={zone.rows} cols={zone.cols} marks={marks} title={`${zone.name} ahora · ${zone.rows} × ${zone.cols}`} />
+        <ShapeBoard rows={plan.rows} cols={plan.cols} marks={plan.error ? marks : afterMarks} fresh={plan.error ? new Set() : plan.fresh} title={plan.error ? "Después, sin cambio" : `Después · ${plan.rows} × ${plan.cols}`} />
+      </div>
+      <p className="section-sub">El cuadro oscuro está ocupado. El naranja es el tramo nuevo.</p>
+    </div>
+  );
+}
+
 export default function YardBuild({ layout, onReload, selectedIso, setSelectedIso }) {
   const { user } = useAuth();
   const canGearMedia = hasRole(user, "admin", "coordinador");
@@ -773,6 +949,9 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   const [kindName, setKindName] = useState("");
   const [ask, setAsk] = useState(null);
   const [picked, setPicked] = useState(null);
+  const [bulkOn, setBulkOn] = useState(false);
+  const [bulkItems, setBulkItems] = useState([]);
+  const [bulkAnchor, setBulkAnchor] = useState(null);
   const [transferIso, setTransferIso] = useState(null);
   const [history, setHistory] = useState([]);
   const [detailIso, setDetailIso] = useState("");
@@ -958,7 +1137,6 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     const span = occupant ? baySpan(occupant.type, occupant.bayHalf) : baySpan(ghost?.typeCode, ghost?.half);
     const half = span === "A" || span === "B" ? span : "";
     const reach = movesToReach(draft.zones, layout.units, ghosts, zone, row, col, level, occupant?.iso, half, occupant?.type || ghost?.typeCode);
-    const above = reach.above;
     const freeMoves = layout.retrieval?.freeMoves ?? 3;
     const rate = layout.retrieval?.rate ?? 25;
     const extraMoves = Math.max(0, reach.total - freeMoves);
@@ -1000,13 +1178,147 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         ? `${ghost.note ? `${ghost.note}. ` : ""}Equipo ajeno a ZDRY, ${feetName(ghost.typeCode)}. ${access} ${cost}`
         : `Desconocido. ${access} ${cost}`,
       splittable: !named && !ghost.half,
-      ghost: above ? null : { zoneId: zone.id, row, col, level, ...(ghost.half ? { half: ghost.half } : {}) },
+      ghost: { zoneId: zone.id, row, col, level, ...(ghost.half ? { half: ghost.half } : {}) },
     };
   }
 
   function clickedHalf(typeCode, half) {
     if (feetOf(typeCode) >= 40 || half === "center") return undefined;
     return half;
+  }
+
+  function columnTop(zone, row, col, half) {
+    const covers = (itemHalf, itemType) => {
+      if (!half) return true;
+      const span = baySpan(itemType, itemHalf);
+      return span === "full" || span === "center" || span === half;
+    };
+    const levels = [];
+    for (const unit of layout.units || []) {
+      if (unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel && covers(unit.bayHalf, unit.type)) levels.push(unit.nivel);
+    }
+    for (const ghost of ghosts) {
+      if (ghost.zoneId === zone.id && ghost.row === row && ghost.col === col && covers(ghost.half, ghost.typeCode)) levels.push(ghost.level);
+    }
+    return levels.length ? Math.max(...levels) : 0;
+  }
+
+  function askUnknownSize(zone, row, col, level) {
+    setAsk({
+      title: "Desconocido",
+      text: "Este puesto puede ser un desconocido de 40 pies, o dos de 20 pies, uno en A y otro en B. Así la vista 3D y la regularización coinciden.",
+      confirmLabel: "Uno de 40 pies",
+      altLabel: "Dos de 20 pies",
+      run: () => placeUnknown(zone, row, col, level, "40"),
+      alt: () => placeUnknown(zone, row, col, level, "split"),
+    });
+  }
+
+  function offerUnknown(zone, row, col, level, half) {
+    const top = columnTop(zone, row, col, half);
+    if (level > top + 1) {
+      setError(`Ese nivel queda en el aire. El siguiente libre${half ? ` de la mitad ${half}` : ""} es el ${top + 1}.`);
+      return;
+    }
+    if (!half) {
+      askUnknownSize(zone, row, col, level);
+      return;
+    }
+    placeUnknown(zone, row, col, level, half);
+  }
+
+  async function placeUnknown(zone, row, col, level, kind) {
+    setError("");
+    try {
+      if (kind === "split") {
+        await api("/yard/ghost", {
+          method: "POST",
+          body: { depotId: layout.depotId, zoneId: zone.id, row, col, level, occupied: true, split: true },
+        });
+      } else {
+        const half = kind === "A" || kind === "B" ? kind : "";
+        await api("/yard/ghost", {
+          method: "POST",
+          body: {
+            depotId: layout.depotId,
+            zoneId: zone.id,
+            row,
+            col,
+            level,
+            occupied: true,
+            code: "DESCONOCIDO",
+            typeCode: half ? "20" : "40",
+            color: "#8a90a2",
+            ...(half ? { half } : {}),
+          },
+        });
+      }
+      await onReload();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  function toggleBulk(zone, row, col, level, occupant, ghost) {
+    setBulkAnchor({ zoneId: zone.id, name: zone.name, row, col });
+    const key = occupant?.iso || (ghost ? `g-${zone.id}-${row}-${col}-${level}-${ghost.half || "F"}` : "");
+    if (!key) return;
+    setBulkItems((items) => {
+      if (items.some((item) => item.key === key)) return items.filter((item) => item.key !== key);
+      return [...items, occupant
+        ? { key, iso: occupant.iso }
+        : { key, ghost: { zoneId: zone.id, row, col, level, ...(ghost.half ? { half: ghost.half } : {}) } }];
+    });
+  }
+
+  function postsIn(zoneName, row, col) {
+    const units = (layout.units || []).filter((unit) => unit.lado === zoneName && (row ? unit.ruma === row : true) && (col ? unit.columna === col : true));
+    const zone = draft.zones.find((item) => item.name === zoneName);
+    const marks = ghosts.filter((ghost) => ghost.zoneId === zone?.id && (row ? ghost.row === row : true) && (col ? ghost.col === col : true));
+    return {
+      isos: units.map((unit) => unit.iso),
+      ghosts: marks.map((ghost) => ({ zoneId: ghost.zoneId, row: ghost.row, col: ghost.col, level: ghost.level, ...(ghost.half ? { half: ghost.half } : {}) })),
+    };
+  }
+
+  function askBulk(scope) {
+    let payload = { isos: [], ghosts: [] };
+    if (scope === "selección") {
+      payload = {
+        isos: bulkItems.filter((item) => item.iso).map((item) => item.iso),
+        ghosts: bulkItems.filter((item) => item.ghost).map((item) => item.ghost),
+      };
+    } else if (!bulkAnchor) {
+      setError("Toca una celda de la columna o de la zona.");
+      return;
+    } else if (scope === "columna") {
+      payload = postsIn(bulkAnchor.name, bulkAnchor.row, bulkAnchor.col);
+    } else {
+      payload = postsIn(bulkAnchor.name);
+    }
+    const count = payload.isos.length + payload.ghosts.length;
+    if (!count) {
+      setError(scope === "selección" ? "No hay puestos elegidos." : `Esa ${scope} no tiene contenedores ni desconocidos.`);
+      return;
+    }
+    setAsk({
+      title: `Liberar ${scope}`,
+      text: `Se liberan ${payload.isos.length} contenedor(es) y ${payload.ghosts.length} desconocido(s). Los contenedores vuelven a sin sitio. Si queda un equipo más arriba, el hueco de abajo queda como desconocido para que la ruma no flote.`,
+      confirmLabel: "Liberar",
+      run: () => runBulk(payload),
+    });
+  }
+
+  async function runBulk(payload) {
+    setError("");
+    try {
+      await api("/yard/release-bulk", { method: "POST", body: { depotId: layout.depotId, regularize: true, ...payload } });
+      setBulkItems([]);
+      setPicked(null);
+      await onReload();
+    } catch (e) {
+      setError(e.message);
+    }
   }
 
   async function onCell(zone, row, col, level, occupant, ghost, half) {
@@ -1033,26 +1345,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         });
         return;
       }
-      try {
-        await api("/yard/ghost", {
-          method: "POST",
-          body: {
-            depotId: layout.depotId,
-            zoneId: zone.id,
-            row,
-            col,
-            level,
-            occupied: true,
-            code: "DESCONOCIDO",
-            typeCode: half ? "20" : "40",
-            color: "#8a90a2",
-            ...(half ? { half } : {}),
-          },
-        });
-        await onReload();
-      } catch (e) {
-        setError(e.message);
-      }
+      offerUnknown(zone, row, col, level, half);
       return;
     }
     try {
@@ -1672,7 +1965,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   }
 
   function cellActions(zone, row, col, level, occupant, ghost) {
-    if (occupant || ghost?.code) return [];
+    if (occupant || (ghost?.code && !pendingCode(ghost.code))) return [];
     const span = baySpan(ghost?.typeCode, ghost?.half);
     const hereGhosts = ghosts.filter((item) => item.zoneId === zone.id && item.row === row && item.col === col && item.level === level);
     const hereUnits = layout.units.filter((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel === level);
@@ -1721,7 +2014,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
 
   async function splitPicked() {
     if (!picked?.ghost || picked.ghost.half) return;
-    if (picked.blocked) {
+    if (picked.blocked && mode !== "regularizar") {
       setError(picked.access);
       return;
     }
@@ -1806,11 +2099,11 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         <button className={mode === "tipos" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("tipos")}>Tipos</button>
       </div>
       <NoticeModal title="Aviso" text={error} onClose={() => setError("")} />
-      <NoticeModal title={ask?.title || "Confirmar"} text={ask?.text || ""} confirmLabel={ask?.confirmLabel || "Quitar zona"} onClose={() => setAsk(null)} onConfirm={ask ? () => { const run = ask.run; setAsk(null); run(); } : null} />
+      <NoticeModal title={ask?.title || "Confirmar"} text={ask?.text || ""} confirmLabel={ask?.confirmLabel || "Quitar zona"} altLabel={ask?.altLabel || ""} onClose={() => setAsk(null)} onConfirm={ask ? () => { const run = ask.run; setAsk(null); run(); } : null} onAlt={ask?.alt ? () => { const alt = ask.alt; setAsk(null); alt(); } : null} />
 
       {mode === "armar" ? (
         <div>
-          <p className="section-sub">Cada zona ocupa un puesto de la cuadrícula. La cuarta zona cae en la fila 2, columna 1, debajo de la A, con pasillo de por medio. El lado sin acceso es el perímetro: el stacker no entra por ahí. Una fila vecina más alta que el equipo le tapa la vista.</p>
+          <p className="section-sub">Cada zona ocupa su puesto y en el 3D queda junto a la vecina, con un pasillo del ancho real. Una zona chica no abre un hueco del tamaño de la más grande. Girarla 90° pone las filas de lado, como una pared a la izquierda o a la derecha. El lado sin acceso es el perímetro: el stacker no entra por ahí.</p>
           {draft.zones.map((zone) => (
             <div className="zone-card" key={zone.id}>
               <label className="zone-field">Nombre
@@ -1830,6 +2123,12 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               </label>
               <label className="zone-field">Altura
                 <input type="number" min={1} max={20} value={zone.levels} onChange={(e) => updateZone(zone.id, { levels: Number(e.target.value) })} />
+              </label>
+              <label className="zone-field">Orientación
+                <select aria-label={`Orientación de ${zone.name}`} value={Number(zone.turn) === 90 ? "90" : "0"} onChange={(e) => updateZone(zone.id, { turn: Number(e.target.value) === 90 ? 90 : 0 })}>
+                  <option value="0">Filas hacia el fondo</option>
+                  <option value="90">Girada 90°, pared al lado</option>
+                </select>
               </label>
               <label className="zone-field">Lado sin acceso
                 <select aria-label={`Lado sin acceso de ${zone.name}`} value={zone.closedSide || ""} onChange={(e) => updateZone(zone.id, { closedSide: e.target.value })}>
@@ -1864,6 +2163,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               ) : <span />}
             </div>
           ))}
+          <ZoneShape zones={(layout.plan?.zones?.length ? layout.plan.zones : draft.zones)} units={layout.units} ghosts={layout.plan?.ghosts || draft.ghosts} depotId={layout.depotId} busy={busy} onDone={onReload} onWarn={setError} />
           <div className="action-row">
             <button className="btn-ghost" type="button" onClick={() => {
               const seat = nextSeat(draft.zones);
@@ -1968,9 +2268,20 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
           ) : (
             <>
           <p className="section-sub">
-            Aquí se arman las rumas como están en el patio: se puede cerrar Regularizar y volver a abrirlo para seguir una línea. Un 40 ocupa A y B. Un 20 ocupa solo la mitad que toques. Un doble clic, en la zona o en el cerco, pide confirmación para devolver el contenedor a sin sitio aunque otro equipo le tape la vista. Si hay equipos encima, primero hay que moverlos. Fuera de esta vista, el traslado solo entra en un puesto libre al que llega el stacker.
+            Aquí se arman las rumas como están en el patio: se puede cerrar Regularizar y volver a abrirlo para seguir una línea. Un 40 ocupa A y B. Un 20 ocupa solo la mitad que toques. Un doble clic devuelve el contenedor a sin sitio y deja un desconocido en ese puesto, aunque haya equipos encima. Al tocar un puesto vacío que puede ser de 40, se pregunta si queda uno de 40 o dos de 20. Elegir varios se activa y se apaga: con eso se libera una selección, una columna o una zona.
             {selectedIso ? ` Seleccionado: ${selectedIso}.` : ""}
+            {bulkOn ? ` Elegidos: ${bulkItems.length}.` : ""}
           </p>
+          <div className="action-row">
+            <button className={bulkOn ? "btn-primary" : "btn-ghost"} type="button" onClick={() => { setBulkOn((on) => !on); setBulkItems([]); }}>{bulkOn ? "Dejar de elegir" : "Elegir varios"}</button>
+            {bulkOn ? (
+              <>
+                <button className="btn-ghost" type="button" onClick={() => askBulk("selección")}>Liberar selección</button>
+                <button className="btn-ghost" type="button" onClick={() => askBulk("columna")}>Liberar columna</button>
+                <button className="btn-ghost" type="button" onClick={() => askBulk("zona")}>Liberar zona</button>
+              </>
+            ) : null}
+          </div>
           <div className="guest-form">
             <label className="zone-field">Código que no es ZDRY
               <input aria-label="Código del equipo" value={guestCode} onChange={(e) => setGuestCode(e.target.value.toUpperCase())} placeholder="Código" />
@@ -2200,10 +2511,14 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
                                                       <button
                                                         key={slot.half || "F"}
                                                         type="button"
-                                                        className={`yard-cell${slot.span ? " span-bay" : ""}${occupant || named ? " full" : ""}${ghost && !occupant && !named ? " ghost" : ""}${key && picked?.key === key ? " on" : ""}`}
+                                                        className={`yard-cell${slot.span ? " span-bay" : ""}${occupant || named ? " full" : ""}${ghost && !occupant && !named ? " ghost" : ""}${key && (picked?.key === key || (bulkOn && bulkItems.some((item) => item.key === key))) ? " on" : ""}`}
                                                         style={color ? { background: color } : undefined}
                                                         aria-label={`${zone.name} fila ${row} columna ${col} altura ${level}${slot.half ? ` mitad ${slot.half}` : ""}`}
                                                         onClick={() => {
+                                                          if (mode === "regularizar" && bulkOn) {
+                                                            toggleBulk(zone, row, col, level, occupant, ghost);
+                                                            return;
+                                                          }
                                                           if (mode === "trasladar") {
                                                             if (occupant) {
                                                               const pick = cellPick(zone, row, col, level, occupant, null);
@@ -2224,7 +2539,13 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
                                                         }}
                                                         onContextMenu={(event) => openCellMenu(event, zone, row, col, level, occupant, ghost)}
                       onDoubleClick={() => {
-                        if (mode === "regularizar" && occupant) askReturn(occupant.iso);
+                        if (mode !== "regularizar" || bulkOn) return;
+                        if (occupant) {
+                          askReturn(occupant.iso);
+                          return;
+                        }
+                        if (ghost && pendingCode(ghost.code) && !ghost.half) askUnknownSize(zone, row, col, level);
+                        else if (!ghost && !slot.half) offerUnknown(zone, row, col, level);
                       }}
                                                       >
                                                         {occupant ? occupant.iso.slice(-4) : named ? ghost.code.slice(-4) : ghost && pendingCode(ghost.code) ? "DESC" : ghost ? (String(ghost.typeCode || "").startsWith("20") ? "20" : "?") : slot.half === "center" ? "Medio" : slot.half || (incomingFeet >= 40 ? "A+B" : level)}

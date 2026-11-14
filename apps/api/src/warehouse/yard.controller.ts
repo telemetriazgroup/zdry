@@ -13,6 +13,22 @@ import { WarehouseService } from "./warehouse.service";
 export class YardController {
   constructor(private readonly warehouse: WarehouseService) {}
 
+  @Post("resize")
+  resize(
+    @Body() body: { depotId?: string; zoneId?: string; axis?: "fila" | "columna"; op?: "agregar" | "quitar"; side?: "adelante" | "atras" | "izquierda" | "derecha"; index?: number },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.resizeYardZone({
+      depotId: body.depotId,
+      zoneId: body.zoneId,
+      axis: body.axis === "columna" ? "columna" : "fila",
+      op: body.op === "quitar" ? "quitar" : "agregar",
+      side: body.side,
+      index: body.index,
+    }, user, req.ip);
+  }
+
   @Post("plan")
   savePlan(
     @Body() body: { depotId?: string; zones?: unknown; aisles?: unknown; ghosts?: unknown },
@@ -47,6 +63,15 @@ export class YardController {
     @Req() req: Request,
   ) {
     return this.warehouse.release(body.iso || "", body.depotId || "", user, req.ip, body.regularize === true);
+  }
+
+  @Post("release-bulk")
+  releaseBulk(
+    @Body() body: { depotId?: string; regularize?: boolean; isos?: string[]; ghosts?: Array<{ zoneId?: string; row?: number; col?: number; level?: number; half?: string }> },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.releaseBulk(body, user, req.ip);
   }
 
   @Post("aisle")
@@ -171,6 +196,22 @@ export class YardController {
   ) {
     const obj = await this.warehouse.openGearMedia(depotId, outsiderId, mediaId);
     return new StreamableFile(obj.stream, { type: obj.contentType || "application/octet-stream", length: obj.contentLength });
+  }
+
+  @Get(":depotId/backup")
+  @Roles("superadmin")
+  backup(@Param("depotId") depotId: string, @CurrentUser() user: AuthUser) {
+    return this.warehouse.exportYardBackup(depotId, user);
+  }
+
+  @Post("backup")
+  @Roles("superadmin")
+  importBackup(
+    @Body() body: { depotId?: string; backup?: unknown },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.warehouse.importYardBackup(body.depotId || "", body.backup, user, req.ip);
   }
 
   @Get(":depotId/suggest")

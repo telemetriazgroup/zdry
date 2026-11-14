@@ -504,25 +504,67 @@ function addPerimeter(root, disposables, perimeter, bounds, units = [], options 
   return { minX: bounds.minX, maxX: bounds.maxX, minZ: bounds.minZ, maxZ: bounds.maxZ };
 }
 
+function zoneSpan(zone) {
+  const turned = Number(zone.turn) === 90;
+  const cols = Math.max(1, Number(zone.cols) || 1);
+  const rows = Math.max(1, Number(zone.rows) || 1);
+  return {
+    turned,
+    width: turned ? rows * PITCH_Z : cols * PITCH_X,
+    depth: turned ? cols * PITCH_X : rows * PITCH_Z,
+  };
+}
+
+/** Cada columna del plano mide lo que mide su zona, más un pasillo. Una zona chica queda junto a la vecina. */
+function packZones(zones) {
+  const cols = [...new Set(zones.map((zone) => Number(zone.gridCol) || 1))].sort((a, b) => a - b);
+  const rows = [...new Set(zones.map((zone) => Number(zone.gridRow) || 1))].sort((a, b) => a - b);
+  const colW = new Map();
+  const rowD = new Map();
+  zones.forEach((zone) => {
+    const span = zoneSpan(zone);
+    const col = Number(zone.gridCol) || 1;
+    const row = Number(zone.gridRow) || 1;
+    colW.set(col, Math.max(colW.get(col) || 0, span.width));
+    rowD.set(row, Math.max(rowD.get(row) || 0, span.depth));
+  });
+  const originX = new Map();
+  const originZ = new Map();
+  let x = 0;
+  cols.forEach((col, index) => {
+    originX.set(col, x);
+    x += (colW.get(col) || 0) + (index < cols.length - 1 ? AISLE : 0);
+  });
+  let z = 0;
+  rows.forEach((row, index) => {
+    originZ.set(row, z);
+    z += (rowD.get(row) || 0) + (index < rows.length - 1 ? AISLE : 0);
+  });
+  return { originX, originZ };
+}
+
 function buildYard(zones, units, ghosts, typeColor, options = {}) {
   const stackedUnits = (units || []).filter((unit) => unit.lado && !unit.onAisle && unit.lado !== "PASILLO");
   const held = (units || []).filter((unit) => unit.onAisle || unit.lado === "PASILLO");
   const root = new THREE.Group();
   const disposables = [];
-  const maxCols = Math.max(...zones.map((zone) => Number(zone.cols) || 1), 1);
-  const maxRows = Math.max(...zones.map((zone) => Number(zone.rows) || 1), 1);
-  const blockX = maxCols * PITCH_X;
-  const blockZ = maxRows * PITCH_Z;
+  const packed = packZones(zones);
+  const placed = [];
   let minX = Infinity;
   let maxX = -Infinity;
   let minZ = Infinity;
   let maxZ = -Infinity;
 
   zones.forEach((zone) => {
-    const originX = Number.isFinite(Number(zone.xM)) ? Number(zone.xM) : ((Number(zone.gridCol) || 1) - 1) * (blockX + AISLE);
-    const originZ = Number.isFinite(Number(zone.zM)) ? Number(zone.zM) : ((Number(zone.gridRow) || 1) - 1) * (blockZ + AISLE);
-    const padW = zone.cols * PITCH_X - 0.4;
-    const padD = zone.rows * PITCH_Z - 0.3;
+    const span = zoneSpan(zone);
+    const gridCol = Number(zone.gridCol) || 1;
+    const gridRow = Number(zone.gridRow) || 1;
+    const originX = Number.isFinite(Number(zone.xM)) ? Number(zone.xM) : packed.originX.get(gridCol) || 0;
+    const originZ = Number.isFinite(Number(zone.zM)) ? Number(zone.zM) : packed.originZ.get(gridRow) || 0;
+    const padW = span.width - 0.4;
+    const padD = span.depth - 0.3;
+    const turned = span.turned;
+    placed.push({ gridCol, gridRow, originX, originZ, padW, padD });
     const pad = new THREE.Mesh(
       new THREE.PlaneGeometry(padW, padD),
       new THREE.MeshStandardMaterial({ color: "#2c3548", roughness: 0.95, metalness: 0 }),
@@ -538,11 +580,12 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
     if (zone.closedSide) {
       const thick = 0.45;
       const height = 3.2;
-      const alongRows = zone.closedSide === "frente" || zone.closedSide === "fondo";
+      const alongRows = (!turned && (zone.closedSide === "frente" || zone.closedSide === "fondo")) || (turned && (zone.closedSide === "izquierda" || zone.closedSide === "derecha"));
+      const atStart = zone.closedSide === "frente" || zone.closedSide === "izquierda";
       const width = alongRows ? padW : thick;
       const depth = alongRows ? thick : padD;
-      const x = zone.closedSide === "derecha" ? originX + padW - thick / 2 : zone.closedSide === "izquierda" ? originX + thick / 2 : originX + padW / 2;
-      const z = zone.closedSide === "fondo" ? originZ + padD - thick / 2 : zone.closedSide === "frente" ? originZ + thick / 2 : originZ + padD / 2;
+      const x = alongRows ? originX + padW / 2 : atStart ? originX + thick / 2 : originX + padW - thick / 2;
+      const z = alongRows ? (atStart ? originZ + thick / 2 : originZ + padD - thick / 2) : originZ + padD / 2;
       const wallGeometry = new THREE.BoxGeometry(width, height, depth);
       const wallMaterial = new THREE.MeshStandardMaterial({ color: "#5c6570", roughness: 0.9, metalness: 0.02 });
       const wall = new THREE.Mesh(wallGeometry, wallMaterial);
@@ -564,13 +607,11 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
         let floorA = 0.04;
         let floorB = 0.04;
         const offered = { A: false, B: false, full: false, center: false };
-        const slotX = originX + (col - 1) * PITCH_X;
         const usable = PITCH_X - 0.7;
-        const z = originZ + (row - 1) * PITCH_Z + BOX_W / 2;
-        const xFor = (span, length) => {
-          if (span === "A") return slotX + length / 2;
-          if (span === "B") return slotX + usable - length / 2;
-          return slotX + (usable - length) / 2 + length / 2;
+        const placeAt = (spanName, length) => {
+          const along = spanName === "A" ? length / 2 : spanName === "B" ? usable - length / 2 : (usable - length) / 2 + length / 2;
+          if (!turned) return [originX + (col - 1) * PITCH_X + along, originZ + (row - 1) * PITCH_Z + BOX_W / 2];
+          return [originX + (row - 1) * PITCH_Z + BOX_W / 2, originZ + (col - 1) * PITCH_X + along];
         };
         for (let level = 1; level <= zone.levels; level += 1) {
           const occupants = stackedUnits.filter((unit) => unit.lado === zone.name && unit.ruma === row && unit.columna === col && unit.nivel === level);
@@ -611,7 +652,9 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
                   new THREE.BoxGeometry(length, height * 0.35, BOX_W),
                   new THREE.MeshStandardMaterial({ color: "#f0c14a", transparent: true, opacity: 0.35, roughness: 0.8 }),
                 );
-                hint.position.set(xFor(span, length), floor + height * 0.18, z);
+                const [hintX, hintZ] = placeAt(span, length);
+                hint.position.set(hintX, floor + height * 0.18, hintZ);
+                hint.rotation.y = turned ? Math.PI / 2 : 0;
                 hint.userData.pick = {
                   key: `slot-${zone.id}-${row}-${col}-${level}-${span}`,
                   empty: true,
@@ -644,7 +687,9 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
             const geometry = new THREE.BoxGeometry(length, height, BOX_W);
             const material = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.62, metalness: 0.04 });
             const mesh = new THREE.Mesh(geometry, material);
-            mesh.position.set(xFor(piece.span, length), floor + height / 2, z);
+            const [boxX, boxZ] = placeAt(piece.span, length);
+            mesh.position.set(boxX, floor + height / 2, boxZ);
+            mesh.rotation.y = turned ? Math.PI / 2 : 0;
             mesh.castShadow = true;
             mesh.receiveShadow = true;
             const side = piece.span === "A" || piece.span === "B" ? ` · mitad ${piece.span}` : piece.span === "center" ? " · al centro" : "";
@@ -715,23 +760,26 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
     root.add(line);
     disposables.push(line.geometry, line.material);
   };
-  const gridRows = Math.max(...zones.map((zone) => Number(zone.gridRow) || 1));
-  const gridCols = Math.max(...zones.map((zone) => Number(zone.gridCol) || 1));
-  for (let gridRow = 1; gridRow <= gridRows; gridRow += 1) {
-    for (let gridCol = 1; gridCol < gridCols; gridCol += 1) {
-      const left = zones.find((zone) => Number(zone.gridCol) === gridCol && Number(zone.gridRow) === gridRow);
-      const right = zones.find((zone) => Number(zone.gridCol) === gridCol + 1 && Number(zone.gridRow) === gridRow);
-      if (!left || !right) continue;
-      const x = gridCol * blockX + (gridCol - 1) * AISLE + AISLE / 2;
-      const z = (gridRow - 1) * (blockZ + AISLE) + blockZ / 2;
-      paintLane(x, z, 0.16, blockZ);
-    }
-  }
-  for (let gridRow = 1; gridRow < gridRows; gridRow += 1) {
-    const x = (minX + maxX) / 2;
-    const z = gridRow * blockZ + (gridRow - 1) * AISLE + AISLE / 2;
-    paintLane(x, z, spanX, 0.16);
-  }
+  const cols = [...new Set(placed.map((item) => item.gridCol))].sort((a, b) => a - b);
+  const rows = [...new Set(placed.map((item) => item.gridRow))].sort((a, b) => a - b);
+  cols.forEach((col, index) => {
+    const next = cols[index + 1];
+    if (!next) return;
+    const pair = placed.filter((item) => item.gridCol === col || item.gridCol === next);
+    const z0 = Math.min(...pair.map((item) => item.originZ));
+    const z1 = Math.max(...pair.map((item) => item.originZ + item.padD));
+    const right = placed.find((item) => item.gridCol === next);
+    paintLane(right.originX - AISLE / 2, (z0 + z1) / 2, 0.16, Math.max(0.2, z1 - z0));
+  });
+  rows.forEach((row, index) => {
+    const next = rows[index + 1];
+    if (!next) return;
+    const pair = placed.filter((item) => item.gridRow === row || item.gridRow === next);
+    const x0 = Math.min(...pair.map((item) => item.originX));
+    const x1 = Math.max(...pair.map((item) => item.originX + item.padW));
+    const below = placed.find((item) => item.gridRow === next);
+    paintLane((x0 + x1) / 2, below.originZ - AISLE / 2, Math.max(0.2, x1 - x0), 0.16);
+  });
 
   held.forEach((unit, index) => {
     const length = lengthOf(unit.type);
@@ -801,7 +849,7 @@ export default function YardScene({ zones, units, ghosts, perimeter, typeColor, 
   selectedRef.current = picked && !picked.empty ? (picked.key || "") : "";
   dataRef.current = { zones, units, ghosts, targets, incomingType, perimeter, movingIso };
   const yardKey = JSON.stringify({
-    zones: (zones || []).map((zone) => [zone.id, zone.name, zone.rows, zone.cols, zone.levels, zone.gridRow, zone.gridCol, zone.xM || 0, zone.zM || 0, zone.closedSide || ""]),
+    zones: (zones || []).map((zone) => [zone.id, zone.name, zone.rows, zone.cols, zone.levels, zone.gridRow, zone.gridCol, zone.xM || 0, zone.zM || 0, zone.closedSide || "", zone.turn || 0]),
     units: (units || []).map((unit) => [unit.iso, unit.lado, unit.ruma, unit.columna, unit.nivel, unit.type, unit.onAisle, unit.bayHalf || "", unit.color || "", unit.typeColor || ""]),
     ghosts: (ghosts || []).map((ghost) => [ghost.zoneId, ghost.row, ghost.col, ghost.level, ghost.code || "", ghost.typeCode || "", ghost.half || "", ghost.color || "", ghost.kind || ""]),
     perimeter: (perimeter?.sides || []).map((side) => [side.id, side.name, side.lengthM, side.turnDeg, side.kind, side.containerFeet, side.wallM, side.levels, side.wallSlots || [], side.bays || [], ...(perimeter.gates || []).filter((gate) => gate.sideId === side.id).map((gate) => [gate.atM, gate.widthM])]),
