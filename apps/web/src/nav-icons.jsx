@@ -41,7 +41,7 @@ export function iconFor(path) {
   if (path.includes("compras/conciliar")) return "boxes";
   if (path.includes("compras/odoo")) return "boxes";
   if (path.includes("compras")) return "receipt";
-  if (path.includes("tipos-odoo")) return "tag";
+  if (path.includes("tipos-odoo") || path.includes("odoo-productos")) return "tag";
   if (path.includes("almacen/odoo")) return "boxes";
   if (path.includes("recepcion")) return "inbox";
   if (path.includes("campo")) return "camera";

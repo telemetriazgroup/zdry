@@ -24,6 +24,7 @@ import CatalogCopy from "./CatalogCopy.jsx";
 import Profile from "./Profile.jsx";
 import OdooIntegrations from "./OdooIntegrations.jsx";
 import OdooBandeja from "./OdooBandeja.jsx";
+import OdooProductos from "./OdooProductos.jsx";
 import SystemBackup from "./SystemBackup.jsx";
 import TypeAudit from "./TypeAudit.jsx";
 import DryStats from "./DryStats.jsx";
@@ -224,6 +225,7 @@ export default function Shell() {
             <Route path="compras/extras" element={<Gate nav={nav} role={user.role} path="/app/compras/extras"><Compras /></Gate>} />
             <Route path="compras/dam" element={<Gate nav={nav} role={user.role} path="/app/compras/dam"><Compras /></Gate>} />
             <Route path="almacen/odoo" element={<Gate nav={nav} role={user.role} path="/app/almacen/odoo"><OdooBandeja /></Gate>} />
+            <Route path="almacen/odoo-productos" element={<Gate nav={nav} role={user.role} path="/app/almacen/odoo-productos"><OdooProductos /></Gate>} />
             <Route path="almacen/recepcion" element={<Gate nav={nav} role={user.role} path="/app/almacen/recepcion"><Recepcion /></Gate>} />
             <Route path="almacen/visitas" element={<Gate nav={nav} role={user.role} path="/app/almacen/visitas"><Visitas /></Gate>} />
             <Route path="almacen/campo" element={<Gate nav={nav} role={user.role} path="/app/almacen/campo"><PatioCampo /></Gate>} />

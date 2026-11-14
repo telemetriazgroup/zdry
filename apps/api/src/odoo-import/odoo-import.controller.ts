@@ -140,6 +140,16 @@ export class OdooImportController {
     return this.svc.flushWritebacks(id);
   }
 
+  @Get("custom-products")
+  customProducts() {
+    return this.svc.customProducts();
+  }
+
+  @Put("custom-products")
+  saveCustomProducts(@Body() body: { phrases?: string[] }, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.svc.saveCustomProducts(Array.isArray(body?.phrases) ? body.phrases : [], user, req.ip);
+  }
+
   @Get("watch")
   watch() {
     return this.svc.watchState();

@@ -1,7 +1,16 @@
 import { yardScenario } from "./yard-scenarios";
-import { defaultYardPlan, fenceBays, ghostsWithSupport, leftToCustomer, movesAbove, movesToReach, normalizeYardPlan, reachBlockers, stackLengthError, zoneSlotError } from "./yard-plan";
+import { defaultYardPlan, fenceBays, fenceDepthOf, fenceSeat, fenceSideIndex, ghostsWithSupport, leftToCustomer, movesAbove, movesToReach, normalizeYardPlan, reachBlockers, stackLengthError, zoneSlotError } from "./yard-plan";
 
 describe("yard plan", () => {
+  it("separa las filas del cerco para que dos puestos del mismo nivel no choquen", () => {
+    expect(fenceSeat(1, 1)).toBe(2);
+    expect(fenceSeat(1, 2)).toBe(12);
+    expect(fenceSideIndex(2)).toBe(1);
+    expect(fenceDepthOf(2)).toBe(1);
+    expect(fenceSideIndex(12)).toBe(1);
+    expect(fenceDepthOf(12)).toBe(2);
+  });
+
   it("arranca con una zona 3×4 de altura 5 y un pasillo", () => {
     const plan = defaultYardPlan();
     expect(plan.zones[0]).toMatchObject({ rows: 4, cols: 3, levels: 5, gridRow: 1, gridCol: 1 });

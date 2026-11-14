@@ -64,7 +64,7 @@ import {
   posLabel,
   validateMove,
 } from "../domain/yard";
-import { AISLE_SIDE, FENCE_SIDE, STACKER_PLACE_MESSAGE, accessBlockMessage, accessPlaceNote, asBayHalf, baySpan, fenceBays, fenceSlotCount, fenceWithout, feetOf, ghostsWithSupport, movesToReach, normalizeYardPlan, spansOverlap, stackLengthError, zoneSlotError, type YardPlan } from "../domain/yard-plan";
+import { AISLE_SIDE, FENCE_SIDE, STACKER_PLACE_MESSAGE, accessBlockMessage, accessPlaceNote, asBayHalf, baySpan, fenceBays, fenceDepthOf, fenceSeat, fenceSideIndex, fenceSlotCount, fenceWithout, feetOf, ghostsWithSupport, movesToReach, normalizeYardPlan, spansOverlap, stackLengthError, zoneSlotError, type YardPlan } from "../domain/yard-plan";
 import { YARD_SCENARIOS, yardScenario } from "../domain/yard-scenarios";
 import { YARD_RUMA_TEMPLATES, fillPerimeter, fillRumaTemplate, yardRumaTemplate } from "../domain/yard-rumas";
 import { readMovementPolicy } from "../domain/freight-stub";
@@ -2587,8 +2587,9 @@ export class WarehouseService {
         if (from.total) throw new ConflictException(accessBlockMessage(from.above, from.beside));
       }
       if (stacker && previous?.lado === FENCE_SIDE && previous.columna && previous.nivel) {
-        const side = plan.perimeter.sides[(previous.ruma || 1) - 1];
-        const covered = side && plan.perimeter.cells.some((cell) => cell.sideId === side.id && cell.slot === previous.columna && cell.level > (previous.nivel || 0) && cell.iso !== iso && fenceCellsOverlap(cell.half, previous.half));
+        const side = plan.perimeter.sides[fenceSideIndex(previous.ruma || 1)];
+        const depth = fenceDepthOf(previous.ruma || 1);
+        const covered = side && plan.perimeter.cells.some((cell) => cell.sideId === side.id && cell.slot === previous.columna && (cell.row || 1) === depth && cell.level > (previous.nivel || 0) && cell.iso !== iso && fenceCellsOverlap(cell.half, previous.half));
         if (covered) throw new ConflictException(accessBlockMessage(1, 0));
       }
       const taken = others.find((item) => item.lado === lado && item.ruma === ruma && item.columna === columna && item.nivel === nivel && spansOverlap(baySpan(typeOf.get(item.iso), item.half), span));
@@ -2727,7 +2728,7 @@ export class WarehouseService {
       const now = new Date().toISOString();
       const fencePlacements = loaded.fence.map((cell) => {
         const sideIndex = scenario.plan.perimeter.sides.findIndex((side) => side.id === cell.sideId);
-        return { iso: cell.iso, lado: FENCE_SIDE, ruma: sideIndex + 1, columna: cell.slot, nivel: cell.level, half: cell.half || null };
+        return { iso: cell.iso, lado: FENCE_SIDE, ruma: fenceSeat(sideIndex), columna: cell.slot, nivel: cell.level, half: cell.half || null };
       });
       const placements = [
         ...loaded.placed.map((item) => ({ iso: item.iso, lado: item.lado, ruma: item.ruma, columna: item.columna, nivel: item.nivel, half: item.half })),
@@ -2792,7 +2793,7 @@ export class WarehouseService {
       const now = new Date().toISOString();
       const fencePlacements = loaded.fence.map((cell) => {
         const sideIndex = plan.perimeter.sides.findIndex((side) => side.id === cell.sideId);
-        return { iso: cell.iso, lado: FENCE_SIDE, ruma: sideIndex + 1, columna: cell.slot, nivel: cell.level, half: cell.half || null };
+        return { iso: cell.iso, lado: FENCE_SIDE, ruma: fenceSeat(sideIndex), columna: cell.slot, nivel: cell.level, half: cell.half || null };
       });
       const placements = [
         ...loaded.placed.map((item) => ({ iso: item.iso, lado: item.lado, ruma: item.ruma, columna: item.columna, nivel: item.nivel, half: item.half })),
@@ -2911,7 +2912,7 @@ export class WarehouseService {
         committed: containerCommitted(c),
         needsPlacement: needsYardPlacement(c),
         posLabel: (c.lado === FENCE_SIDE
-          ? `Cerco · ${plan.perimeter.sides[(c.ruma || 1) - 1]?.name || "lado"} · puesto ${c.columna} · nivel ${c.nivel}`
+          ? `Cerco · ${plan.perimeter.sides[fenceSideIndex(c.ruma || 1)]?.name || "lado"} · puesto ${c.columna}${fenceDepthOf(c.ruma || 1) > 1 ? ` · fila ${fenceDepthOf(c.ruma || 1)}` : ""} · nivel ${c.nivel}`
           : posLabel(c)) + (c.bayHalf === "A" || c.bayHalf === "B" ? ` · mitad ${c.bayHalf}` : ""),
         onAisle: c.lado === AISLE_SIDE,
         movesToRetrieve: c.lado === AISLE_SIDE
@@ -3033,8 +3034,9 @@ export class WarehouseService {
               }
               if (unit.lado === FENCE_SIDE && unit.columna && unit.nivel) {
                 const fenceLevel = unit.nivel;
-                const side = plan.perimeter.sides[(unit.ruma || 1) - 1];
-                const covered = side && plan.perimeter.cells.some((cell) => cell.sideId === side.id && cell.slot === unit.columna && cell.level > fenceLevel && cell.iso !== unit.iso && fenceCellsOverlap(cell.half, unit.bayHalf));
+                const side = plan.perimeter.sides[fenceSideIndex(unit.ruma || 1)];
+                const depth = fenceDepthOf(unit.ruma || 1);
+                const covered = side && plan.perimeter.cells.some((cell) => cell.sideId === side.id && cell.slot === unit.columna && (cell.row || 1) === depth && cell.level > fenceLevel && cell.iso !== unit.iso && fenceCellsOverlap(cell.half, unit.bayHalf));
                 if (covered) throw new ConflictException(accessBlockMessage(1, 0));
               }
               const into = movesToReach(plan.zones, plan.ghosts, stacked, lado, ruma, columna, nivel, unit.iso, storedHalf, unit.type);
@@ -3264,7 +3266,7 @@ export class WarehouseService {
         cells = plan.perimeter.cells.filter((cell) => cell.iso !== iso && !dropped.has(cell.iso) && !blocked.includes(cell));
         cells.push({ sideId, slot, level, iso, ...(half ? { half } : {}), ...(depth > 1 ? { row: depth } : {}) });
         placements = sim.placements.filter((item) => item.iso !== iso && !dropped.has(item.iso));
-        placements.push({ iso, lado: FENCE_SIDE, ruma: sideIndex + 1, columna: slot, nivel: level, half });
+        placements.push({ iso, lado: FENCE_SIDE, ruma: fenceSeat(sideIndex, depth), columna: slot, nivel: level, half });
       } else throw new BadRequestException("Indica el código del contenedor.");
       const perimeter = { ...plan.perimeter, sides, cells };
       await this.prisma.appSetting.upsert({
@@ -3426,19 +3428,36 @@ export class WarehouseService {
           if (!cell.unknown) await this.clearYardSpot(tx, cell.iso, depotId);
         }
         cells = cells.filter((cell) => cell.iso !== iso && !blocked.includes(cell));
+        const seat = fenceSeat(sideIndex, depth);
+        const rivals = await tx.container.findMany({
+          where: { depotId, lado: FENCE_SIDE, columna: slot, nivel: level, iso: { not: iso }, archivedAt: null },
+          select: { iso: true, bayHalf: true, ruma: true },
+        });
+        for (const other of rivals) {
+          if (!fenceCellsOverlap(other.bayHalf, half) || fenceSideIndex(other.ruma || 1) !== sideIndex) continue;
+          const home = cells.find((cell) => cell.iso === other.iso && cell.sideId === sideId && cell.slot === slot && cell.level === level)
+            || cells.find((cell) => cell.iso === other.iso && cell.sideId === sideId && cell.slot === slot);
+          const otherDepth = home ? (home.row || 1) : fenceDepthOf(other.ruma || 1);
+          if (otherDepth === depth) {
+            await this.clearYardSpot(tx, other.iso, depotId);
+            cells = cells.filter((cell) => cell.iso !== other.iso);
+          } else if ((other.ruma || 0) !== fenceSeat(sideIndex, otherDepth)) {
+            await tx.container.update({ where: { iso: other.iso }, data: { ruma: fenceSeat(sideIndex, otherDepth) } });
+          }
+        }
         cells.push({ sideId, slot, level, iso, ...(half ? { half } : {}), ...(depth > 1 ? { row: depth } : {}) });
         if (unit.lado) {
           await tx.containerPosition.updateMany({ where: { iso, closedAt: null }, data: { closedAt: new Date() } });
         }
         await tx.container.update({
           where: { iso },
-          data: { lado: FENCE_SIDE, ruma: sideIndex + 1, columna: slot, nivel: level, bayHalf: half, physicallyReceived: true },
+          data: { lado: FENCE_SIDE, ruma: seat, columna: slot, nivel: level, bayHalf: half, physicallyReceived: true },
         });
         await tx.containerPosition.create({
-          data: { iso, depotId, lado: FENCE_SIDE, ruma: sideIndex + 1, columna: slot, nivel: level },
+          data: { iso, depotId, lado: FENCE_SIDE, ruma: seat, columna: slot, nivel: level },
         });
         await tx.containerHistory.create({
-          data: { iso, type: "Movimiento", detail: `${input.move ? "Trasladado" : "Pasó"} al cerco, lado ${side.name}, puesto ${slot}, nivel ${level}${half ? `, mitad ${half}` : ""}.` },
+          data: { iso, type: "Movimiento", detail: `${input.move ? "Trasladado" : "Pasó"} al cerco, lado ${side.name}, puesto ${slot}${depth > 1 ? `, fila ${depth}` : ""}, nivel ${level}${half ? `, mitad ${half}` : ""}.` },
         });
       }
       const perimeter = { ...plan.perimeter, sides, cells };

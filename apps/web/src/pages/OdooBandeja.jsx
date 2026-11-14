@@ -267,6 +267,7 @@ export default function OdooBandeja() {
         Un ajuste o una MO no inventa factura; usa el promedio de OC del mismo tipo/plaza.
         Si el tipo no tiene OC, cae al promedio general
         {referential?.effective != null ? ` (USD ${Number(referential.effective).toLocaleString("en-US")})` : ""}.
+        {" "}Los productos que no llevan DRY se configuran en <Link to="/app/almacen/odoo-productos">Productos de Odoo</Link>.
       </p>
       {probe && !probe.ok ? <div className="err">{probe.message}</div> : null}
       {probe?.ok ? <div className="ok-msg">Odoo conectado{probe.user?.name ? ` · ${probe.user.name}` : ""}.</div> : null}

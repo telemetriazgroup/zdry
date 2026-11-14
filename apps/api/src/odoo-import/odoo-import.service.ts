@@ -36,6 +36,14 @@ import {
 } from "../domain/odoo-lot-map";
 import { planOdooRelink } from "../domain/odoo-reconcile";
 import { freshOdooLotIds, normalizeOdooWatch, ODOO_WATCH_KEY, type OdooWatchMode } from "../domain/odoo-import-watch";
+import {
+  countCustomProducts,
+  normalizeOdooCustomProducts,
+  ODOO_CUSTOM_PRODUCTS_KEY,
+  odooNamePattern,
+  phraseHitsName,
+  type OdooCustomCount,
+} from "../domain/odoo-custom-products";
 import { equipmentTypeCode, explicitEquipmentType, OTHER_EQUIPMENT_TYPE, type TypeMaster } from "../domain/type-from-product";
 import { warehouseFromLocation } from "../domain/odoo-warehouse";
 import { listOdooLotNotes } from "../odoo/odoo-lot-photos";
@@ -321,7 +329,7 @@ export class OdooImportService {
     this.abortFlag = false;
     this.aborted.delete(run.id);
     this.runId = run.id;
-    await this.writeProgress({ status: "running", step: "lotes", current: 0, total: 5, iso: "", message: "Leyendo existencias DRY…" });
+    await this.writeProgress({ status: "running", step: "lotes", current: 0, total: 5, iso: "", message: "Leyendo existencias de Odoo…" });
     await this.logs.add(run.id, { level: "info", step: "lotes", message: `Pasada iniciada por ${user.name || "admin"}.` });
     void this.runSync(run.id, user, ip).finally(() => {
       if (this.runId === run.id) this.runId = null;
@@ -357,6 +365,92 @@ export class OdooImportService {
     });
     if (mode === "auto") void this.syncNewOnly();
     return next;
+  }
+
+  async customProducts() {
+    const stored = await this.readCustomProducts();
+    const live = await this.customLiveCounts(stored.phrases);
+    return {
+      phrases: stored.phrases,
+      rows: stored.phrases.map((phrase) => {
+        const found = stored.last.find((row) => phraseHitsName(phrase, row.phrase) && phraseHitsName(row.phrase, phrase));
+        const here = live.find((row) => row.phrase === phrase);
+        return {
+          phrase,
+          products: found?.products || 0,
+          series: found?.series || 0,
+          pending: here?.pending || 0,
+          assimilated: here?.assimilated || 0,
+          at: found?.at || null,
+        };
+      }),
+    };
+  }
+
+  async saveCustomProducts(phrases: string[], user: AuthUser, ip?: string) {
+    const next = normalizeOdooCustomProducts({ phrases });
+    if (Array.isArray(phrases) && phrases.map((item) => String(item || "").trim()).filter((item) => item && item.length < 3).length) {
+      throw new BadRequestException("Cada producto necesita al menos 3 letras.");
+    }
+    const current = await this.readCustomProducts();
+    const value = {
+      phrases: next.phrases,
+      last: current.last.filter((row) => next.phrases.some((phrase) => phraseHitsName(phrase, row.phrase) && phraseHitsName(row.phrase, phrase))),
+    };
+    await this.prisma.appSetting.upsert({
+      where: { key: ODOO_CUSTOM_PRODUCTS_KEY },
+      update: { value },
+      create: { key: ODOO_CUSTOM_PRODUCTS_KEY, value },
+    });
+    await this.audit.log({
+      user,
+      action: "odoo_custom_products",
+      entity: "AppSetting",
+      entityId: ODOO_CUSTOM_PRODUCTS_KEY,
+      after: { phrases: next.phrases },
+      ip,
+    });
+    let sync: { ok: boolean; running?: boolean; message?: string } = { ok: false, message: "No se pudo buscar en Odoo." };
+    try {
+      sync = await this.sync(user, ip);
+    } catch (e) {
+      sync = { ok: false, message: (e as Error).message || sync.message };
+    }
+    return { ...(await this.customProducts()), sync };
+  }
+
+  private async readCustomProducts() {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: ODOO_CUSTOM_PRODUCTS_KEY } });
+    return normalizeOdooCustomProducts(row?.value);
+  }
+
+  private async customLiveCounts(phrases: string[]) {
+    if (!phrases.length) return [];
+    const rows = await this.prisma.odooLotCandidate.findMany({
+      where: { status: { in: ["pending", "qty_anomaly", "assimilated"] } },
+      select: { productName: true, status: true },
+    });
+    return phrases.map((phrase) => {
+      const hit = rows.filter((row) => phraseHitsName(phrase, row.productName));
+      return {
+        phrase,
+        pending: hit.filter((row) => row.status !== "assimilated").length,
+        assimilated: hit.filter((row) => row.status === "assimilated").length,
+      };
+    });
+  }
+
+  private async rememberCustomCounts(counts: OdooCustomCount[]) {
+    const current = await this.readCustomProducts();
+    const at = new Date().toISOString();
+    const last = counts
+      .filter((row) => current.phrases.some((phrase) => phraseHitsName(phrase, row.phrase) && phraseHitsName(row.phrase, phrase)))
+      .map((row) => ({ ...row, at }));
+    await this.prisma.appSetting.upsert({
+      where: { key: ODOO_CUSTOM_PRODUCTS_KEY },
+      update: { value: { phrases: current.phrases, last } },
+      create: { key: ODOO_CUSTOM_PRODUCTS_KEY, value: { phrases: current.phrases, last } },
+    });
   }
 
   async syncNewIfAuto() {
@@ -404,9 +498,8 @@ export class OdooImportService {
     const products = loaded.products;
     const productIds = products.map((p) => Number(p.id));
     if (!productIds.length) {
-      const empty = loaded.missingCategory
-        ? "Odoo no tiene la categoría Contenedor Dry ni productos con DRY en el nombre."
-        : "No hay productos en Contenedor Dry ni con DRY en el nombre.";
+      const customNote = await this.publishCustomCounts(runId, products, []);
+      const empty = [this.emptyProductMessage(loaded.missingCategory), customNote].filter(Boolean).join(" ");
       await this.logs.add(runId, { level: "warn", step: "lotes", message: empty });
       await this.logs.finish(runId, empty);
       await this.writeProgress({ status: "done", step: "listo", current: 5, total: 5, message: empty });
@@ -421,6 +514,8 @@ export class OdooImportService {
       ["lot_id", "!=", false],
       ["location_id.usage", "=", "internal"],
     ], ["id", "lot_id", "location_id", "quantity", "product_id"]);
+    if (this.isAborted(runId)) return;
+    const customNote = await this.publishCustomCounts(runId, products, quants);
     if (this.isAborted(runId)) return;
 
     const lotIds = [...new Set(quants.map((q) => this.relId(q.lot_id)).filter((n): n is number => n > 0))];
@@ -628,6 +723,7 @@ export class OdooImportService {
       originHits ? `${originHits} lote(s) con origen (ajuste/OC/MO) clasificado.` : "",
       fabricationHits ? `${fabricationHits} lote(s) con precursor de fabricación.` : "",
       isoReview ? `${isoReview} serial(es) por revisar ISO.` : "",
+      customNote,
       "Odoo solo se escribe cuando guardas un cambio.",
     ]
       .filter(Boolean)
@@ -651,9 +747,8 @@ export class OdooImportService {
       const products = loaded.products;
       const productIds = products.map((p) => Number(p.id));
       if (!productIds.length) {
-        const empty = loaded.missingCategory
-          ? "Odoo no tiene la categoría Contenedor Dry ni productos con DRY en el nombre."
-          : "No hay productos en Contenedor Dry ni con DRY en el nombre.";
+        const customNote = await this.publishCustomCounts(runId, products, []);
+        const empty = [this.emptyProductMessage(loaded.missingCategory), customNote].filter(Boolean).join(" ");
         await this.prisma.odooAssimilateRun.delete({ where: { id: runId } }).catch(() => undefined);
         await this.writeProgress({ status: "idle", step: "", current: 0, total: 0, iso: "", message: empty });
         await this.touchWatch({ lastRunAt: new Date().toISOString(), lastMessage: empty, lastNew: 0, lastAssimilated: 0 });
@@ -666,6 +761,8 @@ export class OdooImportService {
         [["product_id", "in", productIds], ["quantity", ">", 0], ["lot_id", "!=", false], ["location_id.usage", "=", "internal"]],
         ["id", "lot_id", "location_id", "quantity", "product_id"],
       );
+      if (this.isAborted(runId)) return;
+      await this.publishCustomCounts(runId, products, quants);
       if (this.isAborted(runId)) return;
       const lotIds = [...new Set(quants.map((q) => this.relId(q.lot_id)).filter((n): n is number => n > 0))];
       const [knownCands, knownBoxes] = await Promise.all([
@@ -4269,8 +4366,35 @@ export class OdooImportService {
     return out;
   }
 
-  /** Categoría «Contenedor Dry» y cualquier producto cuyo nombre lleve DRY, aunque la categoría sea otra. */
+  private emptyProductMessage(missingCategory: boolean) {
+    return missingCategory
+      ? "Odoo no tiene la categoría Contenedor Dry, ni productos con DRY en el nombre, ni los productos personalizados."
+      : "No hay productos en Contenedor Dry, con DRY en el nombre, ni en los personalizados.";
+  }
+
+  private async publishCustomCounts(runId: string, products: Record<string, unknown>[], quants: Record<string, unknown>[]) {
+    const phrases = (await this.readCustomProducts()).phrases;
+    if (!phrases.length) return "";
+    const counts = countCustomProducts(
+      products.map((row) => ({ id: Number(row.id), name: String(row.name || "") })),
+      quants
+        .map((row) => ({ productId: this.relId(row.product_id), lotId: this.relId(row.lot_id) }))
+        .filter((row) => row.productId > 0 && row.lotId > 0),
+      phrases,
+    );
+    await this.rememberCustomCounts(counts);
+    const message = `Personalizados: ${counts
+      .map((row) => (row.products || row.series
+        ? `"${row.phrase}": ${row.products} producto(s) y ${row.series} serie(s).`
+        : `"${row.phrase}": no está en Odoo.`))
+      .join(" ")}`;
+    await this.logs.add(runId, { level: "ok", step: "lotes", message }).catch(() => undefined);
+    return message;
+  }
+
+  /** Categoría «Contenedor Dry», nombre con DRY, y los productos personalizados configurados. */
   private async loadDryProducts() {
+    const custom = (await this.readCustomProducts()).phrases;
     const categories = await this.odoo.searchRead(
       "product.category",
       [["name", "=", DRY_CATEGORY_NAME]],
@@ -4293,6 +4417,11 @@ export class OdooImportService {
       push(await this.searchAll("product.product", [["categ_id", "child_of", id]], fields));
     }
     push(await this.searchAll("product.product", [["name", "ilike", "dry"]], fields));
+    for (const phrase of custom) {
+      const pattern = odooNamePattern(phrase);
+      if (pattern.replace(/_/g, "").length < 3) continue;
+      push(await this.searchAll("product.product", [["name", "ilike", pattern]], fields));
+    }
     return { products, missingCategory: !ids.length && products.length === 0 };
   }
 

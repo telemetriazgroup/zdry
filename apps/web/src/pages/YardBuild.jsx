@@ -489,7 +489,7 @@ function PerimeterEditor({ draft, setDraft, busy, units, onSave, onFence, onWarn
   function askRemoveSide(side, index) {
     const name = side.name || `lado ${index + 1}`;
     const onSide = cells.filter((item) => item.sideId === side.id && String(item.iso || "").trim());
-    const placed = (units || []).filter((unit) => unit.lado === "CERCO" && Number(unit.ruma) === index + 1 && !onSide.some((item) => item.iso === unit.iso));
+    const placed = (units || []).filter((unit) => unit.lado === "CERCO" && (Math.max(1, Number(unit.ruma) || 1) - 1) % 10 === index && !onSide.some((item) => item.iso === unit.iso));
     if (onSide.length || placed.length) {
       setAsk({
         title: "No se puede quitar el lado",

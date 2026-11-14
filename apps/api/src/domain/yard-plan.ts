@@ -144,6 +144,21 @@ export type YardFenceCell = {
 
 export const FENCE_SIDE = "CERCO";
 
+/** La fila del cerco entra en la ruma: 1–8 es la fila 1, 11–18 la fila 2 y 21–28 la fila 3. */
+export function fenceSeat(sideIndex: number, row = 1) {
+  const depth = row === 2 || row === 3 ? row : 1;
+  const index = Math.max(0, Math.min(7, Math.round(sideIndex) || 0));
+  return index + 1 + (depth - 1) * 10;
+}
+
+export function fenceSideIndex(ruma: number) {
+  return (Math.max(1, Math.round(Number(ruma) || 1)) - 1) % 10;
+}
+
+export function fenceDepthOf(ruma: number) {
+  return Math.floor((Math.max(1, Math.round(Number(ruma) || 1)) - 1) / 10) + 1;
+}
+
 const LEFT_STATUSES = new Set(["Vendido", "Alquilado", "Retirado por cliente"]);
 
 export function leftToCustomer(status?: string | null) {
