@@ -51,7 +51,11 @@ export function publishedStockWhere() {
     physicallyReceived: true,
     status: { in: ["Disponible", "Reservado"] },
     mediaStatus: "aprobado",
-    NOT: pendingValuationWhere(),
+    lado: { not: null },
+    ruma: { not: null },
+    columna: { not: null },
+    nivel: { not: null },
+    NOT: [pendingValuationWhere(), { lado: "PASILLO" }],
   };
 }
 
@@ -61,6 +65,87 @@ export const UNRECONCILED_PUBLISH_MESSAGE =
 export const LEFT_PUBLISH_MESSAGE =
   "Ya vendida o con salida: no se publica. Abre la fila para ver sus datos.";
 
+export const MISSING_LOCATION_PUBLISH_MESSAGE =
+  "No se puede publicar porque falta definir ubicación.";
+
+export const PREPUBLISHED_STATUS = "prepublicado";
+
+export const PREPUBLISHED_WAITING_MESSAGE =
+  "Prepublicada. Falta confirmar la posición en un depósito. Se publica sola cuando el puesto quede definido.";
+
+export const LOCATION_PUBLISHED_MESSAGE =
+  "Se publicó al confirmar la posición en el depósito.";
+
+export type CatalogHoldPatch = {
+  mediaStatus: "aprobado" | "prepublicado" | "oculto";
+  clearApproval: boolean;
+  detail: string;
+};
+
+/** Publicado con fotos y sin puesto queda prepublicado. Al confirmar el puesto vuelve a publicado. Sin fotos, se oculta. */
+export function catalogHoldPatch(c: {
+  mediaStatus?: string | null;
+  photoCount: number;
+  lado?: string | null;
+  ruma?: number | null;
+  columna?: number | null;
+  nivel?: number | null;
+  status?: string | null;
+  gateOut?: boolean | null;
+  commercialStatus?: string | null;
+}): CatalogHoldPatch | null {
+  const left = c.status === "Vendido" || !!c.gateOut || c.commercialStatus === "vendido";
+  if (left) return null;
+  const located = hasCatalogLocation(c);
+  const photos = Number(c.photoCount) >= 1;
+  const status = c.mediaStatus || "";
+  if (located && status === PREPUBLISHED_STATUS && photos) {
+    return { mediaStatus: "aprobado", clearApproval: false, detail: LOCATION_PUBLISHED_MESSAGE };
+  }
+  if (!located && status === "aprobado" && photos) {
+    return { mediaStatus: PREPUBLISHED_STATUS, clearApproval: false, detail: PREPUBLISHED_WAITING_MESSAGE };
+  }
+  if (!located && (status === "aprobado" || status === PREPUBLISHED_STATUS) && !photos) {
+    return { mediaStatus: "oculto", clearApproval: true, detail: `Se quitó del catálogo. ${MISSING_LOCATION_PUBLISH_MESSAGE}` };
+  }
+  return null;
+}
+
+/** Recupera un publicado con fotos que el barrido anterior pasó a oculto solo por falta de ubicación. */
+export function recoverPrepublished(details: string[]): boolean {
+  let published = false;
+  let waiting = false;
+  for (const raw of details) {
+    const detail = String(raw || "");
+    if (detail.includes("Ficha publicada") || detail.includes(LOCATION_PUBLISHED_MESSAGE)) {
+      published = true;
+      waiting = false;
+    }
+    if (detail.includes("Ficha oculta")) {
+      published = false;
+      waiting = false;
+    }
+    if (detail.includes("Se quitó del catálogo") && detail.includes("ubicación")) waiting = published;
+    if (detail.startsWith("Prepublicada.")) {
+      published = true;
+      waiting = true;
+    }
+  }
+  return published && waiting;
+}
+
+/** Puesto en una zona o en el cerco de un depósito. El pasillo y sin sitio no alcanzan. */
+export function hasCatalogLocation(c: {
+  lado?: string | null;
+  ruma?: number | null;
+  columna?: number | null;
+  nivel?: number | null;
+}): boolean {
+  const lado = String(c.lado || "").trim();
+  if (!lado || lado === "PASILLO") return false;
+  return Number(c.ruma) >= 1 && Number(c.columna) >= 1 && Number(c.nivel) >= 1;
+}
+
 export function catalogPublishBlock(c: {
   odooPoId?: number | null;
   status?: string | null;
@@ -68,8 +153,13 @@ export function catalogPublishBlock(c: {
   intakeType?: string | null;
   gateOut?: boolean | null;
   commercialStatus?: string | null;
+  lado?: string | null;
+  ruma?: number | null;
+  columna?: number | null;
+  nivel?: number | null;
 }): string | null {
   if (c.status === "Vendido" || c.gateOut || c.commercialStatus === "vendido") return LEFT_PUBLISH_MESSAGE;
+  if (!hasCatalogLocation(c)) return MISSING_LOCATION_PUBLISH_MESSAGE;
   return isPendingValuation(c) ? UNRECONCILED_PUBLISH_MESSAGE : null;
 }
 

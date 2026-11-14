@@ -1164,8 +1164,8 @@ export default function YardScene({ zones, units, ghosts, perimeter, typeColor, 
             </div>
             <p>{picked.where}</p>
             {picked.note ? <p>{picked.note}</p> : null}
-            <p>{picked.access}</p>
-            <p>{picked.cost}</p>
+            {picked.access ? <p>{picked.access}</p> : null}
+            {picked.cost ? <p>{picked.cost}</p> : null}
             {picked.unknown ? <p>Este hueco no está en el catálogo.</p> : <p className="yard-float-note">Esa referencia de movimientos queda en el catálogo comercial.</p>}
             {(() => {
               const pickedUnit = picked && !picked.unknown && !picked.empty

@@ -65,7 +65,6 @@ export const ROLE_NAV = {
     { to: "/app/almacen/recepcion", label: "Recepción" },
     { to: "/app/almacen/visitas", label: "Conductores" },
     { to: "/app/almacen/odoo", label: "Odoo — regularizar" },
-    { to: "/app/almacen/odoo-productos", label: "Productos de Odoo" },
     { to: "/app/almacen/campo", label: "Patio — campo" },
     { to: "/app/almacen/patio", label: "Patio" },
     { to: "/app/almacen/equipos", label: "Equipos que no son DRY" },

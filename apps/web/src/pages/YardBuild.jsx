@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
-import { hasRole, useAuth } from "../auth.jsx";
+import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
 import { NoticeModal } from "../notice.jsx";
 import GearMedia from "./GearMedia.jsx";
 import { boxColor, fenceBays } from "../yard.js";
@@ -1158,7 +1158,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         cost,
         blocked: reach.total > 0,
         blockers: reach.blockers,
-        note: `${occupant.status || ""}. ${access} ${cost}`,
+        note: occupant.status || "",
       };
     }
     if (!ghost) return null;
@@ -1175,8 +1175,8 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       blocked: reach.total > 0,
       blockers: reach.blockers,
       note: named
-        ? `${ghost.note ? `${ghost.note}. ` : ""}Equipo ajeno a ZDRY, ${feetName(ghost.typeCode)}. ${access} ${cost}`
-        : `Desconocido. ${access} ${cost}`,
+        ? `${ghost.note ? `${ghost.note}. ` : ""}Equipo ajeno a ZDRY, ${feetName(ghost.typeCode)}.`
+        : "Desconocido.",
       splittable: !named && !ghost.half,
       ghost: { zoneId: zone.id, row, col, level, ...(ghost.half ? { half: ghost.half } : {}) },
     };
@@ -2055,7 +2055,9 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             <div>{picked.typeLabel}</div>
           </div>
           <div>{picked.where}</div>
-          <div>{picked.note}</div>
+          {picked.note ? <div>{picked.note}</div> : null}
+          {picked.access ? <div>{picked.access}</div> : null}
+          {picked.cost ? <div>{picked.cost}</div> : null}
           {(() => {
             const unit = layout.units.find((item) => item.iso === picked.code);
             const ghost = picked.ghost ? ghosts.find((item) => item.zoneId === picked.ghost.zoneId && item.row === picked.ghost.row && item.col === picked.ghost.col && item.level === picked.ghost.level && (item.half || "") === (picked.ghost.half || "")) : null;
@@ -2163,7 +2165,9 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               ) : <span />}
             </div>
           ))}
-          <ZoneShape zones={(layout.plan?.zones?.length ? layout.plan.zones : draft.zones)} units={layout.units} ghosts={layout.plan?.ghosts || draft.ghosts} depotId={layout.depotId} busy={busy} onDone={onReload} onWarn={setError} />
+          {isSuperadmin(user) ? (
+            <ZoneShape zones={(layout.plan?.zones?.length ? layout.plan.zones : draft.zones)} units={layout.units} ghosts={layout.plan?.ghosts || draft.ghosts} depotId={layout.depotId} busy={busy} onDone={onReload} onWarn={setError} />
+          ) : null}
           <div className="action-row">
             <button className="btn-ghost" type="button" onClick={() => {
               const seat = nextSeat(draft.zones);
@@ -2272,16 +2276,6 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             {selectedIso ? ` Seleccionado: ${selectedIso}.` : ""}
             {bulkOn ? ` Elegidos: ${bulkItems.length}.` : ""}
           </p>
-          <div className="action-row">
-            <button className={bulkOn ? "btn-primary" : "btn-ghost"} type="button" onClick={() => { setBulkOn((on) => !on); setBulkItems([]); }}>{bulkOn ? "Dejar de elegir" : "Elegir varios"}</button>
-            {bulkOn ? (
-              <>
-                <button className="btn-ghost" type="button" onClick={() => askBulk("selección")}>Liberar selección</button>
-                <button className="btn-ghost" type="button" onClick={() => askBulk("columna")}>Liberar columna</button>
-                <button className="btn-ghost" type="button" onClick={() => askBulk("zona")}>Liberar zona</button>
-              </>
-            ) : null}
-          </div>
           <div className="guest-form">
             <label className="zone-field">Código que no es ZDRY
               <input aria-label="Código del equipo" value={guestCode} onChange={(e) => setGuestCode(e.target.value.toUpperCase())} placeholder="Código" />
@@ -2436,6 +2430,18 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               editFenceGuest(cell, side, slot, level, half, row);
             }}
           />
+          {mode === "regularizar" ? (
+            <div className="action-row yard-bulk-row">
+              <button className={bulkOn ? "btn-primary" : "btn-ghost"} type="button" onClick={() => { setBulkOn((on) => !on); setBulkItems([]); }}>{bulkOn ? "Dejar de elegir" : "Elegir varios"}</button>
+              {bulkOn ? (
+                <>
+                  <button className="btn-ghost" type="button" onClick={() => askBulk("selección")}>Liberar selección</button>
+                  <button className="btn-ghost" type="button" onClick={() => askBulk("columna")}>Liberar columna</button>
+                  <button className="btn-ghost" type="button" onClick={() => askBulk("zona")}>Liberar zona</button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
           <div className="yard-plan-2d">
             {Array.from({ length: gridRows }, (_, rowIndex) => {
               const gridRow = rowIndex + 1;

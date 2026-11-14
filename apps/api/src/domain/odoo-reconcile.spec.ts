@@ -1,4 +1,4 @@
-import { assertConfirmMatch, catalogPublishBlock, isPendingValuation, pendingValuationWhere, pickReconcileCandidate, planOdooRelink, proposeMatch, publishedStockWhere, reconcileContainerPatch } from "./odoo-reconcile";
+import { assertConfirmMatch, catalogHoldPatch, catalogPublishBlock, isPendingValuation, pendingValuationWhere, pickReconcileCandidate, planOdooRelink, proposeMatch, publishedStockWhere, reconcileContainerPatch, recoverPrepublished } from "./odoo-reconcile";
 
 const BMOU = { iso: "BMOU433548-9" };
 const IN_06302 = {
@@ -61,12 +61,63 @@ describe("isPendingValuation", () => {
     expect(isPendingValuation({ odooPoId: 12, invoicePending: true, intakeType: "pendiente_factura" })).toBe(false);
     expect(isPendingValuation({ odooPoId: null, invoicePending: true, intakeType: "ajuste_odoo" })).toBe(false);
     expect(isPendingValuation({ odooPoId: null, invoicePending: false, intakeType: "compra" })).toBe(false);
-    expect(catalogPublishBlock({ odooPoId: null, invoicePending: true, intakeType: "pendiente_factura", status: "Disponible" })).toMatch(/no se publica/);
-    expect(publishedStockWhere().NOT).toEqual(pendingValuationWhere());
+    expect(catalogPublishBlock({ odooPoId: null, invoicePending: true, intakeType: "pendiente_factura", status: "Disponible", lado: "Zona A", ruma: 1, columna: 1, nivel: 1 })).toMatch(/no se publica/);
+    expect(publishedStockWhere().NOT).toEqual([pendingValuationWhere(), { lado: "PASILLO" }]);
     expect(publishedStockWhere().mediaStatus).toBe("aprobado");
-    expect(catalogPublishBlock({ odooPoId: 12, invoicePending: true, intakeType: "compra" })).toBeNull();
+    expect(catalogPublishBlock({ odooPoId: 12, invoicePending: true, intakeType: "compra", lado: "Zona A", ruma: 1, columna: 1, nivel: 1 })).toBeNull();
+    expect(catalogPublishBlock({ odooPoId: 12, invoicePending: true, intakeType: "compra", lado: "Zona A", ruma: 1, columna: 1, nivel: 1, status: "Disponible" })).toBeNull();
+    expect(catalogPublishBlock({ odooPoId: 12, intakeType: "compra", status: "Disponible" })).toMatch(/ubicación/);
+    expect(catalogPublishBlock({ odooPoId: 12, intakeType: "compra", status: "Disponible", lado: "PASILLO", ruma: 1, columna: 1, nivel: 1 })).toMatch(/ubicación/);
     expect(catalogPublishBlock({ status: "Vendido", odooPoId: 12, intakeType: "compra" })).toMatch(/salida/);
     expect(catalogPublishBlock({ status: "Disponible", gateOut: true, odooPoId: 12, intakeType: "compra" })).toMatch(/salida/);
+  });
+});
+
+describe("catalogHoldPatch", () => {
+  const placed = { lado: "Zona A", ruma: 1, columna: 2, nivel: 1, status: "Disponible" };
+
+  it("publicado con fotos y sin puesto queda prepublicado", () => {
+    expect(catalogHoldPatch({ mediaStatus: "aprobado", photoCount: 2, status: "Disponible" })).toMatchObject({
+      mediaStatus: "prepublicado",
+      clearApproval: false,
+    });
+    expect(catalogHoldPatch({ mediaStatus: "aprobado", photoCount: 1, status: "Disponible", lado: "PASILLO", ruma: 1, columna: 1, nivel: 1 })?.mediaStatus).toBe("prepublicado");
+  });
+
+  it("publicado sin fotos y sin puesto se oculta", () => {
+    expect(catalogHoldPatch({ mediaStatus: "aprobado", photoCount: 0, status: "Disponible" })).toMatchObject({
+      mediaStatus: "oculto",
+      clearApproval: true,
+    });
+  });
+
+  it("prepublicado con puesto y fotos vuelve a publicado", () => {
+    expect(catalogHoldPatch({ mediaStatus: "prepublicado", photoCount: 3, ...placed })).toMatchObject({
+      mediaStatus: "aprobado",
+      clearApproval: false,
+    });
+  });
+
+  it("nunca publicado no cambia al definir o no la ubicación", () => {
+    expect(catalogHoldPatch({ mediaStatus: "pendiente", photoCount: 2, status: "Disponible" })).toBeNull();
+    expect(catalogHoldPatch({ mediaStatus: "pendiente", photoCount: 2, ...placed })).toBeNull();
+    expect(catalogHoldPatch({ mediaStatus: "oculto", photoCount: 2, ...placed })).toBeNull();
+  });
+
+  it("la venta no se republica desde este paso", () => {
+    expect(catalogHoldPatch({ mediaStatus: "prepublicado", photoCount: 2, ...placed, status: "Vendido" })).toBeNull();
+  });
+
+  it("recupera el publicado que se ocultó solo por falta de ubicación", () => {
+    expect(recoverPrepublished([
+      "Ficha publicada en el catálogo por Ana.",
+      "Se quitó del catálogo. No se puede publicar porque falta definir ubicación.",
+    ])).toBe(true);
+    expect(recoverPrepublished([
+      "Ficha publicada en el catálogo por Ana.",
+      "Ficha oculta del catálogo por Ana.",
+    ])).toBe(false);
+    expect(recoverPrepublished(["Se quitó del catálogo. No se puede publicar porque falta definir ubicación."])).toBe(false);
   });
 });
 

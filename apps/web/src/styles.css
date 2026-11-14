@@ -2108,6 +2108,7 @@ button.tile.dry-click { display: block; }
 .yard-info { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafc; }
 .yard-info b { font-size: 16px; color: var(--navy, #12203a); }
 .yard-plan-2d { margin-top: 12px; }
+.yard-bulk-row { margin: 16px 0 0; }
 .yard-plan-line { display: flex; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
 .yard-plan-slot { display: flex; align-items: flex-start; }
 .yard-aisle-gap { width: 42px; align-self: stretch; display: flex; align-items: center; justify-content: center; }

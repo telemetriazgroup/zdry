@@ -1,6 +1,6 @@
 /** Publicación de ficha multimedia al catálogo. Independiente del rechazo por foto. */
 
-export const MEDIA_STATUSES = ["pendiente", "aprobado", "oculto"] as const;
+export const MEDIA_STATUSES = ["pendiente", "aprobado", "prepublicado", "oculto"] as const;
 export type MediaStatus = (typeof MEDIA_STATUSES)[number];
 
 export const MEDIA_EDITOR_ROLES = ["admin", "almacen", "compras", "gerente"] as const;

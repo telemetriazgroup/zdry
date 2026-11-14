@@ -14,6 +14,7 @@ export class YardController {
   constructor(private readonly warehouse: WarehouseService) {}
 
   @Post("resize")
+  @Roles("superadmin")
   resize(
     @Body() body: { depotId?: string; zoneId?: string; axis?: "fila" | "columna"; op?: "agregar" | "quitar"; side?: "adelante" | "atras" | "izquierda" | "derecha"; index?: number },
     @CurrentUser() user: AuthUser,

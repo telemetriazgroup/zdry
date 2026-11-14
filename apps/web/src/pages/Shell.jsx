@@ -36,6 +36,7 @@ import { OdooLinkModal, OdooNavStatus, useOdooLink } from "../odoo-link.jsx";
 const SIDEBAR_KEY = "zdry.sidebarCollapsed";
 
 function allowed(nav, pathname, role) {
+  if (pathname.startsWith("/app/almacen/odoo-productos")) return role === "superadmin";
   if (role === "superadmin" && pathname.startsWith("/app")) return true;
   if ((role === "admin" || role === "compras") && pathname.startsWith("/app/compras")) return true;
   if (role === "coordinador" && pathname.startsWith("/app/compras/conciliar")) return true;

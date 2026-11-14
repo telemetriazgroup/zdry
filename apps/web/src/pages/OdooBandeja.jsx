@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, apiBlob } from "../api.js";
-import { useAuth } from "../auth.jsx";
+import { isSuperadmin, useAuth } from "../auth.jsx";
 import { costLabel, originBadge } from "../odoo-origin.js";
 import OdooLotFicha, { SyncIcon } from "./OdooLotFicha.jsx";
 
@@ -267,7 +267,7 @@ export default function OdooBandeja() {
         Un ajuste o una MO no inventa factura; usa el promedio de OC del mismo tipo/plaza.
         Si el tipo no tiene OC, cae al promedio general
         {referential?.effective != null ? ` (USD ${Number(referential.effective).toLocaleString("en-US")})` : ""}.
-        {" "}Los productos que no llevan DRY se configuran en <Link to="/app/almacen/odoo-productos">Productos de Odoo</Link>.
+        {isSuperadmin(user) ? <>{" "}Los productos que no llevan DRY se configuran en <Link to="/app/almacen/odoo-productos">Productos de Odoo</Link>.</> : null}
       </p>
       {probe && !probe.ok ? <div className="err">{probe.message}</div> : null}
       {probe?.ok ? <div className="ok-msg">Odoo conectado{probe.user?.name ? ` · ${probe.user.name}` : ""}.</div> : null}

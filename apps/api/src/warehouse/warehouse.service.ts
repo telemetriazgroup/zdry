@@ -69,6 +69,7 @@ import { YARD_SCENARIOS, yardScenario } from "../domain/yard-scenarios";
 import { YARD_RUMA_TEMPLATES, fillPerimeter, fillRumaTemplate, yardRumaTemplate } from "../domain/yard-rumas";
 import { readMovementPolicy } from "../domain/freight-stub";
 import { PHOTO_STATUS_ACTIVE, PHOTO_STATUS_REJECTED } from "../domain/catalog-media";
+import { catalogHoldPatch } from "../domain/odoo-reconcile";
 import { OdooClient } from "../odoo/odoo.client";
 import { limaDayRange, listOdooLotNotes } from "../odoo/odoo-lot-photos";
 import { listOrCacheOdooPhotos, openOrCacheOdooPhoto } from "../odoo-import/odoo-photo-cache.store";
@@ -306,6 +307,7 @@ export class WarehouseService {
     user: AuthUser,
     ip?: string,
   ) {
+    if (!isSuperadmin(user?.role)) throw new ForbiddenException("Solo el superadmin modifica el tamaño de una zona.");
     const depotId = input.depotId || "";
     if (!depotId) throw new BadRequestException("El depósito es obligatorio.");
     if (isYardDemo(depotId)) this.assertYardDemo(user);
@@ -483,6 +485,7 @@ export class WarehouseService {
             });
             placed += 1;
           }
+          await this.applyCatalogHold(tx, units.map((unit) => unit.iso));
           await tx.appSetting.upsert({
             where: { key: yardPlanKey(depotId) },
             update: { value: loaded.plan },
@@ -549,6 +552,7 @@ export class WarehouseService {
           data: { iso: unit.iso, type: "Movimiento", detail: `Volvió a sin sitio porque se quitó la zona ${unit.lado}.` },
         });
       }
+      await this.applyCatalogHold(tx, units.map((unit) => unit.iso));
     });
   }
 
@@ -1884,6 +1888,7 @@ export class WarehouseService {
       where: { iso: c.iso },
       data: { depotId: depot.id, lado: null, ruma: null, columna: null, nivel: null, bayHalf: null },
     });
+    await this.applyCatalogHold(this.prisma, [c.iso]);
     await this.prisma.containerHistory.create({
       data: {
         iso: c.iso,
@@ -3297,6 +3302,7 @@ export class WarehouseService {
           await tx.containerPosition.create({
             data: { iso: unit.iso, depotId, lado, ruma, columna, nivel },
           });
+          await this.applyCatalogHold(tx, [unit.iso]);
           let accessNote = "";
           if (zone && input.regularize) {
             const cleared = plan.ghosts.filter(
@@ -3670,6 +3676,7 @@ export class WarehouseService {
         await tx.containerPosition.create({
           data: { iso, depotId, lado: FENCE_SIDE, ruma: seat, columna: slot, nivel: level },
         });
+        await this.applyCatalogHold(tx, [iso]);
         await tx.containerHistory.create({
           data: { iso, type: "Movimiento", detail: `${input.move ? "Trasladado" : "Pasó"} al cerco, lado ${side.name}, puesto ${slot}${depth > 1 ? `, fila ${depth}` : ""}, nivel ${level}${half ? `, mitad ${half}` : ""}.` },
         });
@@ -3728,9 +3735,49 @@ export class WarehouseService {
     return saved;
   }
 
+  private async applyCatalogHold(
+    db: Pick<Prisma.TransactionClient, "container" | "containerHistory">,
+    isos: string[],
+  ) {
+    const unique = [...new Set(isos.map((iso) => String(iso || "").trim()).filter(Boolean))];
+    if (!unique.length) return;
+    const rows = await db.container.findMany({
+      where: { iso: { in: unique }, archivedAt: null },
+      select: {
+        iso: true,
+        mediaStatus: true,
+        mediaApprovedAt: true,
+        lado: true,
+        ruma: true,
+        columna: true,
+        nivel: true,
+        status: true,
+        gateOut: true,
+        commercialStatus: true,
+        photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { id: true } },
+      },
+    });
+    for (const row of rows) {
+      const patch = catalogHoldPatch({ ...row, photoCount: row.photos.length });
+      if (!patch || patch.mediaStatus === row.mediaStatus) continue;
+      await db.container.update({
+        where: { iso: row.iso },
+        data: {
+          mediaStatus: patch.mediaStatus,
+          ...(patch.clearApproval ? { mediaApprovedAt: null } : {}),
+          ...(patch.mediaStatus === "aprobado" && !row.mediaApprovedAt ? { mediaApprovedAt: new Date() } : {}),
+        },
+      });
+      await db.containerHistory.create({
+        data: { iso: row.iso, type: "Catálogo", detail: patch.detail },
+      });
+    }
+  }
+
   private async clearYardSpot(tx: Prisma.TransactionClient, iso: string, depotId: string) {
     await tx.containerPosition.updateMany({ where: { iso, closedAt: null }, data: { closedAt: new Date() } });
     await tx.container.update({ where: { iso }, data: { lado: null, ruma: null, columna: null, nivel: null, bayHalf: null } });
+    await this.applyCatalogHold(tx, [iso]);
     await tx.containerHistory.create({ data: { iso, type: "Movimiento", detail: "Salió del cerco y quedó sin posición." } });
     void depotId;
   }
@@ -3819,6 +3866,7 @@ export class WarehouseService {
             data: { iso: unit.iso, type: "Movimiento", detail: `Devuelto a sin posición. Salía de ${posLabel(unit)}.` },
           });
         }
+        await this.applyCatalogHold(tx, leaving.map((unit) => unit.iso));
         const remaining = await tx.container.findMany({
           where: { depotId, lado: { not: null }, archivedAt: null },
           select: { iso: true, type: true, lado: true, ruma: true, columna: true, nivel: true, bayHalf: true },
@@ -3901,6 +3949,7 @@ export class WarehouseService {
               detail: `Devuelto a sin posición al reiniciar el depósito. Salía de ${posLabel(row)}.`,
             })),
           });
+          await this.applyCatalogHold(tx, rows.map((row) => row.iso));
         }
         const plan = normalizeYardPlan((await tx.appSetting.findUnique({ where: { key: yardPlanKey(depotId) } }))?.value);
         await tx.appSetting.upsert({
@@ -3972,6 +4021,7 @@ export class WarehouseService {
           where: { iso: unit.iso },
           data: { lado: nextSide, ruma: null, columna: null, nivel: null, bayHalf: null },
         });
+        await this.applyCatalogHold(tx, [unit.iso]);
         const remaining = await tx.container.findMany({
           where: { depotId, lado: { not: null }, archivedAt: null },
           select: { iso: true, type: true, lado: true, ruma: true, columna: true, nivel: true, bayHalf: true },

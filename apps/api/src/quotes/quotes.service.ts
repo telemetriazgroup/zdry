@@ -59,7 +59,7 @@ import { mediaExtension, zipStored } from "../domain/zip-store";
 import { CATALOG_COMMERCE_KEY, normalizeCatalogCommerce, publicQuotesBlockedMessage } from "../domain/catalog-commerce";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { isOwnSaleStock } from "../domain/iso6346";
-import { isPendingValuation, publishedStockWhere } from "../domain/odoo-reconcile";
+import { hasCatalogLocation, isPendingValuation, publishedStockWhere } from "../domain/odoo-reconcile";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import {
@@ -262,6 +262,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       c.physicallyReceived &&
       (c.status === "Disponible" || c.status === "Reservado") &&
       isMediaApproved(c.mediaStatus) &&
+      hasCatalogLocation(c) &&
       !isPendingValuation(c)
     );
   }

@@ -141,11 +141,13 @@ export class OdooImportController {
   }
 
   @Get("custom-products")
+  @Roles("superadmin")
   customProducts() {
     return this.svc.customProducts();
   }
 
   @Put("custom-products")
+  @Roles("superadmin")
   saveCustomProducts(@Body() body: { phrases?: string[] }, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.svc.saveCustomProducts(Array.isArray(body?.phrases) ? body.phrases : [], user, req.ip);
   }

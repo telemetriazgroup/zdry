@@ -45,6 +45,7 @@ const GRADES = [
 
 const STATUS = {
   pendiente: { label: "Pendiente de publicación", color: "#c9720b" },
+  prepublicado: { label: "Prepublicada", color: "#c9720b" },
   aprobado: { label: "Visible en catálogo", color: "#2f9e44" },
   oculto: { label: "Oculta del catálogo", color: "#5c6370" },
   rechazado: { label: "Oculta del catálogo", color: "#5c6370" },
@@ -65,7 +66,12 @@ function hardBlock(row) {
   return "";
 }
 
+function waitingSeat(row) {
+  return row?.mediaStatus === "prepublicado" && !row.leftCustomer && row.status !== "Vendido" && !row.awaitingReconcile;
+}
+
 function catalogGroup(row) {
+  if (waitingSeat(row)) return "por publicar";
   if (hardBlock(row)) return "bloqueadas";
   if (row.mediaStatus === "aprobado") return "publicadas";
   if (Number(row.photoCount) > 0) return "por publicar";
@@ -74,6 +80,9 @@ function catalogGroup(row) {
 
 function photoState(row) {
   const n = Number(row?.photoCount) || 0;
+  if (waitingSeat(row)) {
+    return { text: `${n} · prepublicada`, color: "#c9720b", title: "Prepublicada. Falta confirmar la posición en un depósito. Se publica sola cuando el puesto quede definido." };
+  }
   const block = hardBlock(row);
   if (block) return { text: `${n} · no se publica`, color: "#5c6370", title: block };
   if (row?.mediaStatus === "aprobado") return { text: `${n} · publicada`, color: "#2f9e44", title: "Visible en catálogo" };
@@ -148,6 +157,7 @@ export default function CatalogMedia() {
 
   function publishLock(row) {
     if (!row) return "";
+    if (waitingSeat(row)) return "Prepublicada. Falta confirmar la posición en un depósito. Se publica sola cuando el puesto quede definido.";
     return hardBlock(row) || (Number(row.photoCount) < 1 ? "Sin fotos: no se puede publicar." : "");
   }
 
@@ -1269,7 +1279,9 @@ export default function CatalogMedia() {
 
             {canApprove ? (
               <div className="action-row" style={{ marginTop: 16 }}>
-                {hardBlock(unit) ? (
+                {waitingSeat(unit) ? (
+                  <p className="section-sub">Prepublicada. Falta confirmar la posición en un depósito. Se publica sola cuando el puesto quede definido.</p>
+                ) : hardBlock(unit) ? (
                   <p className="section-sub">{hardBlock(unit)}</p>
                 ) : unit.mediaStatus === "aprobado" ? (
                   <button className="btn-published" type="button" onClick={hide} title="Está publicada. Pulsa para ocultarla del catálogo.">

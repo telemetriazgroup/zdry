@@ -36,7 +36,7 @@ import { OdooLinkService } from "../odoo/odoo-link.service";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom, refreshRulePrices } from "../odoo-import/acquisition-overlay.store";
 import { DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
-import { catalogPublishBlock, isPendingValuation } from "../domain/odoo-reconcile";
+import { LOCATION_PUBLISHED_MESSAGE, MISSING_LOCATION_PUBLISH_MESSAGE, PREPUBLISHED_STATUS, PREPUBLISHED_WAITING_MESSAGE, catalogHoldPatch, catalogPublishBlock, hasCatalogLocation, isPendingValuation, recoverPrepublished } from "../domain/odoo-reconcile";
 import { retrievalByIso } from "../domain/yard-retrieval";
 
 const ACTIVE_PHOTOS = { where: { status: PHOTO_STATUS_ACTIVE } };
@@ -72,6 +72,7 @@ export class CatalogMediaService {
   }
 
   async list() {
+    await this.settleCatalogLocation();
     const rows = await this.prisma.container.findMany({
       where: {
         ...(await this.prisma.liveContainers()),
@@ -230,6 +231,7 @@ export class CatalogMediaService {
     });
     if (!c) throw new NotFoundException("Unidad no encontrada.");
     if (c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
+    await this.settleOne(c);
     await this.evaluation.importLegacyForUnit(c.iso, c);
     const offerCat = await this.evaluation.applyOfferCondition(c.iso);
     const evalData = await this.evaluation.forUnit(c.iso);
@@ -659,6 +661,161 @@ export class CatalogMediaService {
     });
     await this.audit.log({ user, action: "restore_photo", entity: "InspectionPhoto", entityId: photo.id, after: { iso, slot: photo.slot }, ip });
     return this.get(iso, user);
+  }
+
+  private async settleCatalogLocation() {
+    const loose = await this.prisma.container.findMany({
+      where: {
+        archivedAt: null,
+        mediaStatus: { in: ["aprobado", PREPUBLISHED_STATUS] },
+        OR: [
+          { lado: null },
+          { lado: "PASILLO" },
+          { ruma: null },
+          { columna: null },
+          { nivel: null },
+        ],
+      },
+      select: {
+        iso: true,
+        mediaStatus: true,
+        lado: true,
+        ruma: true,
+        columna: true,
+        nivel: true,
+        status: true,
+        gateOut: true,
+        commercialStatus: true,
+        photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { id: true } },
+      },
+    });
+    const hold: string[] = [];
+    const hide: string[] = [];
+    for (const row of loose) {
+      if (hasCatalogLocation(row)) continue;
+      const patch = catalogHoldPatch({ ...row, photoCount: row.photos.length });
+      if (patch?.mediaStatus === PREPUBLISHED_STATUS) hold.push(row.iso);
+      else if (patch?.mediaStatus === "oculto") hide.push(row.iso);
+    }
+    await this.applyHold(hold, { mediaStatus: PREPUBLISHED_STATUS }, PREPUBLISHED_WAITING_MESSAGE);
+    await this.applyHold(hide, { mediaStatus: "oculto", mediaApprovedAt: null }, `Se quitó del catálogo. ${MISSING_LOCATION_PUBLISH_MESSAGE}`);
+
+    const ready = await this.prisma.container.findMany({
+      where: {
+        archivedAt: null,
+        mediaStatus: PREPUBLISHED_STATUS,
+        lado: { not: null },
+        ruma: { not: null },
+        columna: { not: null },
+        nivel: { not: null },
+        NOT: { lado: "PASILLO" },
+        photos: { some: { status: PHOTO_STATUS_ACTIVE } },
+        status: { not: "Vendido" },
+        gateOut: { not: true },
+        commercialStatus: { not: "vendido" },
+      },
+      select: { iso: true, mediaApprovedAt: true },
+    });
+    if (ready.length) {
+      const dated = ready.filter((row) => row.mediaApprovedAt).map((row) => row.iso);
+      const undated = ready.filter((row) => !row.mediaApprovedAt).map((row) => row.iso);
+      if (dated.length) {
+        await this.prisma.container.updateMany({ where: { iso: { in: dated } }, data: { mediaStatus: "aprobado" } });
+      }
+      if (undated.length) {
+        await this.prisma.container.updateMany({
+          where: { iso: { in: undated } },
+          data: { mediaStatus: "aprobado", mediaApprovedAt: new Date() },
+        });
+      }
+      await this.prisma.containerHistory.createMany({
+        data: ready.map((row) => ({ iso: row.iso, type: "Catálogo", detail: LOCATION_PUBLISHED_MESSAGE })),
+      });
+    }
+    await this.recoverStrippedPublishes();
+  }
+
+  private async recoverStrippedPublishes() {
+    const rows = await this.prisma.container.findMany({
+      where: {
+        archivedAt: null,
+        mediaStatus: "oculto",
+        photos: { some: { status: PHOTO_STATUS_ACTIVE } },
+        OR: [
+          { lado: null },
+          { lado: "PASILLO" },
+          { ruma: null },
+          { columna: null },
+          { nivel: null },
+        ],
+      },
+      select: { iso: true, lado: true, ruma: true, columna: true, nivel: true },
+    });
+    const pending = rows.filter((row) => !hasCatalogLocation(row));
+    if (!pending.length) return;
+    const history = await this.prisma.containerHistory.findMany({
+      where: { iso: { in: pending.map((row) => row.iso) }, type: "Catálogo" },
+      orderBy: { createdAt: "asc" },
+      select: { iso: true, detail: true },
+    });
+    const byIso = new Map<string, string[]>();
+    for (const row of history) {
+      const list = byIso.get(row.iso) || [];
+      list.push(row.detail);
+      byIso.set(row.iso, list);
+    }
+    const restore = pending.filter((row) => recoverPrepublished(byIso.get(row.iso) || [])).map((row) => row.iso);
+    await this.applyHold(restore, { mediaStatus: PREPUBLISHED_STATUS }, PREPUBLISHED_WAITING_MESSAGE);
+  }
+
+  private async applyHold(isos: string[], data: { mediaStatus: string; mediaApprovedAt?: Date | null }, detail: string) {
+    if (!isos.length) return;
+    await this.prisma.container.updateMany({ where: { iso: { in: isos } }, data });
+    await this.prisma.containerHistory.createMany({
+      data: isos.map((iso) => ({ iso, type: "Catálogo", detail })),
+    });
+  }
+
+  private async settleOne(c: {
+    iso: string;
+    mediaStatus: string;
+    mediaApprovedAt: Date | null;
+    lado: string | null;
+    ruma: number | null;
+    columna: number | null;
+    nivel: number | null;
+    status: string;
+    gateOut: boolean | null;
+    commercialStatus: string;
+    photos: Array<{ status: string }>;
+  }) {
+    const photoCount = c.photos.filter((photo) => photo.status === PHOTO_STATUS_ACTIVE).length;
+    let patch = catalogHoldPatch({ ...c, photoCount });
+    if (!patch && c.mediaStatus === "oculto" && !hasCatalogLocation(c) && photoCount >= 1) {
+      const history = await this.prisma.containerHistory.findMany({
+        where: { iso: c.iso, type: "Catálogo" },
+        orderBy: { createdAt: "asc" },
+        select: { detail: true },
+      });
+      if (recoverPrepublished(history.map((row) => row.detail))) {
+        patch = { mediaStatus: PREPUBLISHED_STATUS, clearApproval: false, detail: PREPUBLISHED_WAITING_MESSAGE };
+      }
+    }
+    if (!patch || patch.mediaStatus === c.mediaStatus) return;
+    await this.prisma.container.update({
+      where: { iso: c.iso },
+      data: {
+        mediaStatus: patch.mediaStatus,
+        ...(patch.clearApproval ? { mediaApprovedAt: null } : {}),
+        ...(patch.mediaStatus === "aprobado" && !c.mediaApprovedAt ? { mediaApprovedAt: new Date() } : {}),
+      },
+    });
+    await this.prisma.containerHistory.create({
+      data: { iso: c.iso, type: "Catálogo", detail: patch.detail },
+    });
+    c.mediaStatus = patch.mediaStatus;
+    if (patch.clearApproval) c.mediaApprovedAt = null;
+    else if (patch.mediaStatus === "aprobado" && !c.mediaApprovedAt) c.mediaApprovedAt = new Date();
   }
 
   private async customWatermarkKey() {
