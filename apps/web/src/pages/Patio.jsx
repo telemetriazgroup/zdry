@@ -128,6 +128,37 @@ export default function Patio() {
     }, "Cargar");
   }
 
+  function settleOuts() {
+    confirmAction(
+      "Actualizar patios",
+      "Revisa los equipos que ya salieron por un OUT y siguen ocupando un puesto. Los retira y baja lo que estaba encima. Usa la información que ya tiene ZDRY.",
+      async () => {
+        setBusy(true);
+        setError("");
+        try {
+          const result = await api("/yard/settle-outs", { method: "POST", body: {} });
+          setSelectedIso(null);
+          await load(layout.depotId);
+          if (result.busy) {
+            setError("La revisión de patios ya está en curso.");
+            return;
+          }
+          if (!result.cleared) {
+            setError("Los patios ya estaban al día. Ningún equipo con OUT seguía ocupando un puesto.");
+            return;
+          }
+          const pending = result.failed ? ` ${result.failed} quedaron para la próxima revisión.` : "";
+          setError(`Patios actualizados. ${result.cleared} equipos salieron del puesto. ${result.moved} bajaron de nivel.${pending}`);
+        } catch (e) {
+          setError(e.message);
+        } finally {
+          setBusy(false);
+        }
+      },
+      "Actualizar",
+    );
+  }
+
   async function downloadBackup() {
     setBusy(true);
     setError("");
@@ -226,6 +257,7 @@ export default function Patio() {
         ) : null}
         {isSuperadmin(user) ? (
           <>
+            <button className="btn-ghost" type="button" disabled={busy} onClick={settleOuts}>Actualizar patios</button>
             <button className="btn-ghost" type="button" disabled={busy} onClick={downloadBackup}>Descargar respaldo</button>
             <button className="btn-ghost" type="button" disabled={busy} onClick={() => backupFile.current?.click()}>Cargar respaldo</button>
             <input ref={backupFile} type="file" accept="application/json,.json" hidden aria-label="Archivo de respaldo del depósito" onChange={pickBackup} />

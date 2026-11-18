@@ -205,6 +205,12 @@ export class YardController {
     return this.warehouse.exportYardBackup(depotId, user);
   }
 
+  @Post("settle-outs")
+  @Roles("superadmin")
+  settleOuts(@CurrentUser() user: AuthUser) {
+    return this.warehouse.settleYardOuts(user);
+  }
+
   @Post("backup")
   @Roles("superadmin")
   importBackup(

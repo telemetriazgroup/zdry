@@ -11,6 +11,7 @@ import { SaleCloseWorker } from "./sale-close-worker.service";
 import { RentIssueWorker } from "./rent-issue-worker.service";
 import { RentCloseWorker } from "./rent-close-worker.service";
 import { QuoteOdooFollowService } from "./quote-odoo-follow.service";
+import { YardOutService } from "./yard-out.service";
 
 @Module({
   imports: [OdooModule],
@@ -26,6 +27,7 @@ import { QuoteOdooFollowService } from "./quote-odoo-follow.service";
     RentIssueWorker,
     RentCloseWorker,
     QuoteOdooFollowService,
+    YardOutService,
   ],
   exports: [
     OdooImportService,
@@ -37,6 +39,7 @@ import { QuoteOdooFollowService } from "./quote-odoo-follow.service";
     RentIssueWorker,
     RentCloseWorker,
     QuoteOdooFollowService,
+    YardOutService,
   ],
 })
 export class OdooImportModule {}

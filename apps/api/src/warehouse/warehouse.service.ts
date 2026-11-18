@@ -75,6 +75,7 @@ import { limaDayRange, listOdooLotNotes } from "../odoo/odoo-lot-photos";
 import { listOrCacheOdooPhotos, openOrCacheOdooPhoto } from "../odoo-import/odoo-photo-cache.store";
 import { ODOO_LOT_SELECT_FALLBACK, receptionOwnedPatch } from "../domain/odoo-lot-map";
 import { OdooImportService } from "../odoo-import/odoo-import.service";
+import { YardOutService } from "../odoo-import/yard-out.service";
 import { toOdooRefJpeg } from "../domain/odoo-ref-jpeg";
 import {
   ZDRY_REF_DESC,
@@ -240,6 +241,7 @@ export class WarehouseService {
     private readonly odoo: OdooClient,
     private readonly evaluation: EvaluationService,
     private readonly odooImport: OdooImportService,
+    private readonly yardOut: YardOutService,
   ) {
     this.expediente = new ExpedienteStore(prisma);
   }
@@ -425,6 +427,11 @@ export class WarehouseService {
       plan,
       seats,
     });
+  }
+
+  async settleYardOuts(user: AuthUser) {
+    if (!isSuperadmin(user?.role)) throw new ForbiddenException("Solo el superadmin actualiza los patios por salidas.");
+    return this.yardOut.settleDepartedSeats();
   }
 
   async importYardBackup(depotId: string, raw: unknown, user: AuthUser, ip?: string) {

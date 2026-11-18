@@ -167,6 +167,42 @@ export function leftToCustomer(status?: string | null) {
   return LEFT_STATUSES.has(String(status || ""));
 }
 
+/** OUT ya anotado en ZDRY y el equipo sigue dibujado en un patio.
+ * Vendido o alquilado a la espera del despacho no cuenta: sigue en su puesto. */
+export function outStillInYard(row: {
+  demo?: boolean | null;
+  archivedAt?: unknown;
+  lado?: string | null;
+  gateOut?: boolean | null;
+  status?: string | null;
+  commercialStatus?: string | null;
+}) {
+  if (row.demo || row.archivedAt || !row.lado) return false;
+  if (row.gateOut === true) return true;
+  return row.status === "Vendido" && row.commercialStatus === "vendido";
+}
+
+export type StackSeat = { id: string; level: number };
+
+/**
+ * Quita los niveles que quedaron vacíos y baja el resto.
+ * Si sale el nivel 2 y siguen el 3 y el 4, pasan a 2 y 3.
+ * Un nivel con alguien todavía (la otra mitad) no se cierra.
+ */
+export function compactStack(seats: StackSeat[], removedIds: string[]): Array<{ id: string; from: number; to: number }> {
+  const gone = new Set(removedIds);
+  const staying = seats.filter((seat) => !gone.has(seat.id) && seat.level >= 1);
+  const occupied = new Set(seats.filter((seat) => seat.level >= 1).map((seat) => seat.level));
+  const empty = [...occupied].filter((level) => !staying.some((seat) => seat.level === level)).sort((a, b) => a - b);
+  return staying
+    .map((seat) => ({
+      id: seat.id,
+      from: seat.level,
+      to: seat.level - empty.filter((level) => level < seat.level).length,
+    }))
+    .sort((a, b) => a.to - b.to || a.from - b.from);
+}
+
 export function defaultYardPlan(): YardPlan {
   return {
     zones: [{ id: "zona-a", name: "Zona A", rows: 4, cols: 3, levels: 5, gridRow: 1, gridCol: 1 }],

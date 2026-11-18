@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { YardOutService } from "./yard-out.service";
 import { AuditService } from "../audit/audit.service";
 import { StorageService } from "../storage/storage.service";
 import { OdooClient } from "../odoo/odoo.client";
@@ -143,6 +144,7 @@ export class OdooImportService {
     private readonly odoo: OdooClient,
     private readonly audit: AuditService,
     private readonly storage: StorageService,
+    private readonly yardOut: YardOutService,
   ) {
     this.expediente = new ExpedienteStore(prisma);
     this.logs = new AssimilateLogStore(prisma);
@@ -3598,8 +3600,12 @@ export class OdooImportService {
           detail: `${leave.detail}${avail.destName ? ` Cliente: ${avail.destName}.` : ""}`,
         },
       });
+    }
+    if (avail.availability === "left" && row.lado) {
+      await this.yardOut.collapseAfterOut(row.iso, avail.pickingName || "OUT");
       return;
     }
+    if (leave) return;
     if (avail.availability === "stock" && row.status === "Vendido" && row.commercialStatus === "vendido") {
       await this.prisma.container.update({
         where,

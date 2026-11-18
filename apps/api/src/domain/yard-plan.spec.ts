@@ -1,5 +1,5 @@
 import { yardScenario } from "./yard-scenarios";
-import { defaultYardPlan, fenceBays, fenceDepthOf, fenceSeat, fenceSideIndex, ghostsWithSupport, leftToCustomer, movesAbove, movesToReach, normalizeYardPlan, reachBlockers, readYardBackup, resizeZone, stackLengthError, yardBackupFile, zoneSlotError } from "./yard-plan";
+import { compactStack, defaultYardPlan, fenceBays, fenceDepthOf, fenceSeat, fenceSideIndex, ghostsWithSupport, leftToCustomer, movesAbove, movesToReach, normalizeYardPlan, outStillInYard, reachBlockers, readYardBackup, resizeZone, stackLengthError, yardBackupFile, zoneSlotError } from "./yard-plan";
 
 describe("yard plan", () => {
   it("separa las filas del cerco para que dos puestos del mismo nivel no choquen", () => {
@@ -202,6 +202,32 @@ describe("yard plan", () => {
     expect(trimmed.zone.rows).toBe(2);
     expect(trimmed.shift).toEqual({ axis: "row", delta: -1, from: 2 });
     expect(trimmed.ghosts[0].row).toBe(1);
+  });
+
+  it("al salir un nivel, los de encima bajan y una mitad que queda no cierra el nivel", () => {
+    const seats = [
+      { id: "a", level: 1 },
+      { id: "b", level: 2 },
+      { id: "c", level: 3 },
+      { id: "d", level: 4 },
+    ];
+    expect(compactStack(seats, ["b"]).map((seat) => `${seat.id}:${seat.to}`)).toEqual(["a:1", "c:2", "d:3"]);
+    expect(compactStack(seats, ["b", "d"]).map((seat) => `${seat.id}:${seat.to}`)).toEqual(["a:1", "c:2"]);
+    const halves = [
+      { id: "a", level: 2 },
+      { id: "b", level: 2 },
+      { id: "top", level: 3 },
+    ];
+    expect(compactStack(halves, ["a"]).map((seat) => `${seat.id}:${seat.to}`)).toEqual(["b:2", "top:3"]);
+  });
+
+  it("un OUT ya anotado y con puesto entra al barrido; uno vendido a la espera del despacho no", () => {
+    expect(outStillInYard({ lado: "Zona A", gateOut: true, status: "Vendido", commercialStatus: "vendido" })).toBe(true);
+    expect(outStillInYard({ lado: "Zona A", status: "Vendido", commercialStatus: "vendido" })).toBe(true);
+    expect(outStillInYard({ lado: "Zona A", status: "Vendido", commercialStatus: "comprometido_venta" })).toBe(false);
+    expect(outStillInYard({ lado: "Zona A", status: "Alquilado", commercialStatus: "comprometido_alquiler" })).toBe(false);
+    expect(outStillInYard({ lado: null, gateOut: true })).toBe(false);
+    expect(outStillInYard({ lado: "Zona A", gateOut: true, demo: true })).toBe(false);
   });
 
   it("rellena con un 20 desconocido solo la mitad que tiene equipo encima", () => {
