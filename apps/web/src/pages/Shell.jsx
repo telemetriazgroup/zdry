@@ -30,6 +30,7 @@ import TypeAudit from "./TypeAudit.jsx";
 import DryStats from "./DryStats.jsx";
 import Alquileres from "./Alquileres.jsx";
 import CatalogShares from "./CatalogShares.jsx";
+import Prepublished from "./Prepublished.jsx";
 import Evaluaciones from "./Evaluaciones.jsx";
 import { OdooLinkModal, OdooNavStatus, useOdooLink } from "../odoo-link.jsx";
 
@@ -43,6 +44,7 @@ function allowed(nav, pathname, role) {
   if ((role === "admin" || role === "coordinador") && pathname.startsWith("/app/almacen/recepcion")) return true;
   if ((role === "admin" || role === "coordinador" || role === "almacen") && pathname.startsWith("/app/almacen/visitas")) return true;
   if ((role === "admin" || role === "almacen" || role === "coordinador") && (pathname.startsWith("/app/almacen/patio") || pathname.startsWith("/app/almacen/campo"))) return true;
+  if ((role === "vendedor" || role === "ejecutivo") && pathname.startsWith("/app/almacen/patio")) return true;
   if ((role === "admin" || role === "coordinador") && pathname.startsWith("/app/almacen/equipos")) return true;
   return nav.some((item) => (item.end ? pathname === item.to : pathname === item.to || pathname.startsWith(item.to + "/")));
 }
@@ -220,6 +222,7 @@ export default function Shell() {
             <Route path="seguimiento" element={<Gate nav={nav} role={user.role} path="/app/seguimiento"><QuotesHub /></Gate>} />
             <Route path="alquileres" element={<Gate nav={nav} role={user.role} path="/app/alquileres"><Alquileres /></Gate>} />
             <Route path="enlaces-catalogo" element={<Gate nav={nav} role={user.role} path="/app/enlaces-catalogo"><CatalogShares /></Gate>} />
+            <Route path="prepublicados" element={<Gate nav={nav} role={user.role} path="/app/prepublicados"><Prepublished /></Gate>} />
             <Route path="compras/facturas" element={<Gate nav={nav} role={user.role} path="/app/compras/facturas"><Compras /></Gate>} />
             <Route path="compras/conciliar" element={<Gate nav={nav} role={user.role} path="/app/compras/conciliar"><Compras /></Gate>} />
             <Route path="compras/odoo" element={<Gate nav={nav} role={user.role} path="/app/compras/odoo"><Compras /></Gate>} />

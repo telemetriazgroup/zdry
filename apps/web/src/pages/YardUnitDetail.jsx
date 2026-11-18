@@ -23,7 +23,7 @@ function Row({ label, value }) {
   );
 }
 
-export default function YardUnitDetail({ iso, onClose }) {
+export default function YardUnitDetail({ iso, onClose, readOnly = false }) {
   const [unit, setUnit] = useState(null);
   const [error, setError] = useState("");
   const [busySlot, setBusySlot] = useState(null);
@@ -110,18 +110,24 @@ export default function YardUnitDetail({ iso, onClose }) {
               </div>
               <div>
                 <h3>Fotos</h3>
-                <p className="section-sub">Se muestra la foto de cada casilla. Si no hay, tócala para cargar una.</p>
+                <p className="section-sub">{readOnly ? "Fotos del equipo." : "Se muestra la foto de cada casilla. Si no hay, tócala para cargar una."}</p>
                 <div className="yard-detail-photos">
                   {LABELS.map((label, index) => {
                     const has = Boolean(unit.photos?.[index]);
-                    return (
-                      <label key={label} className={`yard-detail-slot${has ? " has" : ""}`}>
+                    const body = (
+                      <>
                         {has ? (
                           <img src={`${apiUrl(`/warehouse/units/${unit.iso}/photos/${index}`)}?t=${bust}`} alt={label} />
                         ) : (
                           <span className="n">{busySlot === index ? "…" : index + 1}</span>
                         )}
-                        <span>{label}{has ? "" : " · Cargar"}</span>
+                        <span>{label}{has || readOnly ? "" : " · Cargar"}</span>
+                      </>
+                    );
+                    if (readOnly) return <div key={label} className={`yard-detail-slot${has ? " has" : ""}`}>{body}</div>;
+                    return (
+                      <label key={label} className={`yard-detail-slot${has ? " has" : ""}`}>
+                        {body}
                         <input
                           type="file"
                           accept="image/*"

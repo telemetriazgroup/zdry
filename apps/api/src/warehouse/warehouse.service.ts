@@ -222,7 +222,7 @@ export function hideOdooIdsFor(role: string) {
 }
 
 export function hideRatesFor(role: string) {
-  return role === "almacen" || role === "coordinador";
+  return role === "almacen" || role === "coordinador" || role === "vendedor" || role === "ejecutivo";
 }
 
 type ContainerRow = Prisma.ContainerGetPayload<{
@@ -431,7 +431,20 @@ export class WarehouseService {
 
   async settleYardOuts(user: AuthUser) {
     if (!isSuperadmin(user?.role)) throw new ForbiddenException("Solo el superadmin actualiza los patios por salidas.");
-    return this.yardOut.settleDepartedSeats();
+    return this.yardOut.settleDepartedSeats("manual");
+  }
+
+  async listYardOutUpdates(depotId: string, user: AuthUser) {
+    if (!isSuperadmin(user?.role)) throw new ForbiddenException("Solo el superadmin ve el historial de salidas del patio.");
+    if (!depotId) throw new BadRequestException("El depósito es obligatorio.");
+    return this.yardOut.listUpdates(depotId);
+  }
+
+  async getYardOutUpdate(depotId: string, id: string, user: AuthUser) {
+    if (!isSuperadmin(user?.role)) throw new ForbiddenException("Solo el superadmin ve el historial de salidas del patio.");
+    const row = await this.yardOut.readUpdate(depotId, id);
+    if (!row) throw new NotFoundException("Esa actualización no está en este depósito.");
+    return row;
   }
 
   async importYardBackup(depotId: string, raw: unknown, user: AuthUser, ip?: string) {
@@ -3059,6 +3072,19 @@ export class WarehouseService {
     });
   }
 
+  async seatedDepots() {
+    const [depots, seated] = await Promise.all([
+      this.prisma.depot.findMany({ where: ACTIVE_MASTER, orderBy: { name: "asc" } }),
+      this.prisma.container.groupBy({
+        by: ["depotId"],
+        where: { archivedAt: null, demo: false, lado: { not: null } },
+        _count: { _all: true },
+      }),
+    ]);
+    const ids = new Set(seated.filter((row) => row._count._all > 0).map((row) => row.depotId));
+    return { depots: depots.filter((depot) => ids.has(depot.id)).map((depot) => ({ id: depot.id, name: depot.name })) };
+  }
+
   async yardLayout(depotId: string, user?: AuthUser) {
     const simulation = isYardDemo(depotId);
     if (simulation) {
@@ -3149,7 +3175,13 @@ export class WarehouseService {
         demo: c.demo,
       };
     });
-    const listed = depots.map((item) => ({ id: item.id, name: item.name }));
+    const commercialView = user?.role === "vendedor" || user?.role === "ejecutivo";
+    let listed = depots.map((item) => ({ id: item.id, name: item.name }));
+    if (commercialView) {
+      const seated = await this.seatedDepots();
+      const ids = new Set(seated.depots.map((depot) => depot.id));
+      listed = listed.filter((depot) => ids.has(depot.id) || depot.id === depotId);
+    }
     if (user && (user.role === "superadmin" || user.role === "admin")) {
       listed.push({ id: YARD_DEMO_ID, name: "Depósito demo" });
       listed.push({ id: YARD_DEMO_2_ID, name: "Depósito demo 2" });
@@ -3168,7 +3200,7 @@ export class WarehouseService {
       categories,
       config: DEFAULT_YARD_CONFIG,
       plan,
-      retrieval: await readMovementPolicy(this.prisma),
+      retrieval: commercialView ? { freeMoves: 0, rate: 0 } : await readMovementPolicy(this.prisma),
       rules,
       units,
       exits: await this.prisma.yardExit.findMany({

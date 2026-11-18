@@ -1,4 +1,4 @@
-import { assertConfirmMatch, catalogHoldPatch, catalogPublishBlock, isPendingValuation, pendingValuationWhere, pickReconcileCandidate, planOdooRelink, proposeMatch, publishedStockWhere, reconcileContainerPatch, recoverPrepublished } from "./odoo-reconcile";
+import { assertConfirmMatch, catalogHoldPatch, catalogPublishBlock, isPendingValuation, pendingValuationWhere, pickReconcileCandidate, planOdooRelink, proposeMatch, prepublishedStockWhere, publishedStockWhere, reconcileContainerPatch, recoverPrepublished } from "./odoo-reconcile";
 
 const BMOU = { iso: "BMOU433548-9" };
 const IN_06302 = {
@@ -64,6 +64,8 @@ describe("isPendingValuation", () => {
     expect(catalogPublishBlock({ odooPoId: null, invoicePending: true, intakeType: "pendiente_factura", status: "Disponible", lado: "Zona A", ruma: 1, columna: 1, nivel: 1 })).toMatch(/no se publica/);
     expect(publishedStockWhere().NOT).toEqual([pendingValuationWhere(), { lado: "PASILLO" }]);
     expect(publishedStockWhere().mediaStatus).toBe("aprobado");
+    expect(prepublishedStockWhere().mediaStatus).toBe("prepublicado");
+    expect(prepublishedStockWhere().photos).toEqual({ some: { status: "activa" } });
     expect(catalogPublishBlock({ odooPoId: 12, invoicePending: true, intakeType: "compra", lado: "Zona A", ruma: 1, columna: 1, nivel: 1 })).toBeNull();
     expect(catalogPublishBlock({ odooPoId: 12, invoicePending: true, intakeType: "compra", lado: "Zona A", ruma: 1, columna: 1, nivel: 1, status: "Disponible" })).toBeNull();
     expect(catalogPublishBlock({ odooPoId: 12, intakeType: "compra", status: "Disponible" })).toMatch(/ubicación/);

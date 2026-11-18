@@ -1423,3 +1423,18 @@ model CatalogShareEvent {
   @@index([shareId, createdAt])
   @@index([iso])
 }
+
+/** Patio tal como estaba antes de una actualización por OUT, y a dónde pasó cada equipo. */
+model YardOutUpdate {
+  id        String   @id @default(uuid())
+  depotId   String
+  source    String
+  leftCount Int
+  dropCount Int
+  before    Json
+  after     Json
+  moves     Json
+  createdAt DateTime @default(now())
+
+  @@index([depotId, createdAt])
+}

@@ -199,6 +199,18 @@ export class YardController {
     return new StreamableFile(obj.stream, { type: obj.contentType || "application/octet-stream", length: obj.contentLength });
   }
 
+  @Get(":depotId/out-history")
+  @Roles("superadmin")
+  outHistory(@Param("depotId") depotId: string, @CurrentUser() user: AuthUser) {
+    return this.warehouse.listYardOutUpdates(depotId, user);
+  }
+
+  @Get(":depotId/out-history/:updateId")
+  @Roles("superadmin")
+  outHistoryOne(@Param("depotId") depotId: string, @Param("updateId") updateId: string, @CurrentUser() user: AuthUser) {
+    return this.warehouse.getYardOutUpdate(depotId, updateId, user);
+  }
+
   @Get(":depotId/backup")
   @Roles("superadmin")
   backup(@Param("depotId") depotId: string, @CurrentUser() user: AuthUser) {
@@ -221,12 +233,19 @@ export class YardController {
     return this.warehouse.importYardBackup(body.depotId || "", body.backup, user, req.ip);
   }
 
+  @Get("seated-depots")
+  @Roles("vendedor", "ejecutivo")
+  seatedDepots() {
+    return this.warehouse.seatedDepots();
+  }
+
   @Get(":depotId/suggest")
   suggest(@Param("depotId") depotId: string, @Query("iso") iso: string) {
     return this.warehouse.suggest(depotId, iso || "");
   }
 
   @Get(":depotId")
+  @Roles("admin", "almacen", "coordinador", "vendedor", "ejecutivo")
   layout(@Param("depotId") depotId: string, @CurrentUser() user: AuthUser) {
     return this.warehouse.yardLayout(depotId, user);
   }

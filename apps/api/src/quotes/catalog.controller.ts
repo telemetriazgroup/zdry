@@ -157,6 +157,24 @@ export class CatalogController {
     return this.quotes.catalogCommercialUnit(iso);
   }
 
+  @Get("prepublished")
+  @Roles("vendedor", "ejecutivo")
+  prepublishedList(@Query("q") q?: string, @Query("page") page?: string, @Query("pageSize") pageSize?: string) {
+    return this.quotes.catalogPrepublishedList({ q, page, pageSize });
+  }
+
+  @Get("prepublished/:iso/photos/:slot")
+  @Roles("vendedor", "ejecutivo")
+  prepublishedPhoto(@Param("iso") iso: string, @Param("slot") slot: string) {
+    return this.quotes.catalogPrepublishedPhoto(iso, parseInt(slot, 10));
+  }
+
+  @Get("prepublished/:iso")
+  @Roles("vendedor", "ejecutivo")
+  prepublishedUnit(@Param("iso") iso: string) {
+    return this.quotes.catalogPrepublishedUnit(iso);
+  }
+
   @Post("commercial/:iso/envio")
   @Roles("superadmin", "admin", "vendedor", "ejecutivo")
   createHandoff(

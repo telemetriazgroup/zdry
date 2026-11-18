@@ -11,6 +11,7 @@ import {
   type YardGhost,
   type YardPlan,
 } from "../domain/yard-plan";
+import { yardOutMoves } from "../domain/yard-out-history";
 
 const AISLE = "PASILLO";
 const YARD_OUT_CHECK_MS = 10 * 60 * 1000;
@@ -54,8 +55,9 @@ export class YardOutService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Equipos con OUT anotado que siguen ocupando un puesto. Baja la columna. */
-  async settleDepartedSeats(): Promise<SweepResult> {
+  /** Equipos con OUT anotado que siguen ocupando un puesto. Baja la columna.
+   * Una pasada deja un solo historial por depósito, con el patio de antes. */
+  async settleDepartedSeats(source: "manual" | "periodico" = "periodico"): Promise<SweepResult> {
     if (this.busy) return { found: 0, cleared: 0, moved: 0, failed: 0, busy: true };
     this.busy = true;
     try {
@@ -69,22 +71,32 @@ export class YardOutService implements OnModuleInit, OnModuleDestroy {
             { status: "Vendido", commercialStatus: "vendido" },
           ],
         },
-        select: { iso: true },
+        select: { iso: true, depotId: true },
         orderBy: [{ depotId: "asc" }, { lado: "asc" }, { ruma: "asc" }, { columna: "asc" }, { nivel: "asc" }],
         take: SWEEP_LIMIT,
       });
+      const groups = new Map<string, string[]>();
+      for (const row of rows) {
+        const list = groups.get(row.depotId) || [];
+        list.push(row.iso);
+        groups.set(row.depotId, list);
+      }
       let cleared = 0;
       let moved = 0;
       let failed = 0;
-      for (const row of rows) {
-        try {
-          const result = await this.collapseAfterOut(row.iso, "registrado en ZDRY");
-          if (result.cleared) cleared += 1;
-          moved += result.moved;
-        } catch (error) {
-          failed += 1;
-          this.log.warn(`${row.iso}: ${(error as Error).message}`);
+      for (const [depotId, isos] of groups) {
+        const before = await this.captureDepot(depotId);
+        for (const iso of isos) {
+          try {
+            const result = await this.collapseAfterOut(iso, "registrado en ZDRY", { record: false });
+            if (result.cleared) cleared += 1;
+            moved += result.moved;
+          } catch (error) {
+            failed += 1;
+            this.log.warn(`${iso}: ${(error as Error).message}`);
+          }
         }
+        await this.remember(depotId, source, before);
       }
       return { found: rows.length, cleared, moved, failed };
     } finally {
@@ -92,30 +104,88 @@ export class YardOutService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async collapseAfterOut(iso: string, picking: string) {
+  async listUpdates(depotId: string) {
+    const updates = await this.prisma.yardOutUpdate.findMany({
+      where: { depotId },
+      orderBy: { createdAt: "desc" },
+      take: 60,
+      select: { id: true, source: true, leftCount: true, dropCount: true, moves: true, createdAt: true },
+    });
+    return { updates };
+  }
+
+  async readUpdate(depotId: string, id: string) {
+    return this.prisma.yardOutUpdate.findFirst({ where: { id, depotId } });
+  }
+
+  async collapseAfterOut(iso: string, picking: string, options?: { record?: boolean }) {
     const code = String(iso || "").trim().toUpperCase();
     if (!code) return { moved: 0, cleared: false };
     const unit = await this.prisma.container.findUnique({ where: { iso: code } });
     if (!unit || unit.demo || !unit.lado) return { moved: 0, cleared: false };
-    if (unit.lado === AISLE) {
-      await this.prisma.$transaction(async (tx) => {
-        await this.clearSeat(tx, unit.iso, unit.depotId);
-        await tx.containerHistory.create({
-          data: {
-            iso: unit.iso,
-            type: "Salida Odoo",
-            detail: `OUT ${picking || "OUT"}, sin usar despacho. Estaba en el pasillo y salió del patio.`,
-          },
-        });
+    const record = options?.record !== false;
+    const before = record ? await this.captureDepot(unit.depotId) : null;
+    const result = unit.lado === AISLE
+      ? await this.clearAisle(unit.iso, unit.depotId, picking)
+      : await this.collapseStacked(unit, picking);
+    if (before && result.cleared) await this.remember(unit.depotId, "odoo", before);
+    return result;
+  }
+
+  private async clearAisle(iso: string, depotId: string, picking: string) {
+    await this.prisma.$transaction(async (tx) => {
+      await this.clearSeat(tx, iso, depotId);
+      await tx.containerHistory.create({
+        data: {
+          iso,
+          type: "Salida Odoo",
+          detail: `OUT ${picking || "OUT"}, sin usar despacho. Estaba en el pasillo y salió del patio.`,
+        },
       });
-      return { moved: 0, cleared: true };
-    }
+    });
+    return { moved: 0, cleared: true };
+  }
+
+  private async collapseStacked(
+    unit: { iso: string; depotId: string; lado: string | null; ruma: number | null; columna: number | null; nivel: number | null },
+    picking: string,
+  ) {
     const note = picking || "OUT";
     return this.prisma.$transaction(async (tx) => {
       const plan = await this.readPlan(tx, unit.depotId);
       if (unit.lado === FENCE_SIDE) return this.collapseFence(tx, unit, plan, note);
       return this.collapseZone(tx, unit, plan, note);
     });
+  }
+
+  private async captureDepot(depotId: string) {
+    const seats = await this.prisma.container.findMany({
+      where: { depotId, archivedAt: null, demo: false, lado: { not: null } },
+      select: { iso: true, type: true, lado: true, ruma: true, columna: true, nivel: true, bayHalf: true, status: true },
+    });
+    const row = await this.prisma.appSetting.findUnique({ where: { key: `yard_plan:${depotId}` } });
+    return { seats, plan: normalizeYardPlan(row?.value) };
+  }
+
+  private async remember(depotId: string, source: string, before: { seats: Array<{ iso: string; lado: string | null; ruma: number | null; columna: number | null; nivel: number | null; bayHalf: string | null }>; plan: YardPlan }) {
+    try {
+      const after = await this.captureDepot(depotId);
+      const moves = yardOutMoves(before.seats, after.seats);
+      if (!moves.length) return;
+      await this.prisma.yardOutUpdate.create({
+        data: {
+          depotId,
+          source,
+          leftCount: moves.filter((move) => move.kind === "salida").length,
+          dropCount: moves.filter((move) => move.kind === "baja").length,
+          before: before as Prisma.InputJsonValue,
+          after: after as Prisma.InputJsonValue,
+          moves: moves as Prisma.InputJsonValue,
+        },
+      });
+    } catch (error) {
+      this.log.warn(`historial ${depotId}: ${(error as Error).message}`);
+    }
   }
 
   private async readPlan(tx: Prisma.TransactionClient, depotId: string): Promise<YardPlan> {

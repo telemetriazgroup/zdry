@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
-import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
+import { hasRole, isCommercialViewer, isSuperadmin, useAuth } from "../auth.jsx";
 import YardBuild from "./YardBuild.jsx";
+import YardOutHistory from "./YardOutHistory.jsx";
 import { NoticeModal } from "../notice.jsx";
 
 export default function Patio() {
@@ -16,6 +17,7 @@ export default function Patio() {
   const [withPerimeter, setWithPerimeter] = useState(true);
   const [ruma, setRuma] = useState("cargado");
   const [ask, setAsk] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const backupFile = useRef(null);
 
   const depotId = params.get("depotId") || layout?.depotId || "";
@@ -45,6 +47,13 @@ export default function Patio() {
           if (!cancelled) setLayout(data);
           return;
         }
+        if (isCommercialViewer(user)) {
+          const data = await api("/yard/seated-depots");
+          const first = data.depots?.[0]?.id;
+          if (first) setParams({ depotId: first }, { replace: true });
+          else if (!cancelled) setLayout({ depots: [], depotId: "", depotName: "", units: [], simulation: false, viewerEmpty: true });
+          return;
+        }
         const meta = await api("/warehouse/meta");
         const first = meta.depots[0]?.id;
         if (first) {
@@ -55,7 +64,16 @@ export default function Patio() {
       }
     })();
     return () => { cancelled = true; };
-  }, [depotId]);
+  }, [depotId, user]);
+
+  if (layout?.viewerEmpty) {
+    return (
+      <div className="yard-page">
+        <h2 className="section-title">Patio</h2>
+        <p className="section-sub">Ningún patio tiene equipos ubicados.</p>
+      </div>
+    );
+  }
 
   if (!layout) {
     return (
@@ -258,6 +276,7 @@ export default function Patio() {
         {isSuperadmin(user) ? (
           <>
             <button className="btn-ghost" type="button" disabled={busy} onClick={settleOuts}>Actualizar patios</button>
+            <button className="btn-ghost" type="button" disabled={busy} onClick={() => setHistoryOpen((open) => !open)}>{historyOpen ? "Volver al patio" : "Historial OUT"}</button>
             <button className="btn-ghost" type="button" disabled={busy} onClick={downloadBackup}>Descargar respaldo</button>
             <button className="btn-ghost" type="button" disabled={busy} onClick={() => backupFile.current?.click()}>Cargar respaldo</button>
             <input ref={backupFile} type="file" accept="application/json,.json" hidden aria-label="Archivo de respaldo del depósito" onChange={pickBackup} />
@@ -306,13 +325,17 @@ export default function Patio() {
       ) : null}
       <NoticeModal title="Aviso" text={error} onClose={() => setError("")} />
       <NoticeModal title={ask?.title || "Confirmar"} text={ask?.text || ""} confirmLabel={ask?.confirmLabel || "Confirmar"} onClose={() => setAsk(null)} onConfirm={ask ? () => { const run = ask.run; setAsk(null); run(); } : null} />
+      {historyOpen && isSuperadmin(user) ? (
+        <YardOutHistory depotId={layout.depotId} onClose={() => setHistoryOpen(false)} />
+      ) : (
       <YardBuild
         layout={layout}
         selectedIso={selectedIso}
         setSelectedIso={setSelectedIso}
         onReload={() => load(layout.depotId)}
       />
-      {placed.length ? (
+      )}
+      {!historyOpen && placed.length ? (
         <div className="panel yard-table" style={{ marginTop: 18 }}>
           <div className="tablewrap">
             <table className="data">

@@ -59,6 +59,31 @@ export function publishedStockWhere() {
   };
 }
 
+/** Ficha con fotos que ya estuvo publicada y espera puesto. El pasillo y sin sitio no cuentan. */
+export function prepublishedStockWhere() {
+  return {
+    intakeType: { in: ["compra", "pendiente_factura", "ajuste_odoo", "fabricacion_odoo"] },
+    physicallyReceived: true,
+    status: { in: ["Disponible", "Reservado"] },
+    mediaStatus: PREPUBLISHED_STATUS,
+    gateOut: false,
+    photos: { some: { status: "activa" } },
+    NOT: [
+      pendingValuationWhere(),
+      { commercialStatus: "vendido" },
+      {
+        AND: [
+          { lado: { not: null } },
+          { NOT: { lado: "PASILLO" } },
+          { ruma: { gte: 1 } },
+          { columna: { gte: 1 } },
+          { nivel: { gte: 1 } },
+        ],
+      },
+    ],
+  };
+}
+
 export const UNRECONCILED_PUBLISH_MESSAGE =
   "Reentrega sin conciliar: no se publica en el catálogo hasta el match con una orden de compra. Sin OC no hay precio.";
 

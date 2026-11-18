@@ -27,6 +27,24 @@ function lengthOf(type) {
   return TEU * spanOf(type);
 }
 
+export function yardSpotText(spot) {
+  if (!spot?.lado) return "fuera del patio";
+  if (spot.lado === "PASILLO") return "el pasillo";
+  const half = spot.half ? `, mitad ${spot.half}` : "";
+  if (spot.lado === "CERCO") return `el cerco, puesto ${spot.columna}, fila ${spot.ruma}, nivel ${spot.nivel}${half}`;
+  return `${spot.lado}, fila ${spot.ruma}, columna ${spot.columna}, nivel ${spot.nivel}${half}`;
+}
+
+export function yardMoveNote(move) {
+  if (!move) return "";
+  if (move.kind === "salida") return `Salió de ${yardSpotText(move.from)}.`;
+  return `Pasó de ${yardSpotText(move.from)} a ${yardSpotText(move.to)}.`;
+}
+
+function moveFor(options, iso) {
+  return (options?.moves || []).find((move) => move.iso === iso) || null;
+}
+
 function feetOf(type) {
   const code = String(type || "").toUpperCase();
   if (code.startsWith("45")) return 45;
@@ -259,6 +277,11 @@ function addFenceBox(root, disposables, from, to, unit, pick) {
   mesh.rotation.y = -Math.atan2(dz, dx);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
+  if (pick.trail) {
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color: "#e6a817" }));
+    mesh.add(edges);
+    disposables.push(edges.geometry, edges.material);
+  }
   if (unit || pick.unknown) mesh.userData.pick = pick;
   root.add(mesh);
   disposables.push(geometry, material, texture);
@@ -441,12 +464,15 @@ function addPerimeter(root, disposables, perimeter, bounds, units = [], options 
               }
               const unit = cell ? units.find((item) => item.iso === cell.iso) : null;
               if (!unit) return false;
-              drawSpan(fromM, toM, unit, {
+              const move = moveFor(options, unit.iso);
+              const painted = move?.kind === "salida" ? { ...unit, color: "#b42318" } : unit;
+              drawSpan(fromM, toM, painted, {
                 key: unit.iso,
                 code: unit.iso,
                 typeLabel: unit.typeLabel || unit.type || "Puesto de cerco",
                 where: whereOf(level, half),
-                note: unit.status || "En el cerco",
+                note: [unit.status || "En el cerco", yardMoveNote(move)].filter(Boolean).join(" "),
+                trail: Boolean(move),
                 level,
                 half: half || undefined,
               });
@@ -597,6 +623,38 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
       root.add(closedLabel);
       disposables.push(wallGeometry, wallMaterial, closedLabel.geometry, closedLabel.material, closedLabel.material.map);
     }
+    (options.moves || []).forEach((move) => {
+      if (!move.to || move.to.lado !== zone.name) return;
+      const traveler = stackedUnits.find((unit) => unit.iso === move.iso);
+      if (!traveler || traveler.lado !== move.from?.lado || traveler.ruma !== move.from?.ruma || traveler.columna !== move.from?.columna || traveler.nivel !== move.from?.nivel) return;
+      const span = move.to.half === "A" || move.to.half === "B" ? move.to.half : "full";
+      const natural = lengthOf(traveler.type || (span === "full" ? "40" : "20"));
+      const usable = PITCH_X - 0.7;
+      const markLength = span === "A" || span === "B" ? Math.min(natural, usable / 2 - 0.15) : natural;
+      const along = span === "A" ? markLength / 2 : span === "B" ? usable - markLength / 2 : (usable - markLength) / 2 + markLength / 2;
+      const markRow = Number(move.to.ruma) || 1;
+      const markCol = Number(move.to.columna) || 1;
+      const [markX, markZ] = turned
+        ? [originX + (markRow - 1) * PITCH_Z + BOX_W / 2, originZ + (markCol - 1) * PITCH_X + along]
+        : [originX + (markCol - 1) * PITCH_X + along, originZ + (markRow - 1) * PITCH_Z + BOX_W / 2];
+      const markHeight = BOX_H * highOf(traveler.type);
+      const markGeometry = new THREE.BoxGeometry(markLength * 1.04, markHeight * 1.04, BOX_W * 1.04);
+      const markMaterial = new THREE.MeshBasicMaterial({ color: "#e6a817", transparent: true, opacity: 0.22, depthWrite: false });
+      const mark = new THREE.Mesh(markGeometry, markMaterial);
+      mark.position.set(markX, (Number(move.to.nivel) - 1) * markHeight + markHeight / 2, markZ);
+      mark.rotation.y = turned ? Math.PI / 2 : 0;
+      const markEdges = new THREE.LineSegments(new THREE.EdgesGeometry(markGeometry), new THREE.LineBasicMaterial({ color: "#e6a817" }));
+      mark.add(markEdges);
+      mark.userData.pick = {
+        key: move.iso,
+        code: move.iso,
+        typeLabel: "Hacia aquí",
+        where: yardSpotText(move.to),
+        note: yardMoveNote(move),
+      };
+      root.add(mark);
+      disposables.push(markGeometry, markMaterial, markEdges.geometry, markEdges.material);
+    });
     minX = Math.min(minX, originX);
     maxX = Math.max(maxX, originX + padW);
     minZ = Math.min(minZ, originZ);
@@ -681,7 +739,8 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
             const length = piece.span === "A" || piece.span === "B" ? Math.min(natural, usable / 2 - 0.15) : natural;
             const height = BOX_H * highOf(type);
             const floor = piece.span === "B" ? floorB : piece.span === "A" ? floorA : Math.max(floorA, floorB);
-            const color = occupant ? boxColor(occupant) : named ? (ghost.color || typeColor(ghost.typeCode)) : "#c5ccd6";
+            const move = occupant ? moveFor(options, occupant.iso) : null;
+            const color = move?.kind === "salida" ? "#b42318" : occupant ? boxColor(occupant) : named ? (ghost.color || typeColor(ghost.typeCode)) : "#c5ccd6";
             const label = occupant ? occupant.iso.slice(-6) : named ? ghost.code.slice(-6) : "?";
             const texture = faceTexture(color, label, !occupant && !named);
             const geometry = new THREE.BoxGeometry(length, height, BOX_W);
@@ -693,13 +752,14 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
             mesh.castShadow = true;
             mesh.receiveShadow = true;
             const side = piece.span === "A" || piece.span === "B" ? ` · mitad ${piece.span}` : piece.span === "center" ? " · al centro" : "";
+            const moveText = yardMoveNote(move);
             mesh.userData.pick = occupant
               ? {
                 key: occupant.iso,
                 code: occupant.iso,
                 typeLabel: occupant.typeLabel || occupant.type,
                 where: `${zone.name} · fila ${row} · columna ${col} · altura ${level}${side}`,
-                note: occupant.status || "",
+                note: [occupant.status || "", moveText].filter(Boolean).join(" "),
               }
               : {
                 key: `g-${zone.id}-${row}-${col}-${level}-${ghost.half || "F"}`,
@@ -714,7 +774,7 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
               };
             const edges = new THREE.LineSegments(
               new THREE.EdgesGeometry(geometry),
-              new THREE.LineBasicMaterial({ color: "#121820" }),
+              new THREE.LineBasicMaterial({ color: move ? "#e6a817" : "#121820" }),
             );
             mesh.add(edges);
             root.add(mesh);
@@ -784,7 +844,8 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
   held.forEach((unit, index) => {
     const length = lengthOf(unit.type);
     const height = BOX_H * highOf(unit.type);
-    const texture = faceTexture(boxColor(unit), String(unit.iso || "").slice(-6), false);
+    const aisleMove = moveFor(options, unit.iso);
+    const texture = faceTexture(aisleMove?.kind === "salida" ? "#b42318" : boxColor(unit), String(unit.iso || "").slice(-6), false);
     const geometry = new THREE.BoxGeometry(length, height, BOX_W);
     const material = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.62, metalness: 0.04 });
     const mesh = new THREE.Mesh(geometry, material);
@@ -796,9 +857,9 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
       code: unit.iso,
       typeLabel: unit.typeLabel || unit.type,
       where: "Pasillo · en el suelo",
-      note: "A la espera de un lugar.",
+      note: aisleMove ? yardMoveNote(aisleMove) : "A la espera de un lugar.",
     };
-    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color: "#121820" }));
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color: aisleMove ? "#e6a817" : "#121820" }));
     mesh.add(edges);
     root.add(mesh);
     disposables.push(geometry, material, texture, edges.geometry, edges.material);
@@ -831,7 +892,7 @@ function buildYard(zones, units, ghosts, typeColor, options = {}) {
   return root;
 }
 
-export default function YardScene({ zones, units, ghosts, perimeter, typeColor, onPick, picked, onClose, targets, incomingType, movingIso, transferring, blockers, onTransfer, onSlide, onUnplace, onSplit, onContextMenu, onPark, onRelease, history, fenceHint, onGearInfo }) {
+export default function YardScene({ zones, units, ghosts, perimeter, typeColor, onPick, picked, onClose, targets, incomingType, movingIso, transferring, blockers, onTransfer, onSlide, onUnplace, onSplit, onContextMenu, onPark, onRelease, history, fenceHint, onGearInfo, moves, replay, readOnly = false }) {
   const mountRef = useRef(null);
   const pickRef = useRef(onPick);
   const menuRef = useRef(onContextMenu);
@@ -847,7 +908,7 @@ export default function YardScene({ zones, units, ghosts, perimeter, typeColor, 
   colorRef.current = typeColor;
   blockersRef.current = new Set(blockers || []);
   selectedRef.current = picked && !picked.empty ? (picked.key || "") : "";
-  dataRef.current = { zones, units, ghosts, targets, incomingType, perimeter, movingIso };
+  dataRef.current = { zones, units, ghosts, targets, incomingType, perimeter, movingIso, moves };
   const yardKey = JSON.stringify({
     zones: (zones || []).map((zone) => [zone.id, zone.name, zone.rows, zone.cols, zone.levels, zone.gridRow, zone.gridCol, zone.xM || 0, zone.zM || 0, zone.closedSide || "", zone.turn || 0]),
     units: (units || []).map((unit) => [unit.iso, unit.lado, unit.ruma, unit.columna, unit.nivel, unit.type, unit.onAisle, unit.bayHalf || "", unit.color || "", unit.typeColor || ""]),
@@ -857,6 +918,7 @@ export default function YardScene({ zones, units, ghosts, perimeter, typeColor, 
     targets: Boolean(targets),
     incomingType: incomingType || "",
     movingIso: movingIso || "",
+    moves: (moves || []).map((move) => [move.iso, move.kind, move.from?.lado, move.from?.ruma, move.from?.columna, move.from?.nivel, move.to?.lado, move.to?.ruma, move.to?.columna, move.to?.nivel]),
   });
 
   useEffect(() => {
@@ -963,7 +1025,7 @@ export default function YardScene({ zones, units, ghosts, perimeter, typeColor, 
         scene.remove(content);
       }
       const data = dataRef.current;
-      content = buildYard(data.zones, data.units, data.ghosts, colorRef.current, { targets: data.targets, incomingType: data.incomingType, perimeter: data.perimeter, units: data.units, movingIso: data.movingIso });
+      content = buildYard(data.zones, data.units, data.ghosts, colorRef.current, { targets: data.targets, incomingType: data.incomingType, perimeter: data.perimeter, units: data.units, movingIso: data.movingIso, moves: data.moves });
       yardRoot.current = content;
       scene.add(content);
       const next = first || mode === "overview" ? "overview" : mode;
@@ -1149,7 +1211,7 @@ export default function YardScene({ zones, units, ghosts, perimeter, typeColor, 
   return (
     <div className="yard-scene">
       <div className="yard-scene-tools">
-        <span>Arrastra para girar. Pellizca o usa los botones para acercar. Un 20 al centro se corre a la izquierda o a la derecha.</span>
+        <span>{readOnly ? "Arrastra para girar. Pellizca o usa los botones para acercar. Toca un equipo para ver su posición." : "Arrastra para girar. Pellizca o usa los botones para acercar. Un 20 al centro se corre a la izquierda o a la derecha."}</span>
         <button className="btn-ghost yard-reset-view" type="button" onClick={() => viewRef.current?.reset()}>Vista general</button>
       </div>
       <div className={`yard-viewport${picked ? " has-pick" : ""}`} ref={mountRef}>
@@ -1166,7 +1228,7 @@ export default function YardScene({ zones, units, ghosts, perimeter, typeColor, 
             {picked.note ? <p>{picked.note}</p> : null}
             {picked.access ? <p>{picked.access}</p> : null}
             {picked.cost ? <p>{picked.cost}</p> : null}
-            {picked.unknown ? <p>Este hueco no está en el catálogo.</p> : <p className="yard-float-note">Esa referencia de movimientos queda en el catálogo comercial.</p>}
+            {replay || readOnly ? null : picked.unknown ? <p>Este hueco no está en el catálogo.</p> : <p className="yard-float-note">Esa referencia de movimientos queda en el catálogo comercial.</p>}
             {(() => {
               const pickedUnit = picked && !picked.unknown && !picked.empty
                 ? (units || []).find((unit) => unit.iso === (picked.code || picked.key))
@@ -1223,7 +1285,7 @@ export default function YardScene({ zones, units, ghosts, perimeter, typeColor, 
           <button type="button" aria-label="Alejar" onClick={() => viewRef.current?.farther()}>−</button>
         </div>
       </div>
-      {detailIso ? <YardUnitDetail iso={detailIso} onClose={() => setDetailIso("")} /> : null}
+      {detailIso ? <YardUnitDetail iso={detailIso} readOnly={readOnly} onClose={() => setDetailIso("")} /> : null}
     </div>
   );
 }

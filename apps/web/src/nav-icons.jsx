@@ -59,6 +59,7 @@ export function iconFor(path) {
   if (path.includes("pagos")) return "card";
   if (path.includes("visitas") || path.includes("visita")) return "truck";
   if (path.includes("alquileres")) return "calendar";
+  if (path.includes("prepublicados")) return "camera";
   if (path.includes("enlaces-catalogo")) return "chat";
   if (path.includes("equipo")) return "users";
   return "home";

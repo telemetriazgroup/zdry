@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
-import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
+import { hasRole, isCommercialViewer, isSuperadmin, useAuth } from "../auth.jsx";
 import { NoticeModal } from "../notice.jsx";
 import GearMedia from "./GearMedia.jsx";
 import { boxColor, fenceBays } from "../yard.js";
@@ -930,6 +930,7 @@ function ZoneShape({ zones, units, ghosts, depotId, busy, onDone, onWarn }) {
 
 export default function YardBuild({ layout, onReload, selectedIso, setSelectedIso }) {
   const { user } = useAuth();
+  const viewer = isCommercialViewer(user);
   const canGearMedia = hasRole(user, "admin", "coordinador");
   const [mode, setMode] = useState("3d");
   const [draft, setDraft] = useState(withSeats(layout.plan?.zones?.length ? layout.plan : FALLBACK_PLAN));
@@ -1098,6 +1099,10 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       return;
     }
     const unit = exact || hits[0];
+    if (viewer && !unit.lado) {
+      setError("Ese equipo no está ubicado en este patio.");
+      return;
+    }
     const pending = (layout.exits || []).some((item) => item.iso === unit.iso);
     const zone = draft.zones.find((entry) => entry.name === unit.lado);
     setError("");
@@ -1141,10 +1146,12 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     const rate = layout.retrieval?.rate ?? 25;
     const extraMoves = Math.max(0, reach.total - freeMoves);
     const reference = extraMoves * rate;
-    const access = accessText(reach);
-    const cost = extraMoves
-      ? `Referencia de costo extra: USD ${reference} (${extraMoves} × ${rate}). ${freeMoves} movimientos van libres.`
-      : `Sin cargo extra de movimientos. ${freeMoves} van libres.`;
+    const access = viewer ? "" : accessText(reach);
+    const cost = viewer
+      ? ""
+      : extraMoves
+        ? `Referencia de costo extra: USD ${reference} (${extraMoves} × ${rate}). ${freeMoves} movimientos van libres.`
+        : `Sin cargo extra de movimientos. ${freeMoves} van libres.`;
     const where = `${zone.name} · fila ${row} · columna ${col} · altura ${level}${half ? ` · mitad ${half}` : span === "center" ? " · al centro" : ""}`;
     if (occupant) {
       return {
@@ -1156,7 +1163,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         where,
         access,
         cost,
-        blocked: reach.total > 0,
+        blocked: viewer ? false : reach.total > 0,
         blockers: reach.blockers,
         note: occupant.status || "",
       };
@@ -1172,7 +1179,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       where,
       access,
       cost,
-      blocked: reach.total > 0,
+      blocked: viewer ? false : reach.total > 0,
       blockers: reach.blockers,
       note: named
         ? `${ghost.note ? `${ghost.note}. ` : ""}Equipo ajeno a ZDRY, ${feetName(ghost.typeCode)}.`
@@ -2058,7 +2065,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
           {picked.note ? <div>{picked.note}</div> : null}
           {picked.access ? <div>{picked.access}</div> : null}
           {picked.cost ? <div>{picked.cost}</div> : null}
-          {(() => {
+          {viewer ? null : (() => {
             const unit = layout.units.find((item) => item.iso === picked.code);
             const ghost = picked.ghost ? ghosts.find((item) => item.zoneId === picked.ghost.zoneId && item.row === picked.ghost.row && item.col === picked.ghost.col && item.level === picked.ghost.level && (item.half || "") === (picked.ghost.half || "")) : null;
             const feet = feetOf(unit?.type || ghost?.typeCode);
@@ -2075,8 +2082,8 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               </div>
             );
           })()}
-          {picked.splittable ? <button className="btn-ghost" type="button" onClick={splitPicked}>Dividir en dos de 20</button> : null}
-          {picked.ghost ? <button className="btn-ghost" type="button" onClick={clearPicked}>Liberar hueco</button> : null}
+          {!viewer && picked.splittable ? <button className="btn-ghost" type="button" onClick={splitPicked}>Dividir en dos de 20</button> : null}
+          {!viewer && picked.ghost ? <button className="btn-ghost" type="button" onClick={clearPicked}>Liberar hueco</button> : null}
           {!picked.unknown && !picked.ghost && layout.units.some((unit) => unit.iso === picked.code) ? (
             <button className="btn-primary" type="button" onClick={() => setDetailIso(picked.code)}>Ver más información</button>
           ) : null}
@@ -2093,12 +2100,16 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       <div className="action-row yard-modes">
         <b>Plano del almacén</b>
         <button className={mode === "3d" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("3d")}>Vista 3D</button>
-        <button className={mode === "armar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("armar")}>Zonas</button>
+        {viewer ? null : <button className={mode === "armar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("armar")}>Zonas</button>}
+        {viewer ? null : (
+          <>
         <button className={mode === "perimetro" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("perimetro")}>Perímetro</button>
         <button className={mode === "regularizar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => { setMode("regularizar"); setTransferIso(null); }}>Regularizar</button>
         <button className={mode === "trasladar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("trasladar")}>Trasladar</button>
         <button className={mode === "despachar" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("despachar")}>Despachar</button>
         <button className={mode === "tipos" ? "btn-primary" : "btn-ghost"} type="button" onClick={() => setMode("tipos")}>Tipos</button>
+          </>
+        )}
       </div>
       <NoticeModal title="Aviso" text={error} onClose={() => setError("")} />
       <NoticeModal title={ask?.title || "Confirmar"} text={ask?.text || ""} confirmLabel={ask?.confirmLabel || "Quitar zona"} altLabel={ask?.altLabel || ""} onClose={() => setAsk(null)} onConfirm={ask ? () => { const run = ask.run; setAsk(null); run(); } : null} onAlt={ask?.alt ? () => { const alt = ask.alt; setAsk(null); alt(); } : null} />
@@ -2583,7 +2594,9 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       ) : (
         <>
           <p className="section-sub yard-help">
-            La vista muestra las rumas como las ve el operario. No se saca un equipo si hay otros encima o si una fila le tapa la vista al stacker: esos se marcan en naranja. El cuadro amarillo es un puesto libre al que el stacker llega. El rayado es un espacio ocupado sin identificar.
+            {viewer
+              ? "Vista del patio con los equipos que están en un puesto. Toca uno para ver su posición y su ficha. Desde aquí no se traslada."
+              : "La vista muestra las rumas como las ve el operario. No se saca un equipo si hay otros encima o si una fila le tapa la vista al stacker: esos se marcan en naranja. El cuadro amarillo es un puesto libre al que el stacker llega. El rayado es un espacio ocupado sin identificar."}
           </p>
           <div className="guest-form">
             <label className="zone-field">Buscar en el patio
@@ -2592,7 +2605,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             <button className="btn-primary" type="button" onClick={locateContainer}>Ubicar</button>
           </div>
           <datalist id="yard-units">
-            {(layout.units || []).map((unit) => <option key={unit.iso} value={unit.iso} />)}
+            {(layout.units || []).filter((unit) => !viewer || unit.lado).map((unit) => <option key={unit.iso} value={unit.iso} />)}
           </datalist>
           <YardScene
             zones={draft.zones}
@@ -2605,7 +2618,8 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             incomingType={layout.units.find((unit) => unit.iso === transferIso)?.type || ""}
             movingIso={transferIso || ""}
             transferring={Boolean(transferIso)}
-            blockers={picked?.blockers || []}
+            blockers={viewer ? [] : (picked?.blockers || [])}
+            readOnly={viewer}
             fenceHint={(() => {
               if (!transferIso) return "";
               const moving = layout.units.find((unit) => unit.iso === transferIso);
@@ -2615,7 +2629,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               return offers.length ? "" : `El cerco no tiene un puesto libre de ${feet} pies.`;
             })()}
             history={history}
-            onTransfer={() => {
+            onTransfer={viewer ? undefined : () => {
               if (!picked?.code || picked.unknown) return;
               if (picked.blocked) {
                 setError(picked.access);
@@ -2625,10 +2639,10 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               setTransferIso(picked.code);
               loadHistory(picked.code);
             }}
-            onSlide={(half) => slideTo(half)}
-            onUnplace={() => unplacePicked()}
-            onSplit={() => splitPicked()}
-            onContextMenu={(pick, x, y) => {
+            onSlide={viewer ? undefined : (half) => slideTo(half)}
+            onUnplace={viewer ? undefined : () => unplacePicked()}
+            onSplit={viewer ? undefined : () => splitPicked()}
+            onContextMenu={viewer ? undefined : (pick, x, y) => {
               if (!pick?.ghost) return;
               const zone = draft.zones.find((entry) => entry.id === pick.ghost.zoneId);
               if (!zone) return;
@@ -2638,17 +2652,18 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               if (!actions.length) return;
               setMenu({ x, y, actions, ghost: pick.ghost });
             }}
-            onPark={() => {
+            onPark={viewer ? undefined : () => {
               if (picked?.blocked) { setError(picked.access); return; }
               if (transferIso) parkUnit(transferIso);
             }}
-            onRelease={() => {
+            onRelease={viewer ? undefined : () => {
               if (picked?.blocked) { setError(picked.access); return; }
               if (transferIso) returnUnit(transferIso);
             }}
             onClose={() => { setPicked(null); setTransferIso(null); }}
             onGearInfo={(draft.outsiders || []).some((item) => item.code === picked?.code) ? () => setGearMediaId((draft.outsiders || []).find((item) => item.code === picked.code)?.id || "") : null}
             onPick={(item) => {
+              if (viewer && item.empty) return;
               if (item.empty && item.fence && transferIso) {
                 const side = (draft.perimeter?.sides || []).find((entry) => entry.id === item.sideId);
                 if (side) dropOnFence(side, item.slot, item.level, item.half || "", item.row || 1);
@@ -2672,7 +2687,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               else setPicked(item);
             }}
           />
-          <FencePlan
+          {viewer ? null : <FencePlan
             perimeter={draft.perimeter}
             units={layout.units}
             moving={layout.units.find((unit) => unit.iso === transferIso)}
@@ -2686,10 +2701,10 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               where: `Cerco · ${side.name} · puesto ${slot}${row > 1 ? ` · fila ${row}` : ""} · nivel ${level}${half ? ` · mitad ${half}` : ""}`,
               note: cell.note || "Contenedor sin ficha. El puesto queda lleno.",
             })}
-          />
+          />}
         </>
       )}
-      {detailIso ? <YardUnitDetail iso={detailIso} onClose={() => setDetailIso("")} /> : null}
+      {detailIso ? <YardUnitDetail iso={detailIso} readOnly={viewer} onClose={() => setDetailIso("")} /> : null}
       {gearMediaId && (draft.outsiders || []).some((item) => item.id === gearMediaId) ? (
         <div className="overlay open yard-detail-overlay" role="presentation" onClick={() => setGearMediaId("")}>
           <div className="modal" role="dialog" aria-modal="true" aria-label="Fotos del equipo" onClick={(event) => event.stopPropagation()}>

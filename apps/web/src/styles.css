@@ -2141,6 +2141,15 @@ button.tile.dry-click { display: block; }
 .yard-scene { margin-top: 12px; background: #1c2433; border: 1px solid #9aa6b4; border-radius: 12px; overflow: hidden; max-width: 100%; }
 .yard-scene-tools { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 8px 10px; font-size: 12px; color: #d5deea; background: #243044; }
 .yard-reset-view { width: auto; padding: 6px 10px; font-size: 12px; }
+.yard-out-history { margin-top: 12px; }
+.yard-out-layout { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.yard-out-list { display: flex; flex-direction: column; gap: 8px; max-height: min(640px, 72vh); overflow: auto; padding: 10px; }
+.yard-out-list h3 { margin: 8px 0 0; font-size: 13px; }
+.yard-out-list > button, .yard-out-move { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 8px 10px; border: 1px solid #d0d5dd; border-radius: 8px; background: #fff; cursor: pointer; }
+.yard-out-list > button.is-on, .yard-out-move.is-on { border-color: #c9720b; background: #fff7ed; }
+.yard-out-move.salida { border-left: 4px solid #b42318; }
+.yard-out-move.baja { border-left: 4px solid #e6a817; }
+.yard-out-list span, .yard-out-move span { font-size: 12px; color: #475569; }
 .yard-viewport { position: relative; height: min(640px, 72vh); touch-action: none; max-width: 100%; }
 .yard-viewport canvas { display: block; width: 100%; height: 100%; max-width: 100%; cursor: grab; }
 .yard-float-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
@@ -2217,6 +2226,8 @@ button.tile.dry-click { display: block; }
   .yard-scene-tools span { display: none; }
   .yard-scene-tools { justify-content: flex-end; padding: 6px; }
   .yard-viewport { height: min(58dvh, 480px); min-height: 280px; }
+  .yard-out-layout { grid-template-columns: 1fr; }
+  .yard-out-list { max-height: 280px; }
   .yard-float {
     top: auto; left: 8px; right: 8px; bottom: 8px; width: auto;
     max-height: 42%; overflow: auto; padding: 10px 12px;

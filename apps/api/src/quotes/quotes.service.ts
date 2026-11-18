@@ -59,7 +59,7 @@ import { mediaExtension, zipStored } from "../domain/zip-store";
 import { CATALOG_COMMERCE_KEY, normalizeCatalogCommerce, publicQuotesBlockedMessage } from "../domain/catalog-commerce";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { isOwnSaleStock } from "../domain/iso6346";
-import { hasCatalogLocation, isPendingValuation, publishedStockWhere } from "../domain/odoo-reconcile";
+import { hasCatalogLocation, isPendingValuation, prepublishedStockWhere, publishedStockWhere } from "../domain/odoo-reconcile";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import {
@@ -249,6 +249,13 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     return {
       ...(await this.prisma.liveContainers()),
       ...publishedStockWhere(),
+    };
+  }
+
+  private async prepublishedWhere(): Promise<Prisma.ContainerWhereInput> {
+    return {
+      ...(await this.prisma.liveContainers()),
+      ...prepublishedStockWhere(),
     };
   }
 
@@ -544,6 +551,122 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       inspectionNotes: publicCatalogNotes(c.inspectionNotes),
       ...publicMediaFields(c),
     };
+  }
+
+  private prepublishedMedia(c: { photos: { slot: number }[]; updatedAt?: Date }) {
+    const photos = [...c.photos.map((photo) => photo.slot)].sort((a, b) => a - b);
+    return {
+      photos,
+      photoSlots: Array.from({ length: 9 }, (_, i) => photos.includes(i)),
+      coverSlot: photos[0] ?? null,
+      mediaVersion: (c.updatedAt || new Date()).toISOString(),
+    };
+  }
+
+  async catalogPrepublishedList(query: { q?: string; page?: string; pageSize?: string }) {
+    const page = Math.max(1, parseInt(query.page || "1", 10) || 1);
+    const pageSize = catalogPageSize(query.pageSize);
+    const where: Prisma.ContainerWhereInput = { ...(await this.prepublishedWhere()) };
+    if (query.q) {
+      const q = query.q.trim();
+      where.OR = [
+        { iso: { contains: q, mode: "insensitive" } },
+        { manufacturer: { contains: q, mode: "insensitive" } },
+        { type: { contains: q, mode: "insensitive" } },
+      ];
+    }
+    const [total, rows, pricing, types, cats, acquisition] = await Promise.all([
+      this.prisma.container.count({ where }),
+      this.prisma.container.findMany({
+        where,
+        include: { depot: true, photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { slot: true } } },
+        orderBy: { iso: "asc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.loadPricing(),
+      this.prisma.containerType.findMany(),
+      this.prisma.category.findMany(),
+      this.loadAcquisitionRefs(),
+    ]);
+    const items = [];
+    for (const c of rows) {
+      const prices = await this.ensureUnitPrices(c.iso, pricing, acquisition);
+      items.push({
+        iso: c.iso,
+        type: c.type,
+        typeLabel: types.find((t) => t.code === c.type)?.label || c.type,
+        cat: c.cat,
+        catLabel: cats.find((x) => x.code === c.cat)?.label || c.cat,
+        year: c.year,
+        manufacturer: c.manufacturer,
+        color: c.color,
+        tareKg: c.tareKg,
+        mgwKg: c.mgwKg,
+        depotId: c.depotId,
+        depotName: c.depot.name,
+        depotCity: c.depot.city,
+        status: c.status,
+        demo: c.demo,
+        placedInYard: false,
+        priceList: prices.priceList,
+        priceMin: prices.priceMin,
+        margin: Math.round(prices.priceList - prices.priceMin),
+        inspectionNotes: publicCatalogNotes(c.inspectionNotes),
+        ...this.prepublishedMedia(c),
+      });
+    }
+    return { items, total, page, pageSize, pages: Math.max(1, Math.ceil(total / pageSize)) };
+  }
+
+  async catalogPrepublishedUnit(iso: string) {
+    const code = String(iso || "").trim().toUpperCase();
+    const c = await this.prisma.container.findFirst({
+      where: { iso: code, ...(await this.prepublishedWhere()) },
+      include: { depot: true, photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { slot: true } } },
+    });
+    if (!c) throw new NotFoundException("Ese equipo ya no está prepublicado.");
+    const [pricing, typeRow, catRow, acquisition] = await Promise.all([
+      this.loadPricing(),
+      this.prisma.containerType.findUnique({ where: { code: c.type } }),
+      this.prisma.category.findUnique({ where: { code: c.cat } }),
+      this.loadAcquisitionRefs(),
+    ]);
+    const prices = await this.ensureUnitPrices(c.iso, pricing, acquisition);
+    return {
+      iso: c.iso,
+      type: c.type,
+      typeLabel: typeRow?.label || c.type,
+      cat: c.cat,
+      catLabel: catRow?.label || c.cat,
+      year: c.year,
+      manufacturer: c.manufacturer,
+      color: c.color,
+      tareKg: c.tareKg,
+      mgwKg: c.mgwKg,
+      depotName: c.depot.name,
+      depotCity: c.depot.city,
+      status: c.status,
+      placedInYard: false,
+      priceList: prices.priceList,
+      priceMin: prices.priceMin,
+      margin: Math.round(prices.priceList - prices.priceMin),
+      inspectionNotes: publicCatalogNotes(c.inspectionNotes),
+      ...this.prepublishedMedia(c),
+    };
+  }
+
+  async catalogPrepublishedPhoto(iso: string, slot: number) {
+    const code = String(iso || "").trim().toUpperCase();
+    const c = await this.prisma.container.findFirst({ where: { iso: code, ...(await this.prepublishedWhere()) } });
+    if (!c) throw new NotFoundException("Foto no disponible.");
+    const photo = await this.prisma.inspectionPhoto.findFirst({
+      where: { iso: code, slot, status: PHOTO_STATUS_ACTIVE },
+    });
+    if (!photo) throw new NotFoundException("Foto no encontrada.");
+    const key = photo.publicKey || photo.storageKey;
+    const obj = await this.storage.get(key);
+    return new StreamableFile(obj.stream, { type: obj.contentType || photo.mimeType, disposition: "inline" });
   }
 
   private async requireHandoff(token: string) {

@@ -19,6 +19,11 @@ export function isSuperadmin(user) {
   return user?.role === "superadmin";
 }
 
+/** Vendedor y ejecutivo: miran el patio, no lo mueven. */
+export function isCommercialViewer(user) {
+  return user?.role === "vendedor" || user?.role === "ejecutivo";
+}
+
 /** Superadmin puede todo. El resto solo si su rol está en la lista. */
 export function hasRole(user, ...roles) {
   if (!user) return false;
@@ -30,8 +35,8 @@ export const ROLE_DESC = {
   superadmin: "Acceso total. Único que puede entrar como otro usuario. También integra Odoo, textos, demo, auditoría y respaldos.",
   admin: "Ve inventario con costo real, personas, maestros, configuración, regularización Odoo y publicación del catálogo.",
   gerente: "Define reglas de precio y visibilidad. No ve FOB ni C_T.",
-  vendedor: "Cotiza, valida comprobantes y confirma asignación. Nunca ve el costo real.",
-  ejecutivo: "Misma operación que el comercial. Además ve los enlaces y el desempeño de todos los vendedores, y puede registrar un cliente para derivarlo.",
+  vendedor: "Cotiza, valida comprobantes y confirma asignación. Ve el patio en 3D, la ficha del equipo y los prepublicados con fotos, precio y margen. Nunca ve el costo real.",
+  ejecutivo: "Misma operación que el comercial, incluido el patio en solo lectura y los prepublicados. Además ve los enlaces y el desempeño de todos los vendedores, y puede registrar un cliente para derivarlo.",
   compras: "Facturas de compra, conciliar reentrega con OC/IN, deuda Odoo, extras y DAM. Ve costos de adquisición.",
   coordinador: "Alta de reentrega, visitas de puerta, ficha, imágenes y conciliación del ingreso de Odoo con la unidad de patio. No publica el catálogo ni ve tarifas.",
   almacen: "Patio de campo: lista de visitas y DRY, fotos, video, diagnóstico y registro de emergencia si el contenedor no está. No ve Odoo ni precios.",
@@ -83,11 +88,15 @@ export const ROLE_NAV = {
   vendedor: [
     { to: "/app", label: "Inicio", end: true },
     { to: "/app/inventario", label: "Inventario" },
+    { to: "/app/almacen/patio", label: "Patio" },
+    { to: "/app/prepublicados", label: "Prepublicados" },
     { to: "/app/enlaces-catalogo", label: "Enlaces catálogo" },
   ],
   ejecutivo: [
     { to: "/app", label: "Inicio", end: true },
     { to: "/app/inventario", label: "Inventario" },
+    { to: "/app/almacen/patio", label: "Patio" },
+    { to: "/app/prepublicados", label: "Prepublicados" },
     { to: "/app/enlaces-catalogo", label: "Enlaces catálogo" },
     { to: "/app/comerciales", label: "Comerciales" },
   ],

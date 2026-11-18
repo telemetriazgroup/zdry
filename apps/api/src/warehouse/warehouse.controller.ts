@@ -138,6 +138,7 @@ export class WarehouseController {
   }
 
   @Get("units/:iso")
+  @Roles("admin", "almacen", "coordinador", "vendedor", "ejecutivo")
   getUnit(@Param("iso") iso: string, @CurrentUser() user: AuthUser) {
     return this.warehouse.getUnit(iso, {
       hideOdoo: hideOdooFor(user.role),
@@ -255,6 +256,7 @@ export class WarehouseController {
   }
 
   @Get("units/:iso/photos/:slot")
+  @Roles("admin", "almacen", "coordinador", "vendedor", "ejecutivo")
   async openPhoto(@Param("iso") iso: string, @Param("slot") slot: string) {
     const obj = await this.warehouse.openPhoto(iso, slot);
     return new StreamableFile(obj.stream, {
