@@ -155,7 +155,7 @@ export class SalidaService {
   }
 
   /** Aviso corto, con el mismo canal guardado. No arma la carta del catálogo. */
-  async notifyText(input: { phone: string; email: string; contact: string; subject: string; message: string; html?: string }): Promise<SalidaResult> {
+  async notifyText(input: { phone: string; email: string; contact: string; subject: string; message: string; html?: string; referencia?: string; respuestaUrl?: string }): Promise<SalidaResult> {
     const cfg = await this.read();
     return this.deliver(cfg, buildShareNotice({
       channel: cfg.channel,
@@ -165,6 +165,8 @@ export class SalidaService {
       html: input.html,
       contact: input.contact,
       subject: input.subject,
+      referencia: input.referencia,
+      respuestaUrl: input.respuestaUrl,
     }));
   }
 

@@ -144,6 +144,7 @@ export default function AccesoCatalogo() {
         <p className="share-created-key">{created.accessCode}</p>
         <p>{created.minutes ? `Vigente ${created.minutes} minutos.` : `Vigente ${created.hours} ${created.hours === 1 ? "hora" : "horas"}.`}</p>
         <p>{created.vendorName ? `Te atiende ${created.vendorName}.` : "Un comercial quedó asignado para hacerte seguimiento."}</p>
+        {created.rucPending ? <p>El comercial completará tu RUC antes de preparar la cotización.</p> : null}
         {created.avisoPending && !created.aviso ? <p>Los WhatsApp y los correos se envían solos. El aviso queda abajo cuando salen.</p> : null}
         {salidaNotice(created.salida) ? <p>{salidaNotice(created.salida)}</p> : null}
         <div className="share-created-actions" style={{ justifyContent: "center" }}>
@@ -168,7 +169,7 @@ export default function AccesoCatalogo() {
         <button type="button" className={mode === "ruc" ? "on" : ""} onClick={() => pick("ruc")}>Tengo RUC</button>
         <button type="button" className={mode === "dni" ? "on" : ""} onClick={() => pick("dni")}>Solo tengo DNI</button>
       </div>
-      {!mode ? <p className="field-hint">Con RUC el catálogo dura 3 horas. Solo con DNI, 1 hora. El nombre, el celular de WhatsApp y el correo son necesarios.</p> : null}
+      {!mode ? <p className="field-hint">Con RUC el catálogo dura 3 horas y el contacto queda en Odoo. Solo con DNI, 1 hora: los datos quedan en ZDRY hasta que el comercial complete el RUC. El nombre, el celular de WhatsApp y el correo son necesarios.</p> : null}
 
       {mode === "ruc" ? (
         <form className="form-grid" onSubmit={lookupRuc}>
@@ -215,7 +216,7 @@ export default function AccesoCatalogo() {
       {company?.busy ? <TakenCard vendorName={company.vendorName} vendorWhatsapp={company.vendorWhatsapp} /> : null}
       {taken && !company?.busy && !company?.renewed ? <TakenCard vendorName={taken.vendorName} vendorWhatsapp={taken.vendorWhatsapp} /> : null}
 
-      {mode === "dni" && !taken && !company?.renewed ? <p>Puedes registrarte solo con tu DNI. El catálogo queda abierto 1 hora.</p> : null}
+      {mode === "dni" && !taken && !company?.renewed ? <p>Puedes registrarte solo con tu DNI. Tus datos quedan en ZDRY y el catálogo se abre 1 hora. El comercial completará el RUC para cotizar la venta o el alquiler.</p> : null}
 
       {personReady ? (
         <form className="form-grid" onSubmit={register}>

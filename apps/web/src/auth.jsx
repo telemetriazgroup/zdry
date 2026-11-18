@@ -76,6 +76,8 @@ export const ROLE_NAV = {
     { to: "/app/catalogo-media", label: "Ficha catálogo" },
     { to: "/app/evaluaciones", label: "Evaluaciones" },
     { to: "/app/enlaces-catalogo", label: "Enlaces catálogo" },
+    { to: "/app/equipo-comercial", label: "Equipo comercial" },
+    { to: "/app/hilos", label: "Hilos" },
   ],
   gerente: [
     { to: "/app", label: "Inicio", end: true },
@@ -91,6 +93,7 @@ export const ROLE_NAV = {
     { to: "/app/almacen/patio", label: "Patio" },
     { to: "/app/prepublicados", label: "Prepublicados" },
     { to: "/app/enlaces-catalogo", label: "Enlaces catálogo" },
+    { to: "/app/hilos", label: "Hilos" },
   ],
   ejecutivo: [
     { to: "/app", label: "Inicio", end: true },
@@ -99,6 +102,8 @@ export const ROLE_NAV = {
     { to: "/app/prepublicados", label: "Prepublicados" },
     { to: "/app/enlaces-catalogo", label: "Enlaces catálogo" },
     { to: "/app/comerciales", label: "Comerciales" },
+    { to: "/app/equipo-comercial", label: "Equipo comercial" },
+    { to: "/app/hilos", label: "Hilos" },
   ],
   compras: [
     { to: "/app", label: "Inicio", end: true },

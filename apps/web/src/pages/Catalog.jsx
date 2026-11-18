@@ -17,6 +17,7 @@ import VideoMarks, { videoSilenceProps } from "../video-marks.jsx";
 
 const CART_KEY = "zdry_cart";
 const money = (n) => (n == null ? null : "$" + Math.round(Number(n)).toLocaleString("en-US"));
+const offerMoney = (n) => (n == null ? "" : "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 
 function manufacturerMissing(value) {
   const text = String(value || "").trim().toLowerCase();
@@ -652,11 +653,38 @@ export default function Catalog() {
     setAsking(iso);
     try {
       const row = await api(`/catalog/share/${shareToken}/interes`, { method: "POST", body: { iso } });
-      setInterest({ iso, vendorName: row.vendorName || share?.vendorName || "", message: row.message });
+      setInterest({ ...row, iso, vendorName: row.vendorName || share?.vendorName || "" });
     } catch (e) {
       setError(e.message || "No se pudo avisar al comercial.");
     } finally {
       setAsking("");
+    }
+  }
+
+  useEffect(() => {
+    if (!shareToken || !interest?.threadId) return undefined;
+    let stop = false;
+    const timer = window.setInterval(() => {
+      api(`/catalog/share/${shareToken}/hilo/${interest.threadId}`)
+        .then((row) => {
+          if (!stop) setInterest((prev) => (prev ? { ...prev, ...row } : prev));
+        })
+        .catch(() => undefined);
+    }, 4000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, [shareToken, interest?.threadId]);
+
+  async function chooseOption(opcion) {
+    if (!shareToken || !interest?.threadId) return;
+    setError("");
+    try {
+      const row = await api(`/catalog/share/${shareToken}/hilo/${interest.threadId}/opcion`, { method: "POST", body: { opcion } });
+      setInterest((prev) => (prev ? { ...prev, ...row } : prev));
+    } catch (e) {
+      setError(e.message || "No se pudo registrar tu respuesta.");
     }
   }
 
@@ -1134,15 +1162,30 @@ export default function Catalog() {
         <div className="overlay open" onClick={(e) => { if (e.target === e.currentTarget) setInterest(null); }}>
           <div className="modal quote-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
-              <h3>Cotización solicitada</h3>
+              <h3>{interest.iso ? `Equipo ${interest.iso}` : "Consulta"}</h3>
               <button className="modal-close" type="button" onClick={() => setInterest(null)} aria-label="Cerrar">×</button>
             </div>
             <div className="modal-body single">
-              <p>{interest.message || `Tu cotización ha sido solicitada. En un momento te atenderá ${interest.vendorName || "tu comercial"}.`}</p>
-              {interest.iso ? <p>Equipo {interest.iso}.</p> : null}
-              <div className="share-created-actions">
-                <button className="btn-primary" type="button" onClick={() => setInterest(null)}>Entendido</button>
-              </div>
+              {(interest.messages || []).map((item) => (
+                <p key={item.id}>{item.body}</p>
+              ))}
+              {!interest.messages?.length ? <p>{interest.message || "Tu comercial recibió la consulta."}</p> : null}
+              {interest.offer ? (
+                <p>
+                  Precio neto {offerMoney(interest.offer.net)}. IGV {offerMoney(interest.offer.igv)}. Total con IGV {offerMoney(interest.offer.gross)}.
+                </p>
+              ) : null}
+              {interest.status === "abierto" && interest.offer ? (
+                <div className="share-created-actions">
+                  <button className="btn-primary" type="button" onClick={() => chooseOption("1")}>1. Solicitar cotización</button>
+                  <button className="btn-ghost" type="button" onClick={() => chooseOption("2")}>2. Que me contacte el comercial</button>
+                  <button className="btn-ghost" type="button" onClick={() => chooseOption("3")}>3. Entendido, gracias</button>
+                </div>
+              ) : (
+                <div className="share-created-actions">
+                  <button className="btn-primary" type="button" onClick={() => setInterest(null)}>Cerrar</button>
+                </div>
+              )}
             </div>
           </div>
         </div>

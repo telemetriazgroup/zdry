@@ -494,7 +494,7 @@ export default function CatalogShares() {
       } else if (form.docKind === "dni" && found.inOdoo) {
         setMsg(`${who} ya está en contactos. Confirma si asimilas ese contacto o escribes otro. El RUC queda pendiente.`);
       } else if (form.docKind === "dni") {
-        setMsg("Ese DNI no está en contactos. Completa nombres, apellidos, correo y celular. Al generar el enlace se crea la persona en Odoo y el RUC queda pendiente.");
+        setMsg("Ese DNI no está en contactos. Completa nombres, apellidos, correo y celular. El enlace queda en ZDRY, sin contacto en Odoo, y el RUC queda pendiente.");
       } else if (found.inOdoo) {
         setMsg(found.contacts?.length
           ? `${who} está en contactos de Odoo. Elige qué contacto asimilar para el enlace, o escribe otro.`
@@ -702,12 +702,12 @@ export default function CatalogShares() {
     <>
       <h2 className="section-title">Enlaces de catálogo</h2>
       <p className="section-sub">
-        Primero se busca el cliente en los contactos de Odoo. Si ya está, el enlace usa su empresa y su contacto. Si no está, se crea ahí al generar el enlace. Por defecto el cliente se registra con RUC. Si solo mostró DNI, activa esa opción: se valida que tenga 8 dígitos, se pide nombres, apellidos, correo y celular, y el RUC queda pendiente para agregarlo después. La vigencia va de 24 a 240 horas.
+        Primero se busca el cliente en los contactos de Odoo. Si ya está, el enlace usa su empresa y su contacto. Con RUC, si no está, se crea al generar el enlace. Si solo mostró DNI, activa esa opción: se piden nombres, apellidos, correo y celular, los datos quedan en ZDRY y no se crea el contacto en Odoo. El RUC se agrega después. La vigencia va de 24 a 240 horas.
       </p>
       {canExternal ? (
         <div className="panel gate-link">
           <h3>Registro externo</h3>
-          <p>El cliente abre este enlace y se registra. Con RUC el catálogo dura 3 horas; solo con DNI, 1 hora. El sistema se lo asigna a un comercial.</p>
+          <p>El cliente abre este enlace y se registra. Con RUC el catálogo dura 3 horas y el contacto se crea en Odoo. Solo con DNI dura 1 hora: los datos quedan en ZDRY, sin contacto en Odoo, hasta que agregues el RUC.</p>
           <div className="gate-link-row">
             <code>{gateUrl}</code>
             <button className="btn-ghost" type="button" onClick={() => navigator.clipboard?.writeText(gateUrl).then(() => setMsg("Enlace de registro externo copiado.")).catch(() => setError("No se pudo copiar."))}>Copiar enlace</button>
@@ -731,7 +731,7 @@ export default function CatalogShares() {
               <p className="share-created-key">{created.accessCode || "—"}</p>
               <p>Vigente {created.hours} horas.</p>
               <p><a href={shareUrl(created.token)} target="_blank" rel="noreferrer">{shareUrl(created.token)}</a></p>
-              {created.rucPending ? <p>Quedó pendiente la validación del RUC. Puedes agregarlo después.</p> : null}
+              {created.rucPending ? <p>Quedó en ZDRY, sin contacto en Odoo. Agrega el RUC cuando vayas a cotizar la venta o el alquiler.</p> : null}
               <p className="field-hint">{created.copied ? "El mensaje para el cliente ya está copiado." : "Puedes copiar el mensaje si lo necesitas."} Los WhatsApp y los correos se envían solos. El aviso queda abajo cuando salen.</p>
               <div className="share-created-actions">
                 <button

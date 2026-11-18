@@ -8,9 +8,10 @@ import { OdooModule } from "../odoo/odoo.module";
 import { SunatRucService } from "./sunat-ruc.service";
 import { OdooImportModule } from "../odoo-import/odoo-import.module";
 import { CatalogSharesModule } from "../catalog-shares/catalog-shares.module";
+import { CommercialModule } from "../commercial/commercial.module";
 
 @Module({
-  imports: [DealCloseModule, OdooModule, OdooImportModule, CatalogSharesModule],
+  imports: [DealCloseModule, OdooModule, OdooImportModule, CatalogSharesModule, CommercialModule],
   controllers: [CatalogController, QuotesController, AccountController, AdminOdooController],
   providers: [QuotesService, SunatRucService, CatalogAccessGuard],
   exports: [QuotesService],

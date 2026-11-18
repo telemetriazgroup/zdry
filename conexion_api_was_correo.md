@@ -38,6 +38,8 @@ Un ítem inválido no tumba al resto. Ese ítem vuelve con `estado: "rechazado"`
 | `telefono` | Sí | Número de destino. Solo se usan los dígitos. Si son 9, se antepone `51`. Tiene que quedar entre 8 y 15 dígitos. |
 | `mensaje` | Sí | Texto que envía el bot. También se acepta el nombre `cuerpo`. Hasta 4000 caracteres. |
 | `contacto` | Sí | Número al que esa persona debe llamar si responde. Misma regla de dígitos que `telefono`. |
+| `referencia` | No | Id del envío, hasta 80 caracteres. Un hilo comercial usa `hilo:<id>:<marca>`. |
+| `respuestaUrl` | No | Si viene, y la persona escribe después de que ese aviso salió, SGIT hace `POST` a esa URL con `{ referencia, telefono, texto }` y el header `x-salida-clave`. La respuesta `{ mensaje }` es lo que el bot contesta. Si `mensaje` viene vacío, el bot no escribe. Si la URL no responde, se usa el texto de `contacto`. |
 
 SGIT guarda el mensaje y lo pone en la cola del bot. El texto no se recorta ni se rechaza por haber mandado uno antes.
 

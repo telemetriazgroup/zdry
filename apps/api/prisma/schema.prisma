@@ -47,6 +47,8 @@ model User {
   quotesSold       Quote[]    @relation("QuoteVendor")
   catalogShares    CatalogShare[]
   odooLink         UserOdooLink?
+  deskAsVendor     CommercialDesk?  @relation("DeskVendor")
+  deskAsExecutive  CommercialDesk[] @relation("DeskExecutive")
 
   @@index([demo])
 }
@@ -1355,6 +1357,9 @@ model CatalogShare {
   sunatCondition String              @default("")
   customerId     String?
   clientNote     String              @default("")
+  executiveId    String              @default("")
+  executiveName  String              @default("")
+  executiveWhatsapp String           @default("")
   accessCode     String              @default("")
   activeSession  String              @default("")
   hours          Int
@@ -1363,6 +1368,7 @@ model CatalogShare {
   archivedAt     DateTime?
   createdAt      DateTime            @default(now())
   events         CatalogShareEvent[]
+  threads        CommercialThread[]
 
   @@index([vendorId, createdAt])
   @@index([expiresAt])
@@ -1422,6 +1428,55 @@ model CatalogShareEvent {
 
   @@index([shareId, createdAt])
   @@index([iso])
+}
+
+/** Vendedor habilitado para el registro de portería y el ejecutivo que lo sigue. */
+model CommercialDesk {
+  id          String   @id @default(uuid())
+  vendorId    String   @unique
+  vendor      User     @relation("DeskVendor", fields: [vendorId], references: [id], onDelete: Cascade)
+  executiveId String
+  executive   User     @relation("DeskExecutive", fields: [executiveId], references: [id])
+  enabled     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([executiveId])
+  @@index([enabled])
+}
+
+/** Conversación de un enlace y un equipo: precio, opciones del cliente y seguimiento. */
+model CommercialThread {
+  id               String    @id @default(uuid())
+  shareId          String
+  share            CatalogShare @relation(fields: [shareId], references: [id], onDelete: Cascade)
+  iso              String
+  unitType         String    @default("")
+  status           String    @default("abierto")
+  priceList        Decimal   @db.Decimal(12, 2)
+  priceMin         Decimal   @db.Decimal(12, 2)
+  priceNet         Decimal?  @db.Decimal(12, 2)
+  contactAskedAt   DateTime?
+  vendorOkAt       DateTime?
+  lastVendorPingAt DateTime?
+  executivePingAt  DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  messages         CommercialMessage[]
+
+  @@index([shareId, iso, status])
+  @@index([status, contactAskedAt])
+}
+
+model CommercialMessage {
+  id        String           @id @default(uuid())
+  threadId  String
+  thread    CommercialThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author    String
+  body      String
+  createdAt DateTime         @default(now())
+
+  @@index([threadId, createdAt])
 }
 
 /** Patio tal como estaba antes de una actualización por OUT, y a dónde pasó cada equipo. */

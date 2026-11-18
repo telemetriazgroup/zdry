@@ -425,6 +425,8 @@ export function buildShareNotice(input: {
   html?: string;
   contact: string;
   subject: string;
+  referencia?: string;
+  respuestaUrl?: string;
 }): { body: Record<string, unknown> | null; plan: SalidaResult } {
   const sendWa = input.channel === "ambos" || input.channel === "whatsapp";
   const sendMail = input.channel === "ambos" || input.channel === "correo";
@@ -443,7 +445,12 @@ export function buildShareNotice(input: {
     else if (!ok(contacto)) motivos.push("El comercial no tiene WhatsApp para el contacto de respuesta.");
     else if (!input.message.trim()) motivos.push("Falta el mensaje.");
     else {
-      body.whatsapp = { telefono, mensaje: input.message.slice(0, 4000), contacto };
+      const whatsappBody: Record<string, string> = { telefono, mensaje: input.message.slice(0, 4000), contacto };
+      const referencia = String(input.referencia || "").trim().slice(0, 80);
+      const respuestaUrl = String(input.respuestaUrl || "").trim().slice(0, 300);
+      if (referencia) whatsappBody.referencia = referencia;
+      if (respuestaUrl) whatsappBody.respuestaUrl = respuestaUrl;
+      body.whatsapp = whatsappBody;
       whatsapp = "en_cola";
     }
   }

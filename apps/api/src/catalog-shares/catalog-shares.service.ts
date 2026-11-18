@@ -6,7 +6,8 @@ import { AuditService } from "../audit/audit.service";
 import { AuthUser, COMMERCIAL_ROLES } from "../auth/auth.types";
 import { OdooClient } from "../odoo/odoo.client";
 import { SalidaService } from "../salida/salida.service";
-import { SALIDA_GAP_MS, SalidaResult, salidaQueued, shareAvisoText, shareNoticePack, unitInterestNotice, vendorFollowNotice, vendorReturnNotice } from "../domain/salida";
+import { CommercialService } from "../commercial/commercial.service";
+import { SALIDA_GAP_MS, SalidaResult, salidaQueued, shareAvisoText, shareNoticePack, vendorFollowNotice, vendorReturnNotice } from "../domain/salida";
 import { CATALOG_COMMERCE_KEY, normalizeCatalogCommerce, whatsappDigits } from "../domain/catalog-commerce";
 import {
   clientFromAgent,
@@ -43,6 +44,7 @@ export class CatalogSharesService {
     private readonly audit: AuditService,
     private readonly odoo: OdooClient,
     private readonly salida: SalidaService,
+    private readonly commercial: CommercialService,
   ) {}
 
   async commerce() {
@@ -78,6 +80,7 @@ export class CatalogSharesService {
     vendorId: string;
     vendorName: string;
     vendorWhatsapp: string;
+    executiveName?: string;
     docKind?: string;
     source?: string;
     ruc: string;
@@ -114,6 +117,7 @@ export class CatalogSharesService {
       vendorId: row.vendorId,
       vendorName: row.vendorName,
       vendorWhatsapp: row.vendorWhatsapp,
+      executiveName: row.executiveName || "",
       docKind: row.docKind === "dni" ? "dni" : "ruc",
       source: row.source === "cliente" ? "cliente" : "comercial",
       ruc: row.ruc,
@@ -246,6 +250,7 @@ export class CatalogSharesService {
       throw new BadRequestException("Este cliente ya tiene un enlace activo. Suspéndelo para crear otro.");
     }
     const assignee = await this.resolveAssignee(user, body.vendorId);
+    const follower = await this.commercial.follower(assignee.id);
     const linked = await this.ensureSharePartner(draft);
     const vendorWhatsapp = draft.vendorWhatsapp || whatsappDigits(assignee.whatsapp);
     const row = await this.prisma.catalogShare.create({
@@ -254,6 +259,9 @@ export class CatalogSharesService {
         vendorId: assignee.id,
         vendorName: assignee.name,
         vendorWhatsapp,
+        executiveId: follower?.id || "",
+        executiveName: follower?.name || "",
+        executiveWhatsapp: follower?.whatsapp || "",
         docKind: draft.docKind,
         source: "comercial",
         ruc: draft.ruc,
@@ -433,47 +441,24 @@ export class CatalogSharesService {
     if (!iso) throw new BadRequestException("Elige un equipo.");
     const unit = await this.prisma.container.findUnique({ where: { iso }, select: { iso: true, type: true, archivedAt: true } });
     if (!unit || unit.archivedAt) throw new BadRequestException("Esa unidad no está en el catálogo.");
-    const vendorName = row.vendorName || "tu comercial";
-    const message = `Tu cotización ha sido solicitada. En un momento te atenderá ${vendorName}.`;
-    const since = new Date(Date.now() - 10 * 60 * 1000);
-    const recent = await this.prisma.catalogShareEvent.findFirst({
-      where: { shareId: row.id, kind: "interest", iso, createdAt: { gt: since } },
-      select: { id: true },
+    const opened = await this.commercial.openInterest({
+      shareId: row.id,
+      iso: unit.iso,
+      type: unit.type,
+      ip: meta?.ip,
     });
-    if (!recent) {
-      const vendor = await this.prisma.user.findUnique({
-        where: { id: row.vendorId },
-        select: { email: true, name: true, whatsapp: true },
-      });
-      const vendorPhone = whatsappDigits(row.vendorWhatsapp || vendor?.whatsapp || "");
-      const clientPhone = whatsappDigits(row.clientPhone);
-      const alert = unitInterestNotice({
-        vendorName: vendor?.name || row.vendorName,
-        clientName: row.contactName || row.clientName,
-        company: row.clientCompany,
-        iso: unit.iso,
-        type: unit.type,
-        phone: row.clientPhone,
-        email: row.clientEmail,
-      });
-      await this.salida.notifyText({
-        phone: vendorPhone,
-        email: vendor?.email || "",
-        contact: clientPhone.length >= 8 ? clientPhone : vendorPhone,
-        subject: alert.subject,
-        message: alert.message,
-      });
+    if (opened.fresh) {
       await this.prisma.catalogShareEvent.create({
         data: {
           shareId: row.id,
           kind: "interest",
           iso: unit.iso,
-          detail: { note: "Pidió información. Se avisó al comercial." },
+          detail: { note: "Pidió información. Se abrió el hilo." },
           ip: String(meta?.ip || "").slice(0, 64),
         },
       });
     }
-    return { ok: true, iso: unit.iso, vendorName, message };
+    return { ok: true, ...opened.client };
   }
 
   shareAviso(id: string, user: AuthUser) {
@@ -497,6 +482,9 @@ export class CatalogSharesService {
     vendorId: string;
     vendorName: string;
     vendorWhatsapp: string;
+    executiveId?: string;
+    executiveName?: string;
+    executiveWhatsapp?: string;
     contactName: string;
     clientName: string;
     clientCompany: string;
@@ -518,6 +506,9 @@ export class CatalogSharesService {
       vendorId: string;
       vendorName: string;
       vendorWhatsapp: string;
+      executiveId?: string;
+      executiveName?: string;
+      executiveWhatsapp?: string;
       contactName: string;
       clientName: string;
       clientCompany: string;
@@ -536,6 +527,21 @@ export class CatalogSharesService {
       const client = await this.salida.notifyShare(card);
       if (client.whatsapp === "en_cola" || client.whatsapp === "en_espera") await this.pause(SALIDA_GAP_MS);
       const vendor = await this.notifyVendorFollow(row, byClient);
+      if (row.executiveId) {
+        const executive = await this.prisma.user.findUnique({ where: { id: row.executiveId }, select: { email: true } });
+        await this.commercial.notifyExecutiveOfRegistration({
+          executiveName: row.executiveName || "",
+          executivePhone: row.executiveWhatsapp || "",
+          executiveEmail: executive?.email || "",
+          vendorName: row.vendorName,
+          vendorPhone: whatsappDigits(row.vendorWhatsapp),
+          clientName: row.contactName || row.clientName,
+          company: row.clientCompany,
+          doc: row.ruc ? `RUC ${row.ruc}` : row.dni ? `DNI ${row.dni}` : "",
+          phone: row.clientPhone,
+          email: row.clientEmail,
+        });
+      }
       const summary = shareAvisoText(client, vendor);
       job.done = true;
       job.ok = summary.ok;
@@ -732,8 +738,12 @@ export class CatalogSharesService {
         vendorWhatsapp: company.activeShare.vendorWhatsapp,
       });
     }
-    const vendor = await this.assignWalkInVendor();
-    const linked = await this.ensureSharePartner({
+    const assigned = await this.commercial.pickWalkIn();
+    const vendor = assigned.vendor;
+    // DNI de portería se guarda en ZDRY. El contacto en Odoo espera a que el comercial regularice el RUC.
+    const linked = draft.docKind === "dni"
+      ? { partnerId: null, contactId: null, emailTaken: false }
+      : await this.ensureSharePartner({
       docKind: draft.docKind,
       ruc: draft.ruc,
       dni: draft.dni,
@@ -758,6 +768,9 @@ export class CatalogSharesService {
         vendorId: vendor.id,
         vendorName: vendor.name,
         vendorWhatsapp: whatsappDigits(vendor.whatsapp),
+        executiveId: assigned.executive.id,
+        executiveName: assigned.executive.name,
+        executiveWhatsapp: whatsappDigits(assigned.executive.whatsapp),
         docKind: draft.docKind,
         source: "cliente",
         ruc: draft.ruc,
@@ -804,27 +817,9 @@ export class CatalogSharesService {
       contactName: row.contactName,
       vendorName: row.vendorName,
       greeting: company ? (company.inOdoo ? "Zgroup te saluda nuevamente." : "Zgroup te da la bienvenida.") : "Zgroup te da la bienvenida.",
+      rucPending: draft.docKind === "dni",
       avisoPending: true,
     };
-  }
-
-  private async assignWalkInVendor() {
-    const vendors = await this.prisma.user.findMany({
-      where: { role: "vendedor", active: true },
-      select: { id: true, name: true, whatsapp: true },
-      orderBy: { name: "asc" },
-    });
-    if (!vendors.length) {
-      throw new BadRequestException("No hay un comercial disponible para atenderte. Avisa en portería.");
-    }
-    const counts = await this.prisma.catalogShare.groupBy({
-      by: ["vendorId"],
-      where: { source: "cliente", vendorId: { in: vendors.map((row) => row.id) } },
-      _count: { _all: true },
-    });
-    const load = new Map(counts.map((row) => [row.vendorId, row._count._all]));
-    vendors.sort((a, b) => (load.get(a.id) || 0) - (load.get(b.id) || 0) || a.name.localeCompare(b.name, "es"));
-    return vendors[0];
   }
 
   async lookupRuc(rawRuc: string) {
@@ -1328,36 +1323,13 @@ export class CatalogSharesService {
     clientPhone: string;
     odooPartnerId: number | null;
   }) {
-    const ids = await this.peIdentity();
     const people = (await this.partnersByDocument(draft.dni)).filter((row) => !row.is_company);
     const existing = people.find((row) => Number(row.id) === draft.odooPartnerId) || people[0];
     if (existing?.id) {
       const id = Number(existing.id);
       return { partnerId: id, contactId: id, emailTaken: false };
     }
-    if (await this.emailAlreadyInOdoo(draft.clientEmail)) {
-      return { partnerId: null, contactId: null, emailTaken: true };
-    }
-    const values: Record<string, unknown> = {
-      name: draft.contactName,
-      vat: draft.dni,
-      is_company: false,
-      company_type: "person",
-      customer_rank: 1,
-      email: draft.clientEmail || false,
-      phone: draft.clientPhone || false,
-      mobile: draft.clientPhone || false,
-    };
-    if (ids.dniTypeId) values.l10n_latam_identification_type_id = ids.dniTypeId;
-    if (ids.countryId) values.country_id = ids.countryId;
-    try {
-      const partnerId = await this.createPartner(values);
-      if (!partnerId) throw new BadRequestException("Odoo no creó el contacto con DNI.");
-      return { partnerId, contactId: partnerId, emailTaken: false };
-    } catch (e) {
-      if (!this.emailConflict(e)) throw e;
-      return { partnerId: null, contactId: null, emailTaken: true };
-    }
+    return { partnerId: null, contactId: null, emailTaken: false };
   }
 
   private async attachRucCompany(

@@ -8,12 +8,14 @@ import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
 import { QuotesService } from "./quotes.service";
 import { CatalogSharesService } from "../catalog-shares/catalog-shares.service";
+import { CommercialService } from "../commercial/commercial.service";
 
 @Controller("catalog")
 export class CatalogController {
   constructor(
     private readonly quotes: QuotesService,
     private readonly shares: CatalogSharesService,
+    private readonly commercial: CommercialService,
   ) {}
 
   @Public()
@@ -61,6 +63,23 @@ export class CatalogController {
     @Res({ passthrough: true }) res: Response,
   ) {
     return this.shares.unlock(token, body?.code, res);
+  }
+
+  @Public()
+  @Get("share/:token/hilo/:id")
+  shareThread(@Param("token") token: string, @Param("id") id: string, @Req() req: Request) {
+    return this.commercial.clientThread(token, id, req.cookies?.zdry_catalog);
+  }
+
+  @Public()
+  @Post("share/:token/hilo/:id/opcion")
+  shareChoice(
+    @Param("token") token: string,
+    @Param("id") id: string,
+    @Body() body: { opcion?: string },
+    @Req() req: Request,
+  ) {
+    return this.commercial.choose(token, id, body?.opcion, req.cookies?.zdry_catalog);
   }
 
   @Public()

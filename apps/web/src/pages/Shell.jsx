@@ -30,6 +30,8 @@ import TypeAudit from "./TypeAudit.jsx";
 import DryStats from "./DryStats.jsx";
 import Alquileres from "./Alquileres.jsx";
 import CatalogShares from "./CatalogShares.jsx";
+import EquipoComercial from "./EquipoComercial.jsx";
+import HilosComerciales from "./HilosComerciales.jsx";
 import Prepublished from "./Prepublished.jsx";
 import Evaluaciones from "./Evaluaciones.jsx";
 import { OdooLinkModal, OdooNavStatus, useOdooLink } from "../odoo-link.jsx";
@@ -222,6 +224,8 @@ export default function Shell() {
             <Route path="seguimiento" element={<Gate nav={nav} role={user.role} path="/app/seguimiento"><QuotesHub /></Gate>} />
             <Route path="alquileres" element={<Gate nav={nav} role={user.role} path="/app/alquileres"><Alquileres /></Gate>} />
             <Route path="enlaces-catalogo" element={<Gate nav={nav} role={user.role} path="/app/enlaces-catalogo"><CatalogShares /></Gate>} />
+            <Route path="equipo-comercial" element={<Gate nav={nav} role={user.role} path="/app/equipo-comercial"><EquipoComercial /></Gate>} />
+            <Route path="hilos" element={<Gate nav={nav} role={user.role} path="/app/hilos"><HilosComerciales /></Gate>} />
             <Route path="prepublicados" element={<Gate nav={nav} role={user.role} path="/app/prepublicados"><Prepublished /></Gate>} />
             <Route path="compras/facturas" element={<Gate nav={nav} role={user.role} path="/app/compras/facturas"><Compras /></Gate>} />
             <Route path="compras/conciliar" element={<Gate nav={nav} role={user.role} path="/app/compras/conciliar"><Compras /></Gate>} />

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api.js";
 import { homeFor, isSuperadmin, ROLE_LABELS, useAuth } from "../auth.jsx";
@@ -28,6 +28,7 @@ export default function People() {
   const emptyUserForm = { email: "", name: "", role: "vendedor", password: "Zdry123!", active: true, whatsapp: "" };
   const [uForm, setUForm] = useState(emptyUserForm);
   const [editId, setEditId] = useState(null);
+  const [collabQuery, setCollabQuery] = useState("");
   const [resetId, setResetId] = useState(null);
   const [resetPw, setResetPw] = useState(TEMP_PASSWORD);
   const [note, setNote] = useState("");
@@ -42,6 +43,17 @@ export default function People() {
   }
 
   useEffect(() => { load().catch((e) => setError(e.message)); }, []);
+
+  const visibleCollabs = useMemo(() => {
+    const raw = collabQuery.trim().toLowerCase();
+    if (!raw) return collabs;
+    const compact = raw.replace(/[\s@.\-]/g, "");
+    return collabs.filter((u) => {
+      const role = String(ROLE_LABELS[u.role] || u.role || "").toLowerCase();
+      const hay = [u.name, u.email, u.whatsapp, u.role, role].filter(Boolean).join(" ").toLowerCase();
+      return hay.includes(raw) || hay.replace(/[\s@.\-]/g, "").includes(compact);
+    });
+  }, [collabs, collabQuery]);
 
   async function addCustomer(e) {
     e.preventDefault();
@@ -220,11 +232,28 @@ export default function People() {
               <button className="btn-ghost" type="button" onClick={() => { setResetId(null); setResetPw(TEMP_PASSWORD); }}>Cancelar</button>
             </form>
           ) : null}
+          <div className="odoo-toolbar" style={{ marginTop: 14 }}>
+            <input
+              className="odoo-search"
+              type="search"
+              value={collabQuery}
+              onChange={(e) => setCollabQuery(e.target.value)}
+              placeholder="Buscar por nombre, correo, WhatsApp o rol"
+              aria-label="Buscar colaborador"
+            />
+          </div>
+          <p className="section-sub">
+            {visibleCollabs.length} colaborador{visibleCollabs.length === 1 ? "" : "es"}
+            {collabQuery.trim() ? ` de ${collabs.length}` : ""}.
+          </p>
           <div className="tablewrap">
           <table className="data">
             <thead><tr><th>Nombre</th><th>Email</th><th>WhatsApp</th><th>Rol</th><th>Activo</th><th></th></tr></thead>
             <tbody>
-              {collabs.map((u) => (
+              {visibleCollabs.length === 0 ? (
+                <tr><td colSpan={6}>{collabs.length ? "Ningún colaborador coincide con la búsqueda." : "No hay colaboradores."}</td></tr>
+              ) : null}
+              {visibleCollabs.map((u) => (
                 <tr key={u.id} style={editId === u.id ? { outline: "2px solid var(--orange)", outlineOffset: -2 } : undefined}>
                   <td>{u.name}{u.demo ? <span className="demo-chip">DEMO</span> : null}</td>
                   <td>{u.email}</td>

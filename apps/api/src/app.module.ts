@@ -25,6 +25,7 @@ import { GateVisitsModule } from "./gate-visits/gate-visits.module";
 import { DryStatsModule } from "./dry-stats/dry-stats.module";
 import { DashboardModule } from "./dashboard/dashboard.module";
 import { CatalogSharesModule } from "./catalog-shares/catalog-shares.module";
+import { CommercialModule } from "./commercial/commercial.module";
 import { PriceExceptionsModule } from "./price-exceptions/price-exceptions.module";
 
 @Module({
@@ -53,6 +54,7 @@ import { PriceExceptionsModule } from "./price-exceptions/price-exceptions.modul
     DryStatsModule,
     DashboardModule,
     CatalogSharesModule,
+    CommercialModule,
     PriceExceptionsModule,
   ],
   controllers: [HealthController],
