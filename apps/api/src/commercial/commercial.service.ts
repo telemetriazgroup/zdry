@@ -78,7 +78,8 @@ export class CommercialService implements OnModuleInit, OnModuleDestroy {
       }),
     ]);
     return {
-      canEdit: user.role === "superadmin" || user.role === "admin",
+      canEdit: user.role === "superadmin" || user.role === "admin" || user.role === "ejecutivo",
+      ownTeam: user.role === "ejecutivo",
       vendors,
       executives,
       rows: rows.map((row) => ({
@@ -91,9 +92,10 @@ export class CommercialService implements OnModuleInit, OnModuleDestroy {
   }
 
   async saveDesk(body: { vendorId?: string; executiveId?: string; enabled?: boolean }, user: AuthUser, ip?: string) {
-    if (user.role !== "superadmin" && user.role !== "admin") throw new ForbiddenException("Solo administración configura el equipo comercial.");
+    const ownTeam = user.role === "ejecutivo";
+    if (!ownTeam && user.role !== "superadmin" && user.role !== "admin") throw new ForbiddenException("Solo administración o el ejecutivo configuran el equipo comercial.");
     const vendorId = String(body.vendorId || "");
-    const executiveId = String(body.executiveId || "");
+    const executiveId = ownTeam ? user.id : String(body.executiveId || "");
     const enabled = body.enabled === true;
     const [vendor, executive] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: vendorId } }),
@@ -103,6 +105,10 @@ export class CommercialService implements OnModuleInit, OnModuleDestroy {
     if (!executive || executive.role !== "ejecutivo" || !executive.active) throw new BadRequestException("Elige un ejecutivo comercial activo.");
     if (enabled && (!phoneOk(vendor.whatsapp) || !phoneOk(executive.whatsapp))) {
       throw new BadRequestException("Para habilitarlo, el vendedor y el ejecutivo necesitan WhatsApp.");
+    }
+    const taken = await this.prisma.commercialDesk.findUnique({ where: { vendorId } });
+    if (ownTeam && taken && taken.executiveId !== user.id) {
+      throw new BadRequestException("Ese comercial ya está en el equipo de otro ejecutivo.");
     }
     const row = await this.prisma.commercialDesk.upsert({
       where: { vendorId },
@@ -179,6 +185,28 @@ export class CommercialService implements OnModuleInit, OnModuleDestroy {
       message: executiveText,
     });
     return { vendor, executive };
+  }
+
+  async notifyAssignedVendor(input: {
+    vendorId: string;
+    vendorName: string;
+    vendorPhone: string;
+    clientName: string;
+    company: string;
+    doc: string;
+    phone: string;
+    email: string;
+    clientPhone: string;
+  }) {
+    const vendor = await this.prisma.user.findUnique({ where: { id: input.vendorId }, select: { email: true } });
+    const contact = phoneOk(input.clientPhone) ? whatsappDigits(input.clientPhone) : input.vendorPhone;
+    return this.salida.notifyText({
+      phone: input.vendorPhone,
+      email: vendor?.email || "",
+      contact,
+      subject: "Tienes un cliente por atender",
+      message: registrationVendorText(input),
+    });
   }
 
   async notifyExecutiveOfRegistration(input: {
@@ -355,6 +383,19 @@ export class CommercialService implements OnModuleInit, OnModuleDestroy {
     await this.prisma.commercialThread.update({ where: { id }, data: { priceNet: decided.net, status: OPEN } });
     await this.addMessage(id, "vendedor", text);
     await this.notifyClient(thread.share, thread.id, "Precio del equipo", text, true);
+    const list = money(thread.priceList);
+    await this.prisma.shareFollow.create({
+      data: {
+        shareId: thread.shareId,
+        authorId: user.id,
+        authorName: user.name,
+        channel: decided.net < list ? "descuento" : "whatsapp",
+        body: text,
+        iso: thread.iso,
+        priceNet: decided.net,
+        priceList: list,
+      },
+    });
     await this.audit.log({ user, action: "offer", entity: "CommercialThread", entityId: id, after: { priceNet: decided.net, iso: thread.iso }, ip });
     return this.staffDetail(await this.loadThread(id));
   }
@@ -443,6 +484,16 @@ export class CommercialService implements OnModuleInit, OnModuleDestroy {
       await this.addMessage(thread.id, "cliente", "Solicitar cotización");
       await this.addMessage(thread.id, "sistema", REVIEWING_TEXT);
       await this.addMessage(thread.id, "sistema", text);
+      await this.prisma.shareFollow.create({
+        data: {
+          shareId: thread.shareId,
+          authorName: "Cliente",
+          channel: "cotizacion",
+          body: text,
+          iso: thread.iso,
+          priceNet: money(thread.priceNet),
+        },
+      });
       const vendor = await this.prisma.user.findUnique({ where: { id: thread.share.vendorId }, select: { email: true, whatsapp: true } });
       await this.salida.notifyText({
         phone: whatsappDigits(thread.share.vendorWhatsapp || vendor?.whatsapp || ""),

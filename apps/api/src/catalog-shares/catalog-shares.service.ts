@@ -250,7 +250,9 @@ export class CatalogSharesService {
       throw new BadRequestException("Este cliente ya tiene un enlace activo. Suspéndelo para crear otro.");
     }
     const assignee = await this.resolveAssignee(user, body.vendorId);
-    const follower = await this.commercial.follower(assignee.id);
+    const follower = user.role === "ejecutivo"
+      ? { id: user.id, name: user.name, whatsapp: whatsappDigits(user.whatsapp || "") }
+      : await this.commercial.follower(assignee.id);
     const linked = await this.ensureSharePartner(draft);
     const vendorWhatsapp = draft.vendorWhatsapp || whatsappDigits(assignee.whatsapp);
     const row = await this.prisma.catalogShare.create({
@@ -292,7 +294,7 @@ export class CatalogSharesService {
     }
     const emailEvent = linked.emailTaken ? await this.noteEmailTaken(row.id, row.clientEmail, ip) : null;
     const card = this.noticeCard(row, Boolean(draft.odooPartnerId || draft.customerId), origin);
-    this.queueShareAvisos(row, card, false, user, ip);
+    this.queueShareAvisos({ ...row, assigned: user.role === "ejecutivo", skipExecutiveId: user.role === "ejecutivo" ? user.id : "" }, card, false, user, ip);
     await this.audit.log({
       user,
       action: "create",
@@ -485,6 +487,8 @@ export class CatalogSharesService {
     executiveId?: string;
     executiveName?: string;
     executiveWhatsapp?: string;
+    assigned?: boolean;
+    skipExecutiveId?: string;
     contactName: string;
     clientName: string;
     clientCompany: string;
@@ -509,6 +513,8 @@ export class CatalogSharesService {
       executiveId?: string;
       executiveName?: string;
       executiveWhatsapp?: string;
+      assigned?: boolean;
+      skipExecutiveId?: string;
       contactName: string;
       clientName: string;
       clientCompany: string;
@@ -526,8 +532,20 @@ export class CatalogSharesService {
     try {
       const client = await this.salida.notifyShare(card);
       if (client.whatsapp === "en_cola" || client.whatsapp === "en_espera") await this.pause(SALIDA_GAP_MS);
-      const vendor = await this.notifyVendorFollow(row, byClient);
-      if (row.executiveId) {
+      const vendor = row.assigned
+        ? await this.commercial.notifyAssignedVendor({
+          vendorId: row.vendorId,
+          vendorName: row.vendorName,
+          vendorPhone: whatsappDigits(row.vendorWhatsapp),
+          clientName: row.contactName || row.clientName,
+          company: row.clientCompany,
+          doc: row.ruc ? `RUC ${row.ruc}` : row.dni ? `DNI ${row.dni}` : "",
+          phone: row.clientPhone,
+          email: row.clientEmail,
+          clientPhone: row.clientPhone,
+        })
+        : await this.notifyVendorFollow(row, byClient);
+      if (row.executiveId && row.executiveId !== row.skipExecutiveId) {
         const executive = await this.prisma.user.findUnique({ where: { id: row.executiveId }, select: { email: true } });
         await this.commercial.notifyExecutiveOfRegistration({
           executiveName: row.executiveName || "",

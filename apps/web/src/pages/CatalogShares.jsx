@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
-import { api, apiUrl, formatWhen, APP_ROOT } from "../api.js";
+import { api, apiUpload, apiUrl, formatWhen, APP_ROOT, publicUrl } from "../api.js";
 import { whatsappDigits } from "../catalog-copy.js";
 import { hasRole, isSuperadmin, useAuth } from "../auth.jsx";
 import { downloadCommercialMedia } from "./CommercialSend.jsx";
@@ -35,6 +34,15 @@ const KIND = {
   search: "Búsqueda",
 };
 const STATUS = { activo: "Activo", suspendido: "Suspendido", vencido: "Vencido", archivado: "Archivado" };
+const FOLLOW_KIND = {
+  telefono: "Teléfono",
+  correo: "Correo",
+  whatsapp: "WhatsApp",
+  nota: "Nota",
+  precio: "Precio",
+  descuento: "Precio con descuento",
+  cotizacion: "Cotización",
+};
 
 function usd(value) {
   const n = Number(value);
@@ -300,6 +308,10 @@ export default function CatalogShares() {
   const { notify, toastNode } = useNotice();
   const [rows, setRows] = useState([]);
   const [openId, setOpenId] = useState("");
+  const [follow, setFollow] = useState(null);
+  const [log, setLog] = useState({ channel: "telefono", body: "", priceNet: "" });
+  const [saleName, setSaleName] = useState("");
+  const [vendorQuery, setVendorQuery] = useState("");
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
@@ -319,7 +331,7 @@ export default function CatalogShares() {
   const [query, setQuery] = useState("");
   const [vendors, setVendors] = useState([]);
   const [exporting, setExporting] = useState(false);
-  const canExternal = hasRole(user, "admin");
+  const canExternal = hasRole(user, "admin", "vendedor", "ejecutivo");
   const canAssign = hasRole(user, "admin", "ejecutivo");
   const canArchive = isSuperadmin(user);
   const [editing, setEditing] = useState(null);
@@ -588,6 +600,49 @@ export default function CatalogShares() {
     setPickedIso("");
     try {
       setDetail(await api(`/catalog-shares/mine/${id}`));
+      setFollow(await api(`/catalog-shares/${id}/seguimiento`));
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function reloadFollow(id) {
+    setFollow(await api(`/catalog-shares/${id}/seguimiento`));
+  }
+
+  async function saveLog(event) {
+    event.preventDefault();
+    if (!detail) return;
+    setError("");
+    try {
+      const note = await api(`/catalog-shares/${detail.id}/seguimiento`, {
+        method: "POST",
+        body: { channel: log.channel, body: log.body, priceNet: log.priceNet === "" ? undefined : Number(log.priceNet) },
+      });
+      const file = event.target.elements.foto?.files?.[0];
+      if (file) {
+        const data = new FormData();
+        data.append("file", file);
+        await apiUpload(`/catalog-shares/${detail.id}/seguimiento/${note.id}/foto`, data);
+        event.target.elements.foto.value = "";
+      }
+      setLog({ channel: log.channel, body: "", priceNet: "" });
+      setMsg("El seguimiento quedó en la bitácora.");
+      await reloadFollow(detail.id);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function linkSale(event) {
+    event.preventDefault();
+    if (!detail) return;
+    setError("");
+    try {
+      const row = await api(`/catalog-shares/${detail.id}/cotizacion`, { method: "POST", body: { saleName } });
+      setSaleName("");
+      setMsg(`Cotización ${row.quote?.odooSaleName || saleName} asimilada en ZDRY como ${row.quote?.number || ""}.`);
+      await reloadFollow(detail.id);
     } catch (err) {
       setError(err.message);
     }
@@ -647,8 +702,12 @@ export default function CatalogShares() {
   function chooseVendor(id) {
     const vendor = vendors.find((item) => item.id === id);
     waEdited.current = false;
+    setVendorQuery("");
     setForm((cur) => ({ ...cur, vendorId: id, vendorWhatsapp: vendor?.whatsapp || "" }));
   }
+
+  const vendorMatches = vendors.filter((vendor) => vendor.name.toLowerCase().includes(vendorQuery.trim().toLowerCase())).slice(0, 8);
+  const chosenVendor = vendors.find((vendor) => vendor.id === form.vendorId);
 
   async function downloadExcel() {
     setError("");
@@ -849,10 +908,16 @@ export default function CatalogShares() {
             {canAssign ? (
               <div>
                 <label>Comercial a cargo</label>
-                <select value={form.vendorId} onChange={(e) => chooseVendor(e.target.value)} required>
-                  <option value="">Elige un comercial</option>
-                  {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
-                </select>
+                <input value={vendorQuery} onChange={(e) => { setVendorQuery(e.target.value); setForm((cur) => ({ ...cur, vendorId: "" })); }} placeholder={chosenVendor ? chosenVendor.name : "Escribe el nombre"} aria-label="Buscar comercial" required={!form.vendorId} />
+                {chosenVendor && !vendorQuery ? <p className="field-hint">Elegido: {chosenVendor.name}. El cliente queda en sus enlaces y se le avisa para el seguimiento.</p> : null}
+                {vendorQuery.trim() ? (
+                  <div className="action-row">
+                    {vendorMatches.map((vendor) => (
+                      <button className="btn-ghost" type="button" key={vendor.id} onClick={() => chooseVendor(vendor.id)}>{vendor.name}</button>
+                    ))}
+                    {!vendorMatches.length ? <p className="field-hint">Ningún comercial coincide.</p> : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             <div>
@@ -889,8 +954,8 @@ export default function CatalogShares() {
             </div>
             <input className="share-search" value={query} onChange={(e) => { setQuery(e.target.value); setLinkPage(1); }} placeholder="Buscar cliente, RUC, DNI o comercial" aria-label="Buscar enlaces" />
             <button className="btn-ghost" type="button" disabled={exporting} onClick={downloadExcel}>{exporting ? "Preparando Excel…" : "Descargar Excel"}</button>
-            <Link className="btn-ghost" to={{ pathname: "/", search: "?vista=comercial" }}>Ver catálogo comercial</Link>
-            <Link className="btn-ghost" to={{ pathname: "/", search: "?vista=cliente" }}>Ver como cliente</Link>
+            <a className="btn-ghost" href={publicUrl("/?vista=comercial")} target="_blank" rel="noreferrer">Ver catálogo comercial</a>
+            <a className="btn-ghost" href={publicUrl("/?vista=cliente")} target="_blank" rel="noreferrer">Ver como cliente</a>
             {canArchive ? (
               <button className="btn-ghost" type="button" onClick={() => setArchivedView((v) => !v)}>
                 {archivedView ? "Ver vigentes" : "Ver archivados"}
@@ -1024,6 +1089,64 @@ export default function CatalogShares() {
           <UnitBrief unit={pickedUnit} error={pickedError} />
         </div>
       </div>
+      {detail ? (
+        <div className="panel">
+          <h3>Seguimiento · {detail.clientCompany || detail.clientName}</h3>
+          <p className="section-sub">Aquí queda el precio enviado, el descuento, lo que se habló por teléfono o correo, y la cotización de Odoo cuando la vinculas.</p>
+          {follow?.quote ? (
+            <p>
+              Cotización ZDRY <b>{follow.quote.number}</b>
+              {follow.quote.odooSaleName ? ` · Odoo ${follow.quote.odooSaleName}` : ""}
+              {follow.quote.total != null ? ` · total $${Number(follow.quote.total).toLocaleString("en-US")}` : ""}
+              {follow.quote.url ? <> · <a href={follow.quote.url} target="_blank" rel="noreferrer">abrir en Odoo</a></> : null}
+            </p>
+          ) : null}
+          <form className="form-grid" onSubmit={linkSale}>
+            <div>
+              <label>Cotización de Odoo</label>
+              <input value={saleName} onChange={(e) => setSaleName(e.target.value)} placeholder="S00123" />
+            </div>
+            <button className="btn-primary" type="submit">Vincular y asimilar</button>
+          </form>
+          <form className="form-grid" onSubmit={saveLog}>
+            <div>
+              <label>Canal</label>
+              <select value={log.channel} onChange={(e) => setLog({ ...log, channel: e.target.value })}>
+                <option value="telefono">Teléfono</option>
+                <option value="correo">Correo</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="nota">Nota</option>
+              </select>
+            </div>
+            <div>
+              <label>Qué ofreciste o qué dijo el cliente</label>
+              <input value={log.body} onChange={(e) => setLog({ ...log, body: e.target.value })} required />
+            </div>
+            <div>
+              <label>Precio neto, si lo diste</label>
+              <input value={log.priceNet} onChange={(e) => setLog({ ...log, priceNet: e.target.value })} inputMode="decimal" />
+            </div>
+            <div>
+              <label>Imagen</label>
+              <input name="foto" type="file" accept="image/jpeg,image/png,image/webp,image/gif" />
+            </div>
+            <button className="btn-ghost" type="submit">Registrar en la bitácora</button>
+          </form>
+          <ul className="dash-list">
+            {(follow?.follows || []).map((item) => (
+              <li key={item.id}>
+                <b>{FOLLOW_KIND[item.channel] || item.channel}{item.iso ? ` · ${item.iso}` : ""}{item.priceNet != null ? ` · $${Number(item.priceNet).toLocaleString("en-US")}` : ""}</b>
+                <span>{item.authorName ? `${item.authorName} · ` : ""}{formatWhen(item.createdAt)}</span>
+                <p>{item.body}</p>
+                {item.files?.map((file) => (
+                  <img key={file.id} alt={file.name} src={apiUrl(`/catalog-shares/seguimiento/archivo/${file.id}`)} style={{ maxWidth: 220, display: "block", marginTop: 8 }} />
+                ))}
+              </li>
+            ))}
+            {follow && !follow.follows?.length ? <li>Todavía no hay notas de seguimiento.</li> : null}
+          </ul>
+        </div>
+      ) : null}
     </>
   );
 }

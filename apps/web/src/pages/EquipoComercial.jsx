@@ -1,10 +1,29 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
 
+function VendorPick({ vendors, vendorId, query, onQuery, onPick }) {
+  const chosen = vendors.find((row) => row.id === vendorId);
+  const matches = vendors.filter((row) => row.name.toLowerCase().includes(query.trim().toLowerCase())).slice(0, 8);
+  return (
+    <div>
+      <label>Comercial</label>
+      <input value={query} onChange={(e) => onQuery(e.target.value)} placeholder={chosen ? chosen.name : "Escribe el nombre"} aria-label="Buscar comercial" required={!vendorId} />
+      {chosen && !query ? <p className="field-hint">Elegido: {chosen.name}</p> : null}
+      {query.trim() ? (
+        <div className="action-row">
+          {matches.map((row) => <button className="btn-ghost" type="button" key={row.id} onClick={() => onPick(row.id)}>{row.name}</button>)}
+          {!matches.length ? <p className="field-hint">Ningún comercial coincide.</p> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function EquipoComercial() {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [form, setForm] = useState({ vendorId: "", executiveId: "", enabled: true });
+  const [vendorQuery, setVendorQuery] = useState("");
   const [saving, setSaving] = useState(false);
 
   function load() {
@@ -27,6 +46,7 @@ export default function EquipoComercial() {
     try {
       await api("/commercial/equipo", { method: "PUT", body: form });
       setForm({ vendorId: "", executiveId: "", enabled: true });
+      setVendorQuery("");
       await load();
     } catch (e) {
       setError(e.message);
@@ -53,27 +73,29 @@ export default function EquipoComercial() {
       <div className="page-head">
         <div>
           <h1>Equipo comercial</h1>
-          <p className="muted">Los vendedores habilitados reciben los clientes del formulario. Cada uno tiene un ejecutivo de seguimiento.</p>
+          <p className="muted">{data?.ownTeam ? "Agrega a tu equipo los comerciales que vas a seguir. El registro del formulario solo les llega si están habilitados y tienen WhatsApp." : "Los vendedores habilitados reciben los clientes del formulario. Cada uno tiene un ejecutivo de seguimiento."}</p>
         </div>
       </div>
       {error ? <p className="error">{error}</p> : null}
       {data?.canEdit ? (
         <div className="panel">
           <form className="form-grid" onSubmit={save}>
-            <div>
-              <label>Vendedor</label>
-              <select value={form.vendorId} onChange={(e) => setForm({ ...form, vendorId: e.target.value })} required>
-                <option value="">Elegir</option>
-                {(data.vendors || []).map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label>Ejecutivo de seguimiento</label>
-              <select value={form.executiveId} onChange={(e) => setForm({ ...form, executiveId: e.target.value })} required>
-                <option value="">Elegir</option>
-                {(data.executives || []).map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
-              </select>
-            </div>
+            <VendorPick
+              vendors={data.vendors || []}
+              vendorId={form.vendorId}
+              query={vendorQuery}
+              onQuery={(value) => { setVendorQuery(value); setForm((cur) => ({ ...cur, vendorId: "" })); }}
+              onPick={(vendorId) => { setForm({ ...form, vendorId }); setVendorQuery(""); }}
+            />
+            {data.ownTeam ? null : (
+              <div>
+                <label>Ejecutivo de seguimiento</label>
+                <select value={form.executiveId} onChange={(e) => setForm({ ...form, executiveId: e.target.value })} required>
+                  <option value="">Elegir</option>
+                  {(data.executives || []).map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
+                </select>
+              </div>
+            )}
             <label className="muted" style={{ display: "flex", alignItems: "center", gap: 8, alignSelf: "end", paddingBottom: 8 }}>
               <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
               Habilitado para el registro

@@ -17,7 +17,7 @@ export class CommercialController {
   }
 
   @Put("equipo")
-  @Roles("superadmin", "admin")
+  @Roles("superadmin", "admin", "ejecutivo")
   save(
     @Body() body: { vendorId?: string; executiveId?: string; enabled?: boolean },
     @CurrentUser() user: AuthUser,

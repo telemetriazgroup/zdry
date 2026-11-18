@@ -1,10 +1,13 @@
-import { Body, Controller, Get, Param, Post, Query, Req } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, Req, StreamableFile, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
+import { memoryStorage } from "multer";
 import { Request } from "express";
 import { Public } from "../auth/public.decorator";
 import { Roles } from "../auth/roles.decorator";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { AuthUser } from "../auth/auth.types";
 import { CatalogSharesService } from "./catalog-shares.service";
+import { ShareFollowService } from "./share-follow.service";
 
 function requestOrigin(req: Request) {
   const proto = String(req.get("x-forwarded-proto") || req.protocol || "https").split(",")[0].trim();
@@ -14,7 +17,10 @@ function requestOrigin(req: Request) {
 
 @Controller("catalog-shares")
 export class CatalogSharesController {
-  constructor(private readonly shares: CatalogSharesService) {}
+  constructor(
+    private readonly shares: CatalogSharesService,
+    private readonly follow: ShareFollowService,
+  ) {}
 
   @Public()
   @Get("commerce")
@@ -104,6 +110,53 @@ export class CatalogSharesController {
   @Roles("superadmin")
   archive(@Param("id") id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.shares.archive(id, user, req.ip);
+  }
+
+  @Get("seguimiento/archivo/:fileId")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
+  async followFile(@Param("fileId") fileId: string, @CurrentUser() user: AuthUser) {
+    const file = await this.follow.file(fileId, user);
+    return new StreamableFile(file.stream, { type: file.mime, disposition: `inline; filename="${file.name}"` });
+  }
+
+  @Get(":id/seguimiento")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
+  followList(@Param("id") id: string, @CurrentUser() user: AuthUser) {
+    return this.follow.list(id, user);
+  }
+
+  @Post(":id/seguimiento")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
+  followAdd(
+    @Param("id") id: string,
+    @Body() body: { channel?: string; body?: string; iso?: string; priceNet?: number },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.follow.add(id, body, user, req.ip);
+  }
+
+  @Post(":id/seguimiento/:followId/foto")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
+  @UseInterceptors(FileInterceptor("file", { storage: memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } }))
+  followPhoto(
+    @Param("id") id: string,
+    @Param("followId") followId: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.follow.addPhoto(id, followId, file, user);
+  }
+
+  @Post(":id/cotizacion")
+  @Roles("superadmin", "admin", "vendedor", "ejecutivo")
+  followQuote(
+    @Param("id") id: string,
+    @Body() body: { saleName?: string },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.follow.linkQuote(id, String(body?.saleName || ""), user, req.ip);
   }
 
   @Get(":id/aviso")

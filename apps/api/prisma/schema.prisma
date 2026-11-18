@@ -1367,8 +1367,10 @@ model CatalogShare {
   suspendedAt    DateTime?
   archivedAt     DateTime?
   createdAt      DateTime            @default(now())
+  quoteId        String              @default("")
   events         CatalogShareEvent[]
   threads        CommercialThread[]
+  follows        ShareFollow[]
 
   @@index([vendorId, createdAt])
   @@index([expiresAt])
@@ -1477,6 +1479,37 @@ model CommercialMessage {
   createdAt DateTime         @default(now())
 
   @@index([threadId, createdAt])
+}
+
+/** Bitácora del comercial sobre un enlace: precio, llamada, correo o cotización de Odoo. */
+model ShareFollow {
+  id         String            @id @default(uuid())
+  shareId    String
+  share      CatalogShare      @relation(fields: [shareId], references: [id], onDelete: Cascade)
+  authorId   String            @default("")
+  authorName String            @default("")
+  channel    String
+  body       String
+  iso        String            @default("")
+  priceNet   Decimal?          @db.Decimal(12, 2)
+  priceList  Decimal?          @db.Decimal(12, 2)
+  quoteId    String            @default("")
+  createdAt  DateTime          @default(now())
+  files      ShareFollowFile[]
+
+  @@index([shareId, createdAt])
+}
+
+model ShareFollowFile {
+  id           String      @id @default(uuid())
+  followId     String
+  follow       ShareFollow @relation(fields: [followId], references: [id], onDelete: Cascade)
+  storageKey   String
+  mimeType     String
+  originalName String
+  sizeBytes    Int
+
+  @@index([followId])
 }
 
 /** Patio tal como estaba antes de una actualización por OUT, y a dónde pasó cada equipo. */
