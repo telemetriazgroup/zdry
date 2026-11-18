@@ -1,4 +1,4 @@
-import { contactClock, EXECUTIVE_PING_MS, offerPrice, parseClientChoice, parseThreadId, priceLines, threadReference, VENDOR_PING_MS } from "./commercial-thread";
+import { contactClock, EXECUTIVE_PING_MS, interestNoticeText, messageWebOrigin, offerPrice, parseClientChoice, parseThreadId, priceLines, staffThreadsUrl, threadReference, VENDOR_PING_MS } from "./commercial-thread";
 
 describe("hilo comercial", () => {
   it("acepta el precio de lista y rechaza uno fuera del rango", () => {
@@ -60,5 +60,22 @@ describe("hilo comercial", () => {
       now: new Date(asked.getTime() + EXECUTIVE_PING_MS),
     });
     expect(done).toEqual({ pingVendor: false, pingExecutive: false });
+  });
+
+  it("arma el enlace del hilo con ztrack.app cuando la salida ya es de producción", () => {
+    expect(messageWebOrigin("http://localhost:28080", "https://ztrack.app/servicio/salida")).toBe("https://ztrack.app");
+    expect(messageWebOrigin("https://ztrack.app", "https://ztrack.app/servicio/salida")).toBe("https://ztrack.app");
+    expect(messageWebOrigin("http://localhost:28080", "")).toBe("http://localhost:28080");
+    const link = staffThreadsUrl(messageWebOrigin("http://localhost:28080", "https://ztrack.app/servicio/salida"));
+    expect(link).toBe("https://ztrack.app/zdry/app/hilos");
+    expect(interestNoticeText({
+      who: "Valeria",
+      clientName: "Luis",
+      iso: "CAIU8431710",
+      unitType: "40HC",
+      priceList: 1711,
+      priceMin: 1656,
+      threadsUrl: link,
+    })).toContain("https://ztrack.app/zdry/app/hilos");
   });
 });

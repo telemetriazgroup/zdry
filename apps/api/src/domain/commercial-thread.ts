@@ -19,10 +19,31 @@ export function commercialReplyUrl(): string {
   return `${origin}${root}/api/commercial/respuesta`;
 }
 
-export function staffThreadsUrl(): string {
-  const origin = String(process.env.WEB_ORIGIN || "http://localhost:28080").replace(/\/$/, "");
+export function isLoopbackOrigin(value: string): boolean {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1" || host === "host.docker.internal";
+  } catch {
+    return false;
+  }
+}
+
+/** Enlace que ve el comercial. Si ZDRY corre en local pero la salida ya es ztrack.app, el mensaje usa esa dirección. */
+export function messageWebOrigin(webOrigin: string, salidaUrl = ""): string {
+  const web = String(webOrigin || "").trim().replace(/\/$/, "");
+  if (web && !isLoopbackOrigin(web)) return web;
+  const salida = String(salidaUrl || "").trim();
+  if (salida && !isLoopbackOrigin(salida)) {
+    const parsed = new URL(salida);
+    return `${parsed.protocol}//${parsed.host}`;
+  }
+  return web || "http://localhost:28080";
+}
+
+export function staffThreadsUrl(origin?: string): string {
+  const base = String(origin || process.env.WEB_ORIGIN || "http://localhost:28080").replace(/\/$/, "");
   const root = String(process.env.COOKIE_PATH || "/zdry").replace(/\/$/, "");
-  return `${origin}${root}/app/hilos`;
+  return `${base}${root}/app/hilos`;
 }
 
 export function threadReference(threadId: string, now = Date.now()): string {
@@ -140,7 +161,7 @@ export function executiveEscalationText(input: { vendorName: string; clientName:
   ].filter(Boolean).join("\n").slice(0, 4000);
 }
 
-export function interestNoticeText(input: { who: string; clientName: string; iso: string; unitType: string; priceList: number; priceMin: number }): string {
+export function interestNoticeText(input: { who: string; clientName: string; iso: string; unitType: string; priceList: number; priceMin: number; threadsUrl?: string }): string {
   const unit = [input.iso.trim(), input.unitType.trim()].filter(Boolean).join(" ");
   const margin = Math.round(input.priceList - input.priceMin);
   return [
@@ -150,27 +171,27 @@ export function interestNoticeText(input: { who: string; clientName: string; iso
     `Mínimo: ${usd(input.priceMin)}.`,
     `Margen: ${usd(margin)}.`,
     "Entra al hilo y ofrece el precio de lista o uno dentro de ese rango.",
-    staffThreadsUrl(),
+    input.threadsUrl || staffThreadsUrl(),
   ].join("\n").slice(0, 4000);
 }
 
-export function registrationVendorText(input: { vendorName: string; clientName: string; company: string; doc: string; phone: string; email: string }): string {
+export function registrationVendorText(input: { vendorName: string; clientName: string; company: string; doc: string; phone: string; email: string; threadsUrl?: string }): string {
   return [
     `Hola ${input.vendorName.trim() || "comercial"}.`,
     "Tienes un cliente por atender.",
     clientBlock(input),
     "Atiéndelo. El sistema ya le envió el enlace del catálogo.",
-    staffThreadsUrl(),
+    input.threadsUrl || staffThreadsUrl(),
   ].join("\n").slice(0, 4000);
 }
 
-export function registrationExecutiveText(input: { executiveName: string; vendorName: string; clientName: string; company: string; doc: string; phone: string; email: string }): string {
+export function registrationExecutiveText(input: { executiveName: string; vendorName: string; clientName: string; company: string; doc: string; phone: string; email: string; threadsUrl?: string }): string {
   return [
     `Hola ${input.executiveName.trim() || "ejecutivo"}.`,
     `${input.vendorName.trim() || "Un comercial"} de tu equipo quedó asignado a un cliente.`,
     clientBlock(input),
     "Revisa que lo atienda a tiempo.",
-    staffThreadsUrl(),
+    input.threadsUrl || staffThreadsUrl(),
   ].join("\n").slice(0, 4000);
 }
 

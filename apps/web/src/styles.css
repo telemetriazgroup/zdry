@@ -90,6 +90,9 @@ button.share-unit { display: block; }
 .share-brief-photos button { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 0; cursor: pointer; }
 .share-brief-photos button.on { border-color: var(--orange, #d9622f); }
 .share-brief-photos img { width: 72px; height: 54px; object-fit: cover; display: block; border-radius: 5px; }
+.share-price-ask { margin: 12px 0 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.share-price-form { display: flex; gap: 8px; align-items: center; }
+.share-price-form input { width: 160px; }
 .commercial-send { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .commercial-send .btn-whatsapp { justify-content: center; }
 .client-pick-label { font-size: 12px; font-weight: 700; color: #344054; }

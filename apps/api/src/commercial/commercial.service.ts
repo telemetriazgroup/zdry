@@ -13,6 +13,8 @@ import {
   clientOfferText,
   commercialReplyUrl,
   contactAskedText,
+  messageWebOrigin,
+  staffThreadsUrl,
   contactClock,
   executiveEscalationText,
   interestNoticeText,
@@ -45,6 +47,12 @@ export class CommercialService implements OnModuleInit, OnModuleDestroy {
     private readonly audit: AuditService,
     private readonly salida: SalidaService,
   ) {}
+
+  private async threadsUrl() {
+    const cfg = await this.salida.read();
+    const origin = messageWebOrigin(process.env.WEB_ORIGIN || "", cfg.url);
+    return staffThreadsUrl(origin);
+  }
 
   onModuleInit() {
     this.timer = setInterval(() => {
@@ -167,8 +175,9 @@ export class CommercialService implements OnModuleInit, OnModuleDestroy {
     clientPhone: string;
   }) {
     const contact = phoneOk(input.clientPhone) ? whatsappDigits(input.clientPhone) : input.vendorPhone;
-    const vendorText = registrationVendorText(input);
-    const executiveText = registrationExecutiveText(input);
+    const threadsUrl = await this.threadsUrl();
+    const vendorText = registrationVendorText({ ...input, threadsUrl });
+    const executiveText = registrationExecutiveText({ ...input, threadsUrl });
     const vendor = await this.salida.notifyText({
       phone: input.vendorPhone,
       email: input.vendorEmail,
@@ -205,7 +214,7 @@ export class CommercialService implements OnModuleInit, OnModuleDestroy {
       email: vendor?.email || "",
       contact,
       subject: "Tienes un cliente por atender",
-      message: registrationVendorText(input),
+      message: registrationVendorText({ ...input, threadsUrl: await this.threadsUrl() }),
     });
   }
 
@@ -227,7 +236,7 @@ export class CommercialService implements OnModuleInit, OnModuleDestroy {
       email: input.executiveEmail,
       contact: input.vendorPhone,
       subject: "Un comercial de tu equipo tiene un cliente",
-      message: registrationExecutiveText(input),
+      message: registrationExecutiveText({ ...input, threadsUrl: await this.threadsUrl() }),
     });
   }
 
@@ -253,6 +262,7 @@ export class CommercialService implements OnModuleInit, OnModuleDestroy {
       include: { messages: true },
     });
     const clientName = share.contactName || share.clientName;
+    const threadsUrl = await this.threadsUrl();
     const note = interestNoticeText({
       who: share.vendorName,
       clientName,
@@ -260,6 +270,7 @@ export class CommercialService implements OnModuleInit, OnModuleDestroy {
       unitType: input.type,
       priceList: prices.priceList,
       priceMin: prices.priceMin,
+      threadsUrl,
     });
     await this.addMessage(thread.id, "sistema", `${clientName} pidió precio o información de ${input.iso}.`);
     const vendor = await this.prisma.user.findUnique({ where: { id: share.vendorId }, select: { email: true, whatsapp: true } });
@@ -283,6 +294,7 @@ export class CommercialService implements OnModuleInit, OnModuleDestroy {
         unitType: input.type,
         priceList: prices.priceList,
         priceMin: prices.priceMin,
+        threadsUrl,
       });
       await this.salida.notifyText({
         phone: whatsappDigits(share.executiveWhatsapp || executive?.whatsapp || ""),
@@ -641,6 +653,7 @@ export class CommercialService implements OnModuleInit, OnModuleDestroy {
   private staffRow(row: Omit<ThreadRow, "messages"> & { messages?: ThreadRow["messages"] }) {
     return {
       id: row.id,
+      shareId: row.shareId,
       iso: row.iso,
       unitType: row.unitType,
       status: row.status,

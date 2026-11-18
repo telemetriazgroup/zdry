@@ -50,7 +50,7 @@ function usd(value) {
   return `USD ${Math.round(n).toLocaleString("en-US")}`;
 }
 
-function ShareActivity({ detail, picked, onPick }) {
+function ShareActivity({ detail, picked, onPick, asked }) {
   const metrics = detail?.metrics;
   if (!detail || !metrics) return <p className="section-sub">Elige un enlace para ver qué revisa el cliente.</p>;
   const units = metrics.units || [];
@@ -76,7 +76,7 @@ function ShareActivity({ detail, picked, onPick }) {
         <div className="share-bars">
           {units.map((u) => (
             <button className={`share-bar-row share-pick ${picked === u.iso ? "on" : ""}`} type="button" key={`v-${u.iso}`} onClick={() => onPick?.(u.iso)}>
-              <b>{u.iso}</b>
+              <b>{u.iso}{asked?.has(u.iso) ? " · pidió precio" : ""}</b>
               <div className="share-bar"><span style={{ width: `${Math.max(8, ((u.views || u.count || 0) / viewsMax) * 100)}%` }} /></div>
               <span>{u.views || u.count || 0}</span>
             </button>
@@ -188,6 +188,50 @@ function UnitBrief({ unit, error }) {
       {downloadError ? <p className="err">{downloadError}</p> : null}
       <p className="field-hint">El archivo es para subirlo a mano en WhatsApp. El chat no puede llevar las fotos solo.</p>
     </>
+  );
+}
+
+const ASK_STATUS = {
+  abierto: "El cliente pidió precio. Puedes enviarle el de lista o uno dentro del rango.",
+  esperando_contacto: "El cliente pidió que lo contactes.",
+  cotizacion_pedida: "El cliente pidió la cotización.",
+  cerrado: "Este hilo ya está cerrado.",
+};
+
+function PriceAsk({ thread, onSent }) {
+  const [price, setPrice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (!thread) return <p className="field-hint">Este equipo no tiene una solicitud de precio.</p>;
+  async function send(body) {
+    setBusy(true);
+    setError("");
+    try {
+      const next = await api(`/commercial/hilos/${thread.id}/precio`, { method: "POST", body });
+      setPrice("");
+      onSent?.(next);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="share-price-ask">
+      <b>Solicitud de precio · {thread.iso}</b>
+      <p className="section-sub">{ASK_STATUS[thread.status] || thread.status}{thread.priceNet != null ? ` Precio enviado: ${usd(thread.priceNet)}.` : ""}</p>
+      <p className="field-hint">Lista {usd(thread.priceList)} · mínimo {usd(thread.priceMin)}{thread.margin != null ? ` · margen ${usd(thread.margin)}` : ""}</p>
+      {thread.status === "abierto" ? (
+        <div className="action-row">
+          <button className="btn-primary" type="button" disabled={busy} onClick={() => send({ useList: true })}>Enviar precio de lista</button>
+          <form className="share-price-form" onSubmit={(event) => { event.preventDefault(); send({ price: Number(price) }); }}>
+            <input value={price} onChange={(e) => setPrice(e.target.value)} inputMode="decimal" placeholder="Otro precio neto" aria-label="Otro precio neto" />
+            <button className="btn-ghost" type="submit" disabled={busy || price === ""}>Enviar este precio</button>
+          </form>
+        </div>
+      ) : null}
+      {error ? <p className="err">{error}</p> : null}
+    </div>
   );
 }
 
@@ -325,7 +369,9 @@ export default function CatalogShares() {
   const [rucDraft, setRucDraft] = useState(null);
   const waEdited = useRef(false);
   const [archivedView, setArchivedView] = useState(false);
-  const [renewHours, setRenewHours] = useState(72);
+  const [extendAsk, setExtendAsk] = useState(null);
+  const [extendHours, setExtendHours] = useState(24);
+  const [renewing, setRenewing] = useState(false);
   const [linkPage, setLinkPage] = useState(1);
   const [origin, setOrigin] = useState("todos");
   const [query, setQuery] = useState("");
@@ -338,6 +384,9 @@ export default function CatalogShares() {
   const [pickedIso, setPickedIso] = useState("");
   const [pickedUnit, setPickedUnit] = useState(null);
   const [pickedError, setPickedError] = useState("");
+  const [shareThreads, setShareThreads] = useState([]);
+  const [offerThread, setOfferThread] = useState(null);
+  const briefRef = useRef(null);
   const emptyIdentity = {
     ruc: "",
     dni: "",
@@ -390,6 +439,38 @@ export default function CatalogShares() {
       .catch((e) => { if (!cancelled) { setPickedUnit(null); setPickedError(e.message); } });
     return () => { cancelled = true; };
   }, [pickedIso]);
+
+  useEffect(() => {
+    if (!detail?.id) {
+      setShareThreads([]);
+      return undefined;
+    }
+    let cancelled = false;
+    api("/commercial/hilos")
+      .then((list) => {
+        if (!cancelled) setShareThreads((Array.isArray(list) ? list : []).filter((row) => row.shareId === detail.id));
+      })
+      .catch(() => { if (!cancelled) setShareThreads([]); });
+    return () => { cancelled = true; };
+  }, [detail?.id]);
+
+  useEffect(() => {
+    const match = shareThreads.find((row) => row.iso === pickedIso && row.status !== "cerrado") || shareThreads.find((row) => row.iso === pickedIso);
+    if (!pickedIso || !match) {
+      setOfferThread(null);
+      return undefined;
+    }
+    let cancelled = false;
+    api(`/commercial/hilos/${match.id}`)
+      .then((row) => { if (!cancelled) setOfferThread(row); })
+      .catch(() => { if (!cancelled) setOfferThread(null); });
+    return () => { cancelled = true; };
+  }, [pickedIso, shareThreads]);
+
+  useEffect(() => {
+    if (!pickedIso || !briefRef.current) return;
+    briefRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [pickedIso, pickedUnit]);
 
   useEffect(() => {
     if (canAssign) return;
@@ -568,17 +649,22 @@ export default function CatalogShares() {
     }
   }
 
-  async function renew(id) {
+  async function renew(id, hours) {
     setError("");
+    setRenewing(true);
     try {
-      const row = await api(`/catalog-shares/${id}/renew`, { method: "POST", body: { hours: renewHours } });
+      const row = await api(`/catalog-shares/${id}/renew`, { method: "POST", body: { hours } });
       setMsg(row.status === "activo"
-        ? `Enlace de ${row.clientCompany || row.clientName} vigente hasta ${formatWhen(row.expiresAt)}.`
+        ? `Enlace de ${row.clientCompany || row.clientName} vigente ${hours} horas, hasta ${formatWhen(row.expiresAt)}.`
         : "Enlace actualizado.");
+      setExtendAsk(null);
       await load(false);
       setArchivedView(false);
+      if (openId === id) setDetail(await api(`/catalog-shares/mine/${id}`));
     } catch (err) {
       setError(err.message);
+    } finally {
+      setRenewing(false);
     }
   }
 
@@ -961,14 +1047,6 @@ export default function CatalogShares() {
                 {archivedView ? "Ver vigentes" : "Ver archivados"}
               </button>
             ) : null}
-            {archivedView ? null : (
-              <label className="stock-sort" style={{ textTransform: "none", letterSpacing: 0 }}>
-                Horas al extender
-                <select value={renewHours} onChange={(e) => setRenewHours(Number(e.target.value))} aria-label="Horas para extender o reactivar">
-                  {HOURS.map((h) => <option key={h} value={h}>{h} h</option>)}
-                </select>
-              </label>
-            )}
           </div>
           {rucDraft ? (
             <form className="form-grid" onSubmit={savePendingRuc}>
@@ -1054,7 +1132,7 @@ export default function CatalogShares() {
                   <button className="btn-ghost" type="button" onClick={() => suspend(detail.id)}>Suspender</button>
                 ) : null}
                 {detail.status === "activo" || detail.status === "vencido" ? (
-                  <button className="btn-ghost" type="button" onClick={() => renew(detail.id)}>{detail.status === "vencido" ? "Reactivar" : "Extender"}</button>
+                  <button className="btn-ghost" type="button" onClick={() => { setExtendHours(24); setExtendAsk({ id: detail.id, name: detail.clientCompany || detail.clientName, reactivate: detail.status === "vencido" }); }}>{detail.status === "vencido" ? "Reactivar" : "Extender"}</button>
                 ) : null}
                 {detail.rucPending && detail.status !== "archivado" ? (
                   <button className="btn-ghost" type="button" onClick={() => setRucDraft({ id: detail.id, ruc: "" })}>Agregar RUC</button>
@@ -1071,8 +1149,23 @@ export default function CatalogShares() {
         </div>
         <div className="panel">
           <h3>{detail ? `Actividad · ${detail.clientCompany || detail.clientName}` : "Actividad del cliente"}</h3>
+          <div ref={briefRef}>
+            {detail && !pickedIso ? <p className="section-sub">Elige un equipo de la actividad. Su ficha y la solicitud de precio quedan aquí arriba.</p> : null}
+            {pickedIso ? <UnitBrief unit={pickedUnit} error={pickedError} /> : null}
+            {pickedIso ? (
+              <PriceAsk
+                thread={offerThread}
+                onSent={async (next) => {
+                  setOfferThread(next);
+                  setShareThreads((rows) => rows.map((row) => (row.id === next.id ? { ...row, ...next } : row)));
+                  if (detail?.id) setFollow(await api(`/catalog-shares/${detail.id}/seguimiento`).catch(() => null));
+                  setMsg(`Precio de ${next.iso} enviado al cliente.`);
+                }}
+              />
+            ) : null}
+          </div>
           <div className="share-scroll">
-            <ShareActivity detail={detail} picked={pickedIso} onPick={setPickedIso} />
+            <ShareActivity detail={detail} picked={pickedIso} onPick={setPickedIso} asked={new Set(shareThreads.filter((row) => row.status !== "cerrado").map((row) => row.iso))} />
             {detail?.events?.length ? (
               <ul className="dash-list">
                 {detail.events.slice(0, 40).map((e) => (
@@ -1085,10 +1178,29 @@ export default function CatalogShares() {
             ) : null}
           </div>
         </div>
-        <div className="panel">
-          <UnitBrief unit={pickedUnit} error={pickedError} />
-        </div>
       </div>
+      {extendAsk ? (
+        <div className="overlay open" role="dialog" aria-modal="true" aria-labelledby="extend-title" onClick={() => setExtendAsk(null)}>
+          <div className="modal quote-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h3 id="extend-title">{extendAsk.reactivate ? "Reactivar enlace" : "Extender enlace"}</h3>
+              <button className="modal-close" type="button" onClick={() => setExtendAsk(null)} aria-label="Cerrar">×</button>
+            </div>
+            <div className="modal-body single">
+              <p>¿Cuántas horas queda vigente el enlace de {extendAsk.name}?</p>
+              <div className="doc-kind-switch" role="group" aria-label="Horas de vigencia">
+                {[24, 48, 72].map((hours) => (
+                  <button key={hours} type="button" className={extendHours === hours ? "on" : ""} onClick={() => setExtendHours(hours)}>{hours} horas</button>
+                ))}
+              </div>
+              <div className="action-row">
+                <button className="btn-primary" type="button" disabled={renewing} onClick={() => renew(extendAsk.id, extendHours)}>{renewing ? "Guardando…" : `Confirmar ${extendHours} horas`}</button>
+                <button className="btn-ghost" type="button" onClick={() => setExtendAsk(null)}>Cancelar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {detail ? (
         <div className="panel">
           <h3>Seguimiento · {detail.clientCompany || detail.clientName}</h3>
