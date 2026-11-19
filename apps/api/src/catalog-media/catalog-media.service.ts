@@ -642,6 +642,63 @@ export class CatalogMediaService {
     return this.get(iso, user);
   }
 
+  async returnToQueue(iso: string, user: AuthUser, ip?: string) {
+    if (!isSuperadmin(user.role)) {
+      throw new ForbiddenException("Solo el superusuario devuelve un prepublicado a Por publicar.");
+    }
+    const c = await this.prisma.container.findUnique({ where: { iso } });
+    if (!c || c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
+    if (c.mediaStatus !== PREPUBLISHED_STATUS) {
+      throw new BadRequestException("Esa unidad no está prepublicada.");
+    }
+    await this.prisma.container.update({
+      where: { iso },
+      data: {
+        mediaStatus: "pendiente",
+        mediaApprovedAt: null,
+        mediaApprovedBy: user.id,
+        mediaReviewNote: null,
+      },
+    });
+    await this.prisma.containerHistory.create({
+      data: { iso, type: "Catálogo", detail: `Devuelta a Por publicar por ${user.name}. Deja de estar prepublicada.` },
+    });
+    await this.audit.log({ user, action: "return_media_queue", entity: "Container", entityId: iso, ip });
+    return this.get(iso, user);
+  }
+
+  async returnManyToQueue(isos: string[], user: AuthUser, ip?: string) {
+    if (!isSuperadmin(user.role)) {
+      throw new ForbiddenException("Solo el superusuario devuelve un prepublicado a Por publicar.");
+    }
+    const unique = [...new Set((isos || []).map((iso) => String(iso || "").trim()).filter(Boolean))].slice(0, 400);
+    let moved = 0;
+    const skipped: string[] = [];
+    for (const iso of unique) {
+      const c = await this.prisma.container.findUnique({ where: { iso }, select: { iso: true, archivedAt: true, mediaStatus: true } });
+      if (!c || c.archivedAt || c.mediaStatus !== PREPUBLISHED_STATUS) {
+        skipped.push(iso);
+        continue;
+      }
+      await this.prisma.container.update({
+        where: { iso },
+        data: { mediaStatus: "pendiente", mediaApprovedAt: null, mediaApprovedBy: user.id, mediaReviewNote: null },
+      });
+      await this.prisma.containerHistory.create({
+        data: { iso, type: "Catálogo", detail: `Devuelta a Por publicar por ${user.name}. Deja de estar prepublicada.` },
+      });
+      moved += 1;
+    }
+    await this.audit.log({
+      user,
+      action: "return_media_queue",
+      entity: "Container",
+      after: { moved, skipped: skipped.length },
+      ip,
+    });
+    return { moved, skipped };
+  }
+
   async rejectPhoto(iso: string, slot: number, note: string, user: AuthUser, ip?: string) {
     this.assertApprover(user);
     if (!(note || "").trim()) throw new BadRequestException("Indica el motivo del rechazo de esta foto.");

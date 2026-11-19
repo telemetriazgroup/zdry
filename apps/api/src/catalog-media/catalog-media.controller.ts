@@ -74,6 +74,16 @@ export class CatalogMediaController {
     return this.media.publishMany(body.isos || [], user, req.ip);
   }
 
+  @Post("return-queue")
+  @Roles("superadmin")
+  returnQueue(
+    @Body() body: { isos?: string[] },
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.media.returnManyToQueue(body.isos || [], user, req.ip);
+  }
+
   @Get(":iso/history/:id")
   @Roles("superadmin")
   async historyPhoto(@Param("iso") iso: string, @Param("id") id: string) {
@@ -242,5 +252,11 @@ export class CatalogMediaController {
   @Roles("admin", "gerente")
   hide(@Param("iso") iso: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.media.hide(iso, user, req.ip);
+  }
+
+  @Post(":iso/return-queue")
+  @Roles("superadmin")
+  returnToQueue(@Param("iso") iso: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.media.returnToQueue(iso, user, req.ip);
   }
 }

@@ -102,6 +102,7 @@ function firstPreview(unit) {
 export default function CatalogMedia() {
   const { user } = useAuth();
   const canApprove = hasRole(user, "admin", "gerente");
+  const superuser = isSuperadmin(user);
   const canPrice = canApprove;
   const canSeeExpediente = hasRole(user, "admin");
   const lb = useLightbox();
@@ -171,6 +172,11 @@ export default function CatalogMedia() {
 
   function pickLock(row) {
     if (!row) return "No se puede seleccionar.";
+    if (group === "prepublicados") {
+      if (!superuser) return "Solo el superusuario devuelve un prepublicado a Por publicar.";
+      if (row.mediaStatus !== "prepublicado") return "No está prepublicada.";
+      return "";
+    }
     if (group === "publicadas") {
       if (hardBlock(row)) return hardBlock(row);
       if (row.mediaStatus !== "aprobado") return "No está publicada.";
@@ -185,7 +191,9 @@ export default function CatalogMedia() {
     setPicked(new Set());
     setMsg(group === "publicadas"
       ? "Modo selección. Marca las publicadas que quieres ocultar."
-      : "Modo selección. Marca las que faltan por publicar, o usa «Seleccionar con fotos».");
+      : group === "prepublicados"
+        ? "Modo selección. Marca las prepublicadas que vuelven a Por publicar."
+        : "Modo selección. Marca las que faltan por publicar, o usa «Seleccionar con fotos».");
   }
 
   async function openCommercial() {
@@ -230,12 +238,18 @@ export default function CatalogMedia() {
     const ids = filteredRows.filter((r) => !pickLock(r)).map((r) => r.iso);
     setPicked(new Set(ids));
     if (!ids.length) {
-      setError(group === "publicadas" ? "No hay publicadas en este filtro." : "Ninguna unidad de este filtro está por publicar.");
+      setError(group === "publicadas"
+        ? "No hay publicadas en este filtro."
+        : group === "prepublicados"
+          ? "No hay prepublicadas en este filtro."
+          : "Ninguna unidad de este filtro está por publicar.");
       return;
     }
     setMsg(group === "publicadas"
       ? `${ids.length} publicadas seleccionadas. Puedes ocultar la selección.`
-      : `${ids.length} unidades por publicar seleccionadas. Publica la selección o quita las que no van.`);
+      : group === "prepublicados"
+        ? `${ids.length} prepublicadas seleccionadas. Puedes devolverlas a Por publicar.`
+        : `${ids.length} unidades por publicar seleccionadas. Publica la selección o quita las que no van.`);
   }
 
   async function loadOffer(nextIso) {
@@ -649,6 +663,52 @@ export default function CatalogMedia() {
     await publishIso(iso, photoCount);
   }
 
+  async function returnToQueue(nextIso, fromList = false) {
+    if (!superuser || !nextIso) return;
+    if (!window.confirm(`¿Devolver ${nextIso} a Por publicar? Deja de estar prepublicada.`)) return;
+    if (fromList) setListBusy(nextIso);
+    setError("");
+    try {
+      const u = await api(`/catalog-media/${nextIso}/return-queue`, { method: "POST", body: {} });
+      if (iso === nextIso) await applyUnit(u, `${nextIso} volvió a Por publicar.`);
+      else {
+        setMsg(`${nextIso} volvió a Por publicar.`);
+        loadList();
+      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    } finally {
+      if (fromList) setListBusy("");
+    }
+  }
+
+  async function returnPicked() {
+    const chosen = rows.filter((r) => picked.has(r.iso) && r.mediaStatus === "prepublicado");
+    if (!chosen.length) {
+      setError("Selecciona al menos una prepublicada.");
+      return;
+    }
+    if (!window.confirm(`¿Devolver ${chosen.length} unidad${chosen.length === 1 ? "" : "es"} a Por publicar? Dejan de estar prepublicadas.`)) return;
+    setPublishBusy(true);
+    setError("");
+    try {
+      const out = await api("/catalog-media/return-queue", { method: "POST", body: { isos: chosen.map((r) => r.iso) } });
+      const skip = out.skipped?.length ? ` ${out.skipped.length} no estaban prepublicadas.` : "";
+      setMsg(`${out.moved ?? 0} volvieron a Por publicar.${skip}`);
+      setPicked(new Set());
+      setSelectMode(false);
+      loadList();
+      if (iso && chosen.some((r) => r.iso === iso)) {
+        const u = await api(`/catalog-media/${iso}`);
+        setUnit(u);
+      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e.message);
+    } finally {
+      setPublishBusy(false);
+    }
+  }
+
   async function hide() {
     if (!iso) return;
     if (!window.confirm(`¿Ocultar ${iso} del catálogo? Las fotos se conservan.`)) return;
@@ -916,9 +976,9 @@ export default function CatalogMedia() {
                 Ver como comercial
               </button>
             ) : null}
-            {canApprove && !selectMode && (group === "por publicar" || group === "publicadas") ? (
-              <button className={group === "publicadas" ? "btn-published" : "btn-primary"} type="button" disabled={publishBusy} onClick={enterSelect}>
-                {group === "publicadas" ? "Seleccionar para ocultar" : "Seleccionar para publicar"}
+            {canApprove && !selectMode && (group === "por publicar" || group === "publicadas" || (group === "prepublicados" && superuser)) ? (
+              <button className={group === "por publicar" ? "btn-primary" : "btn-published"} type="button" disabled={publishBusy} onClick={enterSelect}>
+                {group === "publicadas" ? "Seleccionar para ocultar" : group === "prepublicados" ? "Seleccionar para devolver" : "Seleccionar para publicar"}
               </button>
             ) : null}
           </div>
@@ -926,12 +986,16 @@ export default function CatalogMedia() {
             <div className={`catalog-select-bar${group === "publicadas" ? " is-published" : ""}`}>
               <b>{picked.size} seleccionada{picked.size === 1 ? "" : "s"}</b>
               <button className="btn-ghost" type="button" onClick={selectReady}>
-                {group === "publicadas" ? "Seleccionar publicadas" : "Seleccionar con fotos"}
+                {group === "publicadas" ? "Seleccionar publicadas" : group === "prepublicados" ? "Seleccionar prepublicadas" : "Seleccionar con fotos"}
               </button>
               <button className="btn-ghost" type="button" onClick={() => setPicked(new Set())}>Quitar selección</button>
               {group === "publicadas" ? (
                 <button className="btn-published" type="button" disabled={publishBusy || picked.size < 1} onClick={hidePicked}>
                   {publishBusy ? "Ocultando…" : "Ocultar selección"}
+                </button>
+              ) : group === "prepublicados" ? (
+                <button className="btn-primary" type="button" disabled={publishBusy || picked.size < 1} onClick={returnPicked}>
+                  {publishBusy ? "Devolviendo…" : "Pasar a Por publicar"}
                 </button>
               ) : (
                 <button className="btn-primary" type="button" disabled={publishBusy || picked.size < 1} onClick={publishPicked}>
@@ -1079,7 +1143,19 @@ export default function CatalogMedia() {
                             Publicar
                           </button>
                         ) : catalogGroup(r) === "prepublicados" ? (
-                          <span className="catalog-state-note" title={photoState(r).title}>Sin posición</span>
+                          superuser ? (
+                            <button
+                              className="btn-ghost"
+                              type="button"
+                              disabled={listBusy === r.iso}
+                              title={r.priceConfirmed ? "Devolver a Por publicar" : "Sin precio confirmado. Devolver a Por publicar"}
+                              onClick={() => returnToQueue(r.iso, true)}
+                            >
+                              A Por publicar
+                            </button>
+                          ) : (
+                            <span className="catalog-state-note" title={photoState(r).title}>Sin posición</span>
+                          )
                         ) : (
                           <span className="catalog-state-note" title={photoState(r).title}>
                             {catalogGroup(r) === "sin fotos" ? "Sin fotos" : hardBlock(r)}
@@ -1318,12 +1394,19 @@ export default function CatalogMedia() {
             {canApprove ? (
               <div className="action-row" style={{ marginTop: 16 }}>
                 {waitingSeat(unit) ? (
-                  <p className="section-sub">
-                    Prepublicada. Falta confirmar la posición en un depósito.
-                    {unit.priceConfirmed
-                      ? " Con el precio confirmado, se publica sola cuando el puesto quede definido."
-                      : " Sin precio confirmado, el comercial ve «Consultar a los administradores»."}
-                  </p>
+                  <>
+                    <p className="section-sub">
+                      Prepublicada. Falta confirmar la posición en un depósito.
+                      {unit.priceConfirmed
+                        ? " Con el precio confirmado, se publica sola cuando el puesto quede definido."
+                        : " Sin precio confirmado, el comercial ve «Consultar a los administradores»."}
+                    </p>
+                    {superuser ? (
+                      <button className="btn-ghost" type="button" onClick={() => returnToQueue(unit.iso)}>
+                        A Por publicar
+                      </button>
+                    ) : null}
+                  </>
                 ) : hardBlock(unit) ? (
                   <p className="section-sub">{hardBlock(unit)}</p>
                 ) : unit.mediaStatus === "aprobado" ? (
