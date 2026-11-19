@@ -716,7 +716,7 @@ export class WarehouseService {
   }
 
   async saveOutsider(
-    input: { depotId?: string; id?: string; code?: string; feet?: number; color?: string; note?: string; kind?: string; remove?: boolean },
+    input: { depotId?: string; id?: string; code?: string; feet?: number; color?: string; note?: string; kind?: string; remove?: boolean; brand?: string; model?: string; serial?: string; observations?: string },
     user: AuthUser,
     ip?: string,
   ) {
@@ -755,6 +755,10 @@ export class WarehouseService {
       const color = /^#[0-9a-fA-F]{6}$/.test(String(input.color || "")) ? String(input.color).toLowerCase() : "";
       const note = String(input.note || "").trim().slice(0, 120);
       const kind = String(input.kind || "").trim().toUpperCase().replace(/\s+/g, " ").slice(0, 24) || "OTROS";
+      const brand = String(input.brand || "").trim().slice(0, 80);
+      const model = String(input.model || "").trim().slice(0, 80);
+      const serial = String(input.serial || "").trim().slice(0, 80);
+      const observations = String(input.observations || "").trim().slice(0, 400);
       const existingUnit = await this.prisma.container.findUnique({ where: { iso: code }, select: { archivedAt: true } });
       if (existingUnit && !existingUnit.archivedAt) throw new ConflictException("Ese código ya está en el inventario ZDRY.");
       const current = input.id ? outsiders.find((item) => item.id === input.id) : undefined;
@@ -768,6 +772,10 @@ export class WarehouseService {
         ...(note ? { note } : {}),
         kind,
         ...(current?.media?.length ? { media: current.media } : {}),
+        ...(brand ? { brand } : {}),
+        ...(model ? { model } : {}),
+        ...(serial ? { serial } : {}),
+        ...(observations ? { observations } : {}),
       };
       const previousCode = current?.code;
       const typeCode = String(feet);

@@ -2107,6 +2107,9 @@ button.tile.dry-click { display: block; }
 .yard-cell.fence-target { background: #f0c14a; color: #1c2433; border-color: #d4a017; }
 .yard-cell.fence-skip { opacity: 0.38; }
 .guest-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-top: 8px; align-items: end; }
+.guest-machine { grid-column: 1 / -1; display: grid; gap: 10px; }
+.guest-machine .check-line { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 700; color: #1d2633; }
+.guest-machine .guest-form { margin-top: 0; }
 .guest-form input[type="color"] { height: 38px; padding: 4px; }
 .yard-info { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafc; }
 .yard-info b { font-size: 16px; color: var(--navy, #12203a); }

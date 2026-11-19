@@ -943,6 +943,11 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   const [guestNote, setGuestNote] = useState("");
   const [guestKind, setGuestKind] = useState("REEFER");
   const [guestEdit, setGuestEdit] = useState(null);
+  const [machineOn, setMachineOn] = useState(false);
+  const [machineBrand, setMachineBrand] = useState("");
+  const [machineModel, setMachineModel] = useState("");
+  const [machineSerial, setMachineSerial] = useState("");
+  const [machineObs, setMachineObs] = useState("");
   const [unknownPick, setUnknownPick] = useState(null);
   const [unknownFeet, setUnknownFeet] = useState("40");
   const [unknownColor, setUnknownColor] = useState("#8a90a2");
@@ -966,6 +971,47 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
   useEffect(() => {
     setDraft(withSeats(layout.plan?.zones?.length ? layout.plan : FALLBACK_PLAN));
   }, [layout.depotId, layout.plan]);
+
+  function applyMachine(item) {
+    const brand = item?.brand || "";
+    const model = item?.model || "";
+    const serial = item?.serial || "";
+    const observations = item?.observations || "";
+    setMachineBrand(brand);
+    setMachineModel(model);
+    setMachineSerial(serial);
+    setMachineObs(observations);
+    setMachineOn(Boolean(brand || model || serial || observations));
+  }
+
+  function machineBody() {
+    if (!machineOn) return { brand: "", model: "", serial: "", observations: "" };
+    return {
+      brand: machineBrand.trim(),
+      model: machineModel.trim(),
+      serial: machineSerial.trim(),
+      observations: machineObs.trim(),
+    };
+  }
+
+  function selectGear(gear) {
+    setUnknownPick(null);
+    setSelectedIso(null);
+    setGuestCode(gear.code);
+    setGuestFeet(String(gear.feet || 20));
+    setGuestColor(gear.color || "#8a90a2");
+    setGuestNote(gear.note || "");
+    setGuestKind(gear.kind || equipmentKinds[0] || "OTROS");
+    setGuestEdit({ where: "outsider", id: gear.id });
+    applyMachine(gear);
+  }
+
+  useEffect(() => {
+    if (mode !== "regularizar" || viewer) return;
+    const gear = (draft.outsiders || []).find((item) => item.code && item.code === picked?.code);
+    if (!gear || (guestEdit?.where === "outsider" && guestEdit.id === gear.id)) return;
+    selectGear(gear);
+  }, [mode, picked?.code]);
 
   useEffect(() => {
     if (!menu) return undefined;
@@ -1401,6 +1447,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         }
         setGuestCode("");
         setGuestNote("");
+        applyMachine(null);
       }
       setPicked(null);
       await onReload();
@@ -1522,6 +1569,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     setGuestColor(cell?.color || "#8a90a2");
     setGuestFeet(String(cell?.typeCode || "").startsWith("20") ? "20" : "40");
     setGuestKind(cell?.kind || equipmentKinds[0] || "OTROS");
+    applyMachine((draft.outsiders || []).find((item) => item.code === String(cell?.iso || "").toUpperCase()));
     setGuestEdit({ where: "fence", sideId: side.id, slot, level, half: half || "", row: row || 1 });
     setSelectedIso(null);
     setError("");
@@ -1573,9 +1621,11 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         ...(placeHalf ? { half: placeHalf } : {}),
       });
     if (ok) {
+      await syncGear(code);
       setGuestCode("");
       setGuestNote("");
       setGuestEdit(null);
+      applyMachine(null);
       setUnknownPick(null);
     }
   }
@@ -1612,15 +1662,35 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
           ...(guestEdit.half ? { half: guestEdit.half } : {}),
         },
       });
+      await syncGear(code);
       setGuestCode("");
       setGuestNote("");
       setGuestEdit(null);
+      applyMachine(null);
       await onReload();
     } catch (e) {
       setError(e.message);
     } finally {
       setBusy(false);
     }
+  }
+
+  async function syncGear(code) {
+    const gear = (draft.outsiders || []).find((item) => item.code === code);
+    if (!gear) return;
+    await api("/yard/outsider", {
+      method: "POST",
+      body: {
+        depotId: layout.depotId,
+        id: gear.id,
+        code,
+        feet: Number(guestFeet),
+        color: guestColor,
+        note: guestNote.trim(),
+        kind: guestKind,
+        ...machineBody(),
+      },
+    });
   }
 
   function selectPending(item) {
@@ -1630,6 +1700,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     setUnknownFeet(item.feet || "40");
     setUnknownColor(item.color || "#8a90a2");
     setUnknownNote(item.note || "");
+    applyMachine(null);
     setError("");
   }
 
@@ -1679,6 +1750,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
       setGuestCode("");
       setGuestNote("");
       setGuestEdit(null);
+      applyMachine(null);
       setUnknownPick(null);
     }
   }
@@ -1808,11 +1880,13 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
           color: guestColor,
           note: guestNote.trim(),
           kind: guestKind,
+          ...machineBody(),
         },
       });
       setGuestCode("");
       setGuestNote("");
       setGuestEdit(null);
+      applyMachine(null);
       await onReload();
     } catch (e) {
       setError(e.message);
@@ -1837,6 +1911,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             setGuestEdit(null);
             setGuestCode("");
             setGuestNote("");
+            applyMachine(null);
             await onReload();
           } catch (e) {
             setError(e.message);
@@ -1854,6 +1929,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
         setGuestEdit(null);
         setGuestCode("");
         setGuestNote("");
+        applyMachine(null);
       },
     });
   }
@@ -1864,6 +1940,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
     setGuestColor(ghost.color || "#8a90a2");
     setGuestFeet(String(ghost.typeCode || "").startsWith("40") ? "40" : String(ghost.typeCode || "").startsWith("10") ? "10" : "20");
     setGuestKind(ghost.kind || equipmentKinds[0] || "OTROS");
+    applyMachine((draft.outsiders || []).find((item) => item.code === String(ghost.code || "").toUpperCase()));
     setGuestEdit({ where: "zone", zoneId: ghost.zoneId, row: ghost.row, col: ghost.col, level: ghost.level, half: ghost.half || "" });
     setSelectedIso(null);
     setError("");
@@ -2063,6 +2140,13 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
           </div>
           <div>{picked.where}</div>
           {picked.note ? <div>{picked.note}</div> : null}
+          {(() => {
+            const gear = (draft.outsiders || []).find((item) => item.code === picked.code);
+            if (!gear) return null;
+            const line = [gear.brand, gear.model, gear.serial].filter(Boolean).join(" · ");
+            if (!line && !gear.observations) return null;
+            return <div>{line}{gear.observations ? `${line ? " · " : ""}${gear.observations}` : ""}</div>;
+          })()}
           {picked.access ? <div>{picked.access}</div> : null}
           {picked.cost ? <div>{picked.cost}</div> : null}
           {viewer ? null : (() => {
@@ -2309,6 +2393,28 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
             <label className="zone-field">Nota
               <input aria-label="Nota del equipo" value={guestNote} onChange={(e) => setGuestNote(e.target.value)} placeholder="Opcional" maxLength={120} />
             </label>
+            <div className="guest-machine">
+              <label className="check-line">
+                <input type="checkbox" checked={machineOn} onChange={(e) => setMachineOn(e.target.checked)} />
+                Agregar datos de la máquina
+              </label>
+              {machineOn ? (
+                <div className="guest-form">
+                  <label className="zone-field">Marca
+                    <input aria-label="Marca" value={machineBrand} onChange={(e) => setMachineBrand(e.target.value)} maxLength={80} />
+                  </label>
+                  <label className="zone-field">Modelo
+                    <input aria-label="Modelo" value={machineModel} onChange={(e) => setMachineModel(e.target.value)} maxLength={80} />
+                  </label>
+                  <label className="zone-field">Serie
+                    <input aria-label="Serie" value={machineSerial} onChange={(e) => setMachineSerial(e.target.value)} maxLength={80} />
+                  </label>
+                  <label className="zone-field">Observaciones
+                    <input aria-label="Observaciones" value={machineObs} onChange={(e) => setMachineObs(e.target.value)} maxLength={400} />
+                  </label>
+                </div>
+              ) : null}
+            </div>
             <button className="btn-primary" type="button" disabled={busy} onClick={assimilate}>{guestEdit ? "Guardar cambios" : "Asimilar al depósito"}</button>
           </div>
           {guestEdit ? (
@@ -2317,7 +2423,7 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
               {guestEdit.where === "outsider" && canGearMedia ? (
                 <button className="btn-primary" type="button" onClick={() => setGearMediaId(guestEdit.id)}>Cargar fotos</button>
               ) : null}
-              <button className="btn-ghost" type="button" onClick={() => { setGuestEdit(null); setGuestCode(""); setGuestNote(""); }}>Cancelar</button>
+              <button className="btn-ghost" type="button" onClick={() => { setGuestEdit(null); setGuestCode(""); setGuestNote(""); applyMachine(null); }}>Cancelar</button>
             </div>
           ) : null}
           <p className="section-sub">El tipo va antes que la nota. Asimilar lo guarda en el depósito. Elige un equipo de sin posición, o uno que no es DRY, y tócalo sobre un DESCONOCIDO de la zona o del cerco: ese puesto pasa a ser el equipo. Si no hay ninguno elegido, el DESCONOCIDO se edita en su celda. Un 40 ocupa el puesto completo. Un 20 o un 10 ocupa la mitad A o B.</p>
@@ -2339,15 +2445,8 @@ export default function YardBuild({ layout, onReload, selectedIso, setSelectedIs
                         type="button"
                         style={{ cursor: "pointer", background: on ? "#12203a" : "#fff", color: on ? "#fff" : "inherit" }}
                         onClick={() => {
-                          setUnknownPick(null);
-                          setSelectedIso(null);
                           if (row.outsider) {
-                            setGuestCode(row.outsider.code);
-                            setGuestFeet(String(row.outsider.feet || 20));
-                            setGuestColor(row.outsider.color || "#8a90a2");
-                            setGuestNote(row.outsider.note || "");
-                            setGuestKind(row.outsider.kind || equipmentKinds[0]);
-                            setGuestEdit({ where: "outsider", id: row.outsider.id });
+                            selectGear(row.outsider);
                             return;
                           }
                           if (row.ghost) editZoneGuest(row.ghost);

@@ -125,6 +125,11 @@ describe("yard plan", () => {
       outsiders: [{ id: "eq-1", code: "pp-9", feet: 20, kind: "powerpack", note: "patio" }, { code: "DESCONOCIDO", kind: "OTROS" }],
     });
     expect(withGear.outsiders).toEqual([{ id: "eq-1", code: "PP-9", feet: 20, kind: "POWERPACK", note: "patio" }]);
+    const withMachine = normalizeYardPlan({
+      zones: [{ id: "a", name: "A", rows: 2, cols: 2, levels: 2 }],
+      outsiders: [{ id: "eq-2", code: "GEN-1", feet: 10, kind: "OTROS", brand: " Cummins ", model: "C150", serial: "SN-1", observations: "  en patio  " }],
+    });
+    expect(withMachine.outsiders[0]).toMatchObject({ brand: "Cummins", model: "C150", serial: "SN-1", observations: "en patio" });
     const withMedia = normalizeYardPlan({
       zones: [{ id: "a", name: "A", rows: 2, cols: 2, levels: 2 }],
       outsiders: [{

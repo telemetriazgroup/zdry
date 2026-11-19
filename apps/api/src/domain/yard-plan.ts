@@ -66,6 +66,11 @@ export type YardOutsider = {
   note?: string;
   kind: string;
   media?: YardGearMedia[];
+  /** Datos opcionales de la máquina, cargados al regularizar. */
+  brand?: string;
+  model?: string;
+  serial?: string;
+  observations?: string;
 };
 
 export type YardPlan = {
@@ -330,6 +335,7 @@ function outsidersOf(raw: unknown): YardOutsider[] {
     const note = String(row.note || "").trim().slice(0, 120);
     const kind = equipmentKind(row.kind) || "OTROS";
     const media = gearMediaOf(row.media);
+    const machine = machineOf(row);
     outsiders.push({
       id,
       code,
@@ -338,9 +344,23 @@ function outsidersOf(raw: unknown): YardOutsider[] {
       ...(note ? { note } : {}),
       kind,
       ...(media.length ? { media } : {}),
+      ...machine,
     });
   });
   return outsiders;
+}
+
+function machineOf(row: Record<string, unknown>) {
+  const brand = String(row.brand || "").trim().slice(0, 80);
+  const model = String(row.model || "").trim().slice(0, 80);
+  const serial = String(row.serial || "").trim().slice(0, 80);
+  const observations = String(row.observations || "").trim().slice(0, 400);
+  return {
+    ...(brand ? { brand } : {}),
+    ...(model ? { model } : {}),
+    ...(serial ? { serial } : {}),
+    ...(observations ? { observations } : {}),
+  };
 }
 
 function gearMediaOf(raw: unknown): YardGearMedia[] {
