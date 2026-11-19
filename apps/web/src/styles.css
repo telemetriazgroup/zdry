@@ -268,6 +268,7 @@ p { margin: 0; }
 }
 .catalog-groups button.on { background: #12203a; color: #fff; border-color: #12203a; }
 .catalog-groups button.on-green { background: var(--green); color: #fff; border-color: var(--green); }
+.catalog-groups button.on-amber { background: #c9720b; color: #fff; border-color: #c9720b; }
 .catalog-select-bar.is-published { border-color: #b7e0c2; background: #f3fbf5; }
 .catalog-state-note { display: inline-block; max-width: 220px; color: #5c6370; font-size: 12px; font-weight: 700; }
 .commercial-view-bar {

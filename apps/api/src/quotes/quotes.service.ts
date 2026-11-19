@@ -59,7 +59,7 @@ import { mediaExtension, zipStored } from "../domain/zip-store";
 import { CATALOG_COMMERCE_KEY, normalizeCatalogCommerce, publicQuotesBlockedMessage } from "../domain/catalog-commerce";
 import { ACTIVE_MASTER } from "../domain/masters";
 import { isOwnSaleStock } from "../domain/iso6346";
-import { hasCatalogLocation, isPendingValuation, prepublishedStockWhere, publishedStockWhere } from "../domain/odoo-reconcile";
+import { CONSULT_ADMIN_PRICE, catalogPriceConfirmed, hasCatalogLocation, isPendingValuation, prepublishedStockWhere, publishedStockWhere } from "../domain/odoo-reconcile";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom } from "../odoo-import/acquisition-overlay.store";
 import {
@@ -553,6 +553,19 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  private prepublishedPrice(c: { priceAdjustedAt?: Date | null }, prices: { priceList: number; priceMin: number }) {
+    if (!catalogPriceConfirmed(c)) {
+      return { priceConfirmed: false, priceList: null, priceMin: null, margin: null, priceLabel: CONSULT_ADMIN_PRICE };
+    }
+    return {
+      priceConfirmed: true,
+      priceList: prices.priceList,
+      priceMin: prices.priceMin,
+      margin: Math.round(prices.priceList - prices.priceMin),
+      priceLabel: "",
+    };
+  }
+
   private prepublishedMedia(c: { photos: { slot: number }[]; updatedAt?: Date }) {
     const photos = [...c.photos.map((photo) => photo.slot)].sort((a, b) => a - b);
     return {
@@ -609,9 +622,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
         status: c.status,
         demo: c.demo,
         placedInYard: false,
-        priceList: prices.priceList,
-        priceMin: prices.priceMin,
-        margin: Math.round(prices.priceList - prices.priceMin),
+        ...this.prepublishedPrice(c, prices),
         inspectionNotes: publicCatalogNotes(c.inspectionNotes),
         ...this.prepublishedMedia(c),
       });
@@ -648,9 +659,7 @@ export class QuotesService implements OnModuleInit, OnModuleDestroy {
       depotCity: c.depot.city,
       status: c.status,
       placedInYard: false,
-      priceList: prices.priceList,
-      priceMin: prices.priceMin,
-      margin: Math.round(prices.priceList - prices.priceMin),
+      ...this.prepublishedPrice(c, prices),
       inspectionNotes: publicCatalogNotes(c.inspectionNotes),
       ...this.prepublishedMedia(c),
     };

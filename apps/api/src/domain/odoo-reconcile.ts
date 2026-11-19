@@ -93,6 +93,11 @@ export const LEFT_PUBLISH_MESSAGE =
 export const MISSING_LOCATION_PUBLISH_MESSAGE =
   "No se puede publicar porque falta definir ubicación.";
 
+export const PRICE_CONFIRM_PUBLISH_MESSAGE =
+  "Falta confirmar el precio. Sigue en Por publicar hasta que el historial de precio quede guardado.";
+
+export const CONSULT_ADMIN_PRICE = "Consultar a los administradores";
+
 export const PREPUBLISHED_STATUS = "prepublicado";
 
 export const PREPUBLISHED_WAITING_MESSAGE =
@@ -102,12 +107,46 @@ export const LOCATION_PUBLISHED_MESSAGE =
   "Se publicó al confirmar la posición en el depósito.";
 
 export type CatalogHoldPatch = {
-  mediaStatus: "aprobado" | "prepublicado" | "oculto";
+  mediaStatus: "aprobado" | "prepublicado" | "oculto" | "pendiente";
   clearApproval: boolean;
   detail: string;
 };
 
-/** Publicado con fotos y sin puesto queda prepublicado. Al confirmar el puesto vuelve a publicado. Sin fotos, se oculta. */
+/** Alguien guardó el precio en la ficha. La regla calculada sola no cuenta. */
+export function catalogPriceConfirmed(c: { priceAdjustedAt?: Date | string | null }): boolean {
+  if (c.priceAdjustedAt == null || c.priceAdjustedAt === "") return false;
+  const raw = c.priceAdjustedAt instanceof Date ? c.priceAdjustedAt.getTime() : Date.parse(String(c.priceAdjustedAt));
+  return Number.isFinite(raw);
+}
+
+export type CatalogPublishStep = "publicado" | "prepublicado" | "por_publicar" | "bloqueado";
+
+/** Con precio confirmado y puesto, publicar. Sin puesto, prepublicar. Sin precio y con puesto, se queda en Por publicar. */
+export function decideCatalogPublish(c: {
+  odooPoId?: number | null;
+  status?: string | null;
+  invoicePending?: boolean | null;
+  intakeType?: string | null;
+  gateOut?: boolean | null;
+  commercialStatus?: string | null;
+  lado?: string | null;
+  ruma?: number | null;
+  columna?: number | null;
+  nivel?: number | null;
+  photoCount: number;
+  priceAdjustedAt?: Date | string | null;
+}): { step: CatalogPublishStep; detail: string } {
+  const hard = catalogPublishBlock(c);
+  if (hard) return { step: "bloqueado", detail: hard };
+  if (Number(c.photoCount) < 1) {
+    return { step: "bloqueado", detail: "Publica al menos una foto de inspección para el catálogo." };
+  }
+  if (!hasCatalogLocation(c)) return { step: "prepublicado", detail: PREPUBLISHED_WAITING_MESSAGE };
+  if (!catalogPriceConfirmed(c)) return { step: "por_publicar", detail: PRICE_CONFIRM_PUBLISH_MESSAGE };
+  return { step: "publicado", detail: "Ficha publicada en el catálogo." };
+}
+
+/** Publicado con fotos y sin puesto queda prepublicado. Con puesto y precio confirmado vuelve a publicado. Sin precio, vuelve a Por publicar. Sin fotos, se oculta. */
 export function catalogHoldPatch(c: {
   mediaStatus?: string | null;
   photoCount: number;
@@ -118,14 +157,19 @@ export function catalogHoldPatch(c: {
   status?: string | null;
   gateOut?: boolean | null;
   commercialStatus?: string | null;
+  priceAdjustedAt?: Date | string | null;
 }): CatalogHoldPatch | null {
   const left = c.status === "Vendido" || !!c.gateOut || c.commercialStatus === "vendido";
   if (left) return null;
   const located = hasCatalogLocation(c);
   const photos = Number(c.photoCount) >= 1;
   const status = c.mediaStatus || "";
-  if (located && status === PREPUBLISHED_STATUS && photos) {
+  const priced = catalogPriceConfirmed(c);
+  if (located && status === PREPUBLISHED_STATUS && photos && priced) {
     return { mediaStatus: "aprobado", clearApproval: false, detail: LOCATION_PUBLISHED_MESSAGE };
+  }
+  if (located && status === PREPUBLISHED_STATUS && photos && !priced) {
+    return { mediaStatus: "pendiente", clearApproval: false, detail: PRICE_CONFIRM_PUBLISH_MESSAGE };
   }
   if (!located && status === "aprobado" && photos) {
     return { mediaStatus: PREPUBLISHED_STATUS, clearApproval: false, detail: PREPUBLISHED_WAITING_MESSAGE };
@@ -184,7 +228,6 @@ export function catalogPublishBlock(c: {
   nivel?: number | null;
 }): string | null {
   if (c.status === "Vendido" || c.gateOut || c.commercialStatus === "vendido") return LEFT_PUBLISH_MESSAGE;
-  if (!hasCatalogLocation(c)) return MISSING_LOCATION_PUBLISH_MESSAGE;
   return isPendingValuation(c) ? UNRECONCILED_PUBLISH_MESSAGE : null;
 }
 

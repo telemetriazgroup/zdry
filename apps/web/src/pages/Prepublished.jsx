@@ -4,6 +4,33 @@ import { useLightbox } from "../media-lightbox.jsx";
 
 const money = (n) => (n == null ? "—" : "$" + Math.round(Number(n)).toLocaleString("en-US"));
 
+function PriceLine({ unit, compact = false }) {
+  if (!unit?.priceConfirmed) {
+    return compact ? (
+      <div className="card-price">
+        Consultar a los administradores
+        <small>Aún no hay un precio confirmado.</small>
+      </div>
+    ) : (
+      <div className="price-box">
+        <div className="amt">Consultar a los administradores</div>
+        <div className="muted">Aún no hay un precio confirmado en la ficha.</div>
+      </div>
+    );
+  }
+  return compact ? (
+    <div className="card-price">
+      Lista {money(unit.priceList)}
+      <small>Mínimo {money(unit.priceMin)} · margen {money(unit.margin)}</small>
+    </div>
+  ) : (
+    <div className="price-box">
+      <div className="amt">{money(unit.priceList)}</div>
+      <div className="muted">Lista · mínimo {money(unit.priceMin)} · margen para negociar {money(unit.margin)}</div>
+    </div>
+  );
+}
+
 function photoUrl(iso, slot, version) {
   const q = version ? `?v=${encodeURIComponent(version)}` : "";
   return `${apiUrl(`/catalog/prepublished/${encodeURIComponent(iso)}/photos/${slot}`)}${q}`;
@@ -56,7 +83,7 @@ export default function Prepublished() {
           <span>Sin puesto en el patio</span>
           <b>Los administradores de despacho no tienen posición definida para estos equipos</b>
           <p>
-            Tienen fotos, precio de lista, mínimo y margen, igual que los publicados. Cuando despacho confirme el puesto, pasan al catálogo publicado.
+            Tienen fotos. Si el precio ya se confirmó, ves lista, mínimo y margen. Si no, el precio dice Consultar a los administradores. Cuando despacho confirme el puesto y el precio esté confirmado, pasan al catálogo publicado.
           </p>
         </div>
       </aside>
@@ -95,10 +122,7 @@ export default function Prepublished() {
                 <span>{unit.status}</span>
               </div>
               <div className="card-footer">
-                <div className="card-price">
-                  Lista {money(unit.priceList)}
-                  <small>Mínimo {money(unit.priceMin)} · margen {money(unit.margin)}</small>
-                </div>
+                <PriceLine unit={unit} compact />
                 <button className="link-btn" type="button" onClick={() => setOpen(unit)}>Ver ficha</button>
               </div>
             </div>
@@ -140,10 +164,7 @@ export default function Prepublished() {
                   </tbody>
                 </table>
                 {open.inspectionNotes ? <p className="section-sub" style={{ marginTop: 10 }}>{open.inspectionNotes}</p> : null}
-                <div className="price-box">
-                  <div className="amt">{money(open.priceList)}</div>
-                  <div className="muted">Lista · mínimo {money(open.priceMin)} · margen para negociar {money(open.margin)}</div>
-                </div>
+                <PriceLine unit={open} />
               </div>
             </div>
           </div>

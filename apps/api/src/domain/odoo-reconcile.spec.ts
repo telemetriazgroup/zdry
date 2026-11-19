@@ -1,4 +1,4 @@
-import { assertConfirmMatch, catalogHoldPatch, catalogPublishBlock, isPendingValuation, pendingValuationWhere, pickReconcileCandidate, planOdooRelink, proposeMatch, prepublishedStockWhere, publishedStockWhere, reconcileContainerPatch, recoverPrepublished } from "./odoo-reconcile";
+import { assertConfirmMatch, catalogHoldPatch, catalogPriceConfirmed, catalogPublishBlock, decideCatalogPublish, isPendingValuation, pendingValuationWhere, pickReconcileCandidate, planOdooRelink, proposeMatch, prepublishedStockWhere, publishedStockWhere, reconcileContainerPatch, recoverPrepublished } from "./odoo-reconcile";
 
 const BMOU = { iso: "BMOU433548-9" };
 const IN_06302 = {
@@ -68,8 +68,8 @@ describe("isPendingValuation", () => {
     expect(prepublishedStockWhere().photos).toEqual({ some: { status: "activa" } });
     expect(catalogPublishBlock({ odooPoId: 12, invoicePending: true, intakeType: "compra", lado: "Zona A", ruma: 1, columna: 1, nivel: 1 })).toBeNull();
     expect(catalogPublishBlock({ odooPoId: 12, invoicePending: true, intakeType: "compra", lado: "Zona A", ruma: 1, columna: 1, nivel: 1, status: "Disponible" })).toBeNull();
-    expect(catalogPublishBlock({ odooPoId: 12, intakeType: "compra", status: "Disponible" })).toMatch(/ubicación/);
-    expect(catalogPublishBlock({ odooPoId: 12, intakeType: "compra", status: "Disponible", lado: "PASILLO", ruma: 1, columna: 1, nivel: 1 })).toMatch(/ubicación/);
+    expect(catalogPublishBlock({ odooPoId: 12, intakeType: "compra", status: "Disponible" })).toBeNull();
+    expect(catalogPublishBlock({ odooPoId: 12, intakeType: "compra", status: "Disponible", lado: "PASILLO", ruma: 1, columna: 1, nivel: 1 })).toBeNull();
     expect(catalogPublishBlock({ status: "Vendido", odooPoId: 12, intakeType: "compra" })).toMatch(/salida/);
     expect(catalogPublishBlock({ status: "Disponible", gateOut: true, odooPoId: 12, intakeType: "compra" })).toMatch(/salida/);
   });
@@ -93,17 +93,34 @@ describe("catalogHoldPatch", () => {
     });
   });
 
-  it("prepublicado con puesto y fotos vuelve a publicado", () => {
-    expect(catalogHoldPatch({ mediaStatus: "prepublicado", photoCount: 3, ...placed })).toMatchObject({
+  it("prepublicado con puesto, fotos y precio confirmado vuelve a publicado", () => {
+    expect(catalogHoldPatch({ mediaStatus: "prepublicado", photoCount: 3, priceAdjustedAt: new Date("2026-11-16"), ...placed })).toMatchObject({
       mediaStatus: "aprobado",
       clearApproval: false,
     });
   });
 
+  it("prepublicado con puesto y fotos, sin precio confirmado, vuelve a por publicar", () => {
+    expect(catalogHoldPatch({ mediaStatus: "prepublicado", photoCount: 3, ...placed })).toMatchObject({
+      mediaStatus: "pendiente",
+    });
+    expect(catalogPriceConfirmed({ priceAdjustedAt: null })).toBe(false);
+    expect(catalogPriceConfirmed({ priceAdjustedAt: new Date("2026-11-16") })).toBe(true);
+  });
+
+  it("publicar exige precio confirmado si hay puesto, y sin puesto va a prepublicados", () => {
+    const base = { odooPoId: 12, intakeType: "compra", status: "Disponible", photoCount: 2 };
+    expect(decideCatalogPublish({ ...base, ...placed, priceAdjustedAt: new Date("2026-11-16") }).step).toBe("publicado");
+    expect(decideCatalogPublish({ ...base, ...placed }).step).toBe("por_publicar");
+    expect(decideCatalogPublish({ ...base, priceAdjustedAt: new Date("2026-11-16") }).step).toBe("prepublicado");
+    expect(decideCatalogPublish({ ...base }).step).toBe("prepublicado");
+    expect(decideCatalogPublish({ ...base, photoCount: 0 }).step).toBe("bloqueado");
+  });
+
   it("nunca publicado no cambia al definir o no la ubicación", () => {
     expect(catalogHoldPatch({ mediaStatus: "pendiente", photoCount: 2, status: "Disponible" })).toBeNull();
-    expect(catalogHoldPatch({ mediaStatus: "pendiente", photoCount: 2, ...placed })).toBeNull();
-    expect(catalogHoldPatch({ mediaStatus: "oculto", photoCount: 2, ...placed })).toBeNull();
+    expect(catalogHoldPatch({ mediaStatus: "pendiente", photoCount: 2, priceAdjustedAt: new Date("2026-11-16"), ...placed })).toBeNull();
+    expect(catalogHoldPatch({ mediaStatus: "oculto", photoCount: 2, priceAdjustedAt: new Date("2026-11-16"), ...placed })).toBeNull();
   });
 
   it("la venta no se republica desde este paso", () => {

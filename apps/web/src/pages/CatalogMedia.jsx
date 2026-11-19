@@ -53,6 +53,7 @@ const STATUS = {
 
 const GROUPS = [
   { id: "por publicar", label: "Por publicar" },
+  { id: "prepublicados", label: "Prepublicados" },
   { id: "publicadas", label: "Publicadas" },
   { id: "sin fotos", label: "Sin fotos" },
   { id: "bloqueadas", label: "No se pueden publicar" },
@@ -71,17 +72,18 @@ function waitingSeat(row) {
 }
 
 function catalogGroup(row) {
-  if (waitingSeat(row)) return "por publicar";
+  if (waitingSeat(row)) return "prepublicados";
   if (hardBlock(row)) return "bloqueadas";
   if (row.mediaStatus === "aprobado") return "publicadas";
-  if (Number(row.photoCount) > 0) return "por publicar";
+  if (Number(row.photoCount) > 0 || (Array.isArray(row.photos) && row.photos.length > 0)) return "por publicar";
   return "sin fotos";
 }
 
 function photoState(row) {
   const n = Number(row?.photoCount) || 0;
   if (waitingSeat(row)) {
-    return { text: `${n} · prepublicada`, color: "#c9720b", title: "Prepublicada. Falta confirmar la posición en un depósito. Se publica sola cuando el puesto quede definido." };
+    const price = row.priceConfirmed ? "El precio ya está confirmado." : "Sin precio confirmado: el comercial ve «Consultar a los administradores».";
+    return { text: `${n} · prepublicada`, color: "#c9720b", title: `Prepublicada. Falta confirmar la posición en un depósito. ${price}` };
   }
   const block = hardBlock(row);
   if (block) return { text: `${n} · no se publica`, color: "#5c6370", title: block };
@@ -134,6 +136,7 @@ export default function CatalogMedia() {
   const [q, setQ] = useState("");
   const [onlyPhotos, setOnlyPhotos] = useState(false);
   const [moveFilter, setMoveFilter] = useState("");
+  const [depotFilter, setDepotFilter] = useState("");
   const [group, setGroup] = useState("por publicar");
   const [page, setPage] = useState(1);
   const [publishBusy, setPublishBusy] = useState(false);
@@ -157,8 +160,13 @@ export default function CatalogMedia() {
 
   function publishLock(row) {
     if (!row) return "";
-    if (waitingSeat(row)) return "Prepublicada. Falta confirmar la posición en un depósito. Se publica sola cuando el puesto quede definido.";
-    return hardBlock(row) || (Number(row.photoCount) < 1 ? "Sin fotos: no se puede publicar." : "");
+    if (waitingSeat(row)) return "Prepublicada. Falta confirmar la posición en un depósito. Con precio confirmado se publica sola cuando el puesto quede definido.";
+    const block = hardBlock(row);
+    if (block) return block;
+    const photos = Number(row.photoCount) || (Array.isArray(row.photos) ? row.photos.length : 0);
+    if (photos < 1) return "Sin fotos: no se puede publicar.";
+    if (row.hasLocation && !row.priceConfirmed) return "Falta confirmar el precio. Sigue en Por publicar hasta que el historial de precio quede guardado.";
+    return "";
   }
 
   function pickLock(row) {
@@ -270,7 +278,7 @@ export default function CatalogMedia() {
 
   useEffect(() => {
     setPage(1);
-  }, [q, onlyPhotos, group, moveFilter]);
+  }, [q, onlyPhotos, group, moveFilter, depotFilter]);
 
   async function open(nextIso) {
     setError("");
@@ -358,7 +366,8 @@ export default function CatalogMedia() {
         method: "PATCH",
         body: { visibilityOnly: true, visibility: show ? "show" : "request" },
       });
-      setRows((list) => list.map((r) => (r.iso === row.iso ? { ...r, showPrice: o.showPrice } : r)));
+      setRows((list) => list.map((r) => (r.iso === row.iso ? { ...r, showPrice: o.showPrice, priceConfirmed: true } : r)));
+      if (iso === row.iso) setUnit((current) => (current ? { ...current, priceConfirmed: true } : current));
       setMsg(show ? `${row.iso}: el catálogo muestra el precio.` : `${row.iso}: el cliente ve «Solicitar precio».`);
       if (iso === row.iso) {
         setOffer(o);
@@ -396,7 +405,9 @@ export default function CatalogMedia() {
       const skip = out.skipped?.length ? ` ${out.skipped.length} sin foto o no encontradas.` : "";
       const held = (out.blocked?.length || 0) + heldLocal;
       const heldMsg = held ? ` ${held} no se publicaron (reentrega sin OC, o con salida).` : "";
-      setMsg(`Publicadas ${out.published ?? 0} de la selección.${out.already ? ` ${out.already} ya estaban visibles.` : ""}${skip}${heldMsg}`);
+      const pre = out.prepublished ? ` ${out.prepublished} pasaron a Prepublicados por falta de posición.` : "";
+      const price = out.needsPrice?.length ? ` ${out.needsPrice.length} siguen en Por publicar: falta confirmar el precio.` : "";
+      setMsg(`Publicadas ${out.published ?? 0} de la selección.${out.already ? ` ${out.already} ya estaban visibles.` : ""}${pre}${price}${skip}${heldMsg}`);
       setPicked(new Set());
       loadList();
       if (iso && pending.some((r) => r.iso === iso)) {
@@ -483,10 +494,15 @@ export default function CatalogMedia() {
     if (fromList) setListBusy(nextIso);
     try {
       const u = await api(`/catalog-media/${nextIso}/approve`, { method: "POST", body: {} });
+      const note = u.mediaStatus === "prepublicado"
+        ? (u.priceConfirmed
+          ? `${nextIso} quedó en Prepublicados. Falta la posición en el almacén.`
+          : `${nextIso} quedó en Prepublicados. Sin precio confirmado, el comercial ve «Consultar a los administradores».`)
+        : `${nextIso} publicada en el catálogo.`;
       if (iso === nextIso) {
-        await applyUnit(u, "Visible en el catálogo. Las fotos horizontales cubren todo el ancho. El original de patio no se toca.");
+        await applyUnit(u, note);
       } else {
-        setMsg(`${nextIso} publicada en el catálogo.`);
+        setMsg(note);
         loadList();
       }
     } catch (e) {
@@ -531,7 +547,9 @@ export default function CatalogMedia() {
       setPriceNet(String(o.priceList ?? ""));
       setShowMode(o.visibility || "inherit");
       setPriceNote("");
-      setMsg(recompute ? "Precio recalculado según reglas." : "Precio de oferta guardado. Queda en el historial.");
+      setUnit((current) => (current && current.iso === iso ? { ...current, priceConfirmed: true } : current));
+      setMsg(recompute ? "Precio recalculado según reglas. Queda confirmado en el historial." : "Precio de oferta guardado. Queda confirmado en el historial.");
+      loadList();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : e.message);
     } finally {
@@ -739,13 +757,25 @@ export default function CatalogMedia() {
       return hay.includes(raw) || hay.replace(/[\s-]/g, "").includes(compact);
     });
   }, [rows, q]);
+  const yardDepots = useMemo(() => {
+    const counts = new Map();
+    for (const row of rows) {
+      if (!row.hasLocation || !row.depotName) continue;
+      counts.set(row.depotName, (counts.get(row.depotName) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0], "es"));
+  }, [rows]);
+  const scopedRows = useMemo(() => {
+    if (!depotFilter) return searchedRows;
+    return searchedRows.filter((row) => row.depotName === depotFilter);
+  }, [searchedRows, depotFilter]);
   const groupCounts = useMemo(() => {
-    const counts = { "por publicar": 0, publicadas: 0, "sin fotos": 0, bloqueadas: 0 };
-    for (const r of searchedRows) counts[catalogGroup(r)] += 1;
+    const counts = { "por publicar": 0, prepublicados: 0, publicadas: 0, "sin fotos": 0, bloqueadas: 0 };
+    for (const r of scopedRows) counts[catalogGroup(r)] += 1;
     return counts;
-  }, [searchedRows]);
+  }, [scopedRows]);
   const filteredRows = useMemo(() => {
-    const list = searchedRows.filter((r) => catalogGroup(r) === group);
+    const list = scopedRows.filter((r) => catalogGroup(r) === group);
     const withPhotos = onlyPhotos ? list.filter((r) => Number(r.photoCount) > 0) : list;
     if (!moveFilter) return withPhotos;
     return withPhotos.filter((row) => {
@@ -755,7 +785,7 @@ export default function CatalogMedia() {
       if (moveFilter === "3+") return moves >= 3;
       return moves === Number(moveFilter);
     });
-  }, [searchedRows, group, onlyPhotos, moveFilter]);
+  }, [scopedRows, group, onlyPhotos, moveFilter]);
   const readyRows = filteredRows.filter((r) => !pickLock(r));
   const allReadyPicked = readyRows.length > 0 && readyRows.every((r) => picked.has(r.iso));
   const pages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
@@ -789,7 +819,7 @@ export default function CatalogMedia() {
     <div className="catalog-media-page">
       <h2 className="section-title">Ficha multimedia del catálogo</h2>
       <p className="section-sub">
-        Por publicar son las que tienen fotos y aún no se ven. Publicadas ya están en el catálogo: el botón verde las oculta.
+        Por publicar: tienen fotos y, si ya están en un puesto, falta confirmar el precio o pulsar Publicar. Prepublicados: ya se publicaron y falta la posición. Publicadas: precio confirmado y puesto en el almacén. El botón verde las oculta.
       </p>
       {error ? <div className="err">{error}</div> : null}
       {msg ? <div className="ok-msg">{msg}</div> : null}
@@ -804,7 +834,7 @@ export default function CatalogMedia() {
           <h3>Unidades en stock</h3>
             {canApprove ? (
               <p className="section-sub">
-                Edita el precio a vender en la lista para fijarlo sin abrir la unidad. Publicar queda listo si ya hay fotos y aún no está en el catálogo.
+                Guarda el precio para confirmarlo. Con puesto y precio confirmado, Publicar lo deja en el catálogo. Sin puesto, Publicar lo manda a Prepublicados.
                 La marca de agua se configura en{" "}
                 <Link to="/app/configuracion">Configuración</Link>
                 {meta.watermarkName ? ` (ahora: ${meta.watermarkName}).` : "."}
@@ -817,7 +847,7 @@ export default function CatalogMedia() {
                   type="button"
                   role="tab"
                   aria-selected={group === g.id}
-                  className={group === g.id ? (g.id === "publicadas" ? "on on-green" : "on") : ""}
+                  className={group === g.id ? (g.id === "publicadas" ? "on on-green" : g.id === "prepublicados" ? "on on-amber" : "on") : ""}
                   onClick={() => chooseGroup(g.id)}
                 >
                   {g.label} <span>{groupCounts[g.id] || 0}</span>
@@ -837,6 +867,12 @@ export default function CatalogMedia() {
               <input type="checkbox" checked={onlyPhotos} onChange={(e) => setOnlyPhotos(e.target.checked)} />
               Solo con fotos
             </label>
+            <select aria-label="Filtrar por almacén" value={depotFilter} onChange={(e) => setDepotFilter(e.target.value)}>
+              <option value="">Todos los almacenes</option>
+              {yardDepots.map(([name, count]) => (
+                <option key={name} value={name}>{name} · {count} en patio</option>
+              ))}
+            </select>
             <select aria-label="Filtrar por movimientos de patio" value={moveFilter} onChange={(e) => setMoveFilter(e.target.value)}>
               <option value="">Todos los movimientos</option>
               <option value="none">Sin posición en patio</option>
@@ -1037,11 +1073,13 @@ export default function CatalogMedia() {
                             className="btn-primary"
                             type="button"
                             disabled={listBusy === r.iso}
-                            title="Publicar en catálogo"
+                            title={r.hasLocation && !r.priceConfirmed ? "Falta confirmar el precio" : r.hasLocation ? "Publicar en el catálogo" : "Sin posición: pasa a Prepublicados"}
                             onClick={() => publishIso(r.iso, r.photoCount, true)}
                           >
                             Publicar
                           </button>
+                        ) : catalogGroup(r) === "prepublicados" ? (
+                          <span className="catalog-state-note" title={photoState(r).title}>Sin posición</span>
                         ) : (
                           <span className="catalog-state-note" title={photoState(r).title}>
                             {catalogGroup(r) === "sin fotos" ? "Sin fotos" : hardBlock(r)}
@@ -1280,7 +1318,12 @@ export default function CatalogMedia() {
             {canApprove ? (
               <div className="action-row" style={{ marginTop: 16 }}>
                 {waitingSeat(unit) ? (
-                  <p className="section-sub">Prepublicada. Falta confirmar la posición en un depósito. Se publica sola cuando el puesto quede definido.</p>
+                  <p className="section-sub">
+                    Prepublicada. Falta confirmar la posición en un depósito.
+                    {unit.priceConfirmed
+                      ? " Con el precio confirmado, se publica sola cuando el puesto quede definido."
+                      : " Sin precio confirmado, el comercial ve «Consultar a los administradores»."}
+                  </p>
                 ) : hardBlock(unit) ? (
                   <p className="section-sub">{hardBlock(unit)}</p>
                 ) : unit.mediaStatus === "aprobado" ? (

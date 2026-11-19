@@ -3801,6 +3801,7 @@ export class WarehouseService {
         status: true,
         gateOut: true,
         commercialStatus: true,
+        priceAdjustedAt: true,
         photos: { where: { status: PHOTO_STATUS_ACTIVE }, select: { id: true } },
       },
     });

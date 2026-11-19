@@ -36,7 +36,7 @@ import { OdooLinkService } from "../odoo/odoo-link.service";
 import { presentDryReferential } from "../odoo-import/dry-referential.store";
 import { loadOverlayConcepts, loadSafetyMarginRules, overlayUnitFrom, refreshRulePrices } from "../odoo-import/acquisition-overlay.store";
 import { DEFAULT_VISIBILITY_RULES, type VisibilityRule } from "../domain/visibility";
-import { LOCATION_PUBLISHED_MESSAGE, MISSING_LOCATION_PUBLISH_MESSAGE, PREPUBLISHED_STATUS, PREPUBLISHED_WAITING_MESSAGE, catalogHoldPatch, catalogPublishBlock, hasCatalogLocation, isPendingValuation, recoverPrepublished } from "../domain/odoo-reconcile";
+import { CONSULT_ADMIN_PRICE, LOCATION_PUBLISHED_MESSAGE, MISSING_LOCATION_PUBLISH_MESSAGE, PREPUBLISHED_STATUS, PREPUBLISHED_WAITING_MESSAGE, PRICE_CONFIRM_PUBLISH_MESSAGE, catalogHoldPatch, catalogPriceConfirmed, catalogPublishBlock, decideCatalogPublish, hasCatalogLocation, isPendingValuation, recoverPrepublished } from "../domain/odoo-reconcile";
 import { retrievalByIso } from "../domain/yard-retrieval";
 
 const ACTIVE_PHOTOS = { where: { status: PHOTO_STATUS_ACTIVE } };
@@ -220,6 +220,8 @@ export class CatalogMediaService {
         leftCustomer: c.status === "Vendido" || !!c.gateOut || c.commercialStatus === "vendido",
         publishBlock: catalogPublishBlock(c),
         canPublish: active.length >= 1 && !catalogPublishBlock(c),
+        priceConfirmed: catalogPriceConfirmed(c),
+        hasLocation: hasCatalogLocation(c),
       };
     });
   }
@@ -293,6 +295,8 @@ export class CatalogMediaService {
       awaitingReconcile: isPendingValuation(c),
       leftCustomer: c.status === "Vendido" || !!c.gateOut || c.commercialStatus === "vendido",
       publishBlock: catalogPublishBlock(c),
+      priceConfirmed: catalogPriceConfirmed(c),
+      hasLocation: hasCatalogLocation(c),
     };
   }
 
@@ -499,12 +503,30 @@ export class CatalogMediaService {
     });
     if (!c) throw new NotFoundException("Unidad no encontrada.");
     if (c.archivedAt) throw new NotFoundException("Unidad no encontrada.");
-    const blocked = catalogPublishBlock(c);
-    if (blocked) throw new BadRequestException(blocked);
-    if (c.photos.length < 1) {
-      throw new BadRequestException("Publica al menos una foto de inspección para el catálogo.");
+    const decision = decideCatalogPublish({ ...c, photoCount: c.photos.length });
+    if (decision.step === "bloqueado" || decision.step === "por_publicar") {
+      throw new BadRequestException(decision.detail);
     }
     await this.watermarkPublicCopies(c.iso, c.photos);
+    if (decision.step === "prepublicado") {
+      if (c.mediaStatus !== PREPUBLISHED_STATUS) {
+        await this.prisma.container.update({
+          where: { iso },
+          data: {
+            mediaStatus: PREPUBLISHED_STATUS,
+            mediaApprovedBy: user.id,
+            mediaApprovedAt: c.mediaApprovedAt || new Date(),
+            mediaReviewNote: null,
+          },
+        });
+        const priceNote = catalogPriceConfirmed(c) ? "" : ` ${CONSULT_ADMIN_PRICE}.`;
+        await this.prisma.containerHistory.create({
+          data: { iso, type: "Catálogo", detail: `${PREPUBLISHED_WAITING_MESSAGE}${priceNote} ${user.name}.` },
+        });
+      }
+      await this.audit.log({ user, action: "approve_media", entity: "Container", entityId: iso, after: { mediaStatus: PREPUBLISHED_STATUS }, ip });
+      return this.get(iso, user);
+    }
     await this.prisma.container.update({
       where: { iso },
       data: {
@@ -525,9 +547,11 @@ export class CatalogMediaService {
     this.assertApprover(user);
     const unique = [...new Set((isos || []).map((iso) => String(iso || "").trim()).filter(Boolean))].slice(0, 400);
     let published = 0;
+    let prepublished = 0;
     let already = 0;
     const skipped: string[] = [];
     const blocked: string[] = [];
+    const needsPrice: string[] = [];
     for (const iso of unique) {
       const c = await this.prisma.container.findUnique({
         where: { iso },
@@ -537,12 +561,35 @@ export class CatalogMediaService {
         skipped.push(iso);
         continue;
       }
-      if (catalogPublishBlock(c)) {
-        blocked.push(iso);
+      const decision = decideCatalogPublish({ ...c, photoCount: c.photos.length });
+      if (decision.step === "bloqueado") {
+        if (c.photos.length < 1) skipped.push(iso);
+        else blocked.push(iso);
         continue;
       }
-      if (c.photos.length < 1) {
-        skipped.push(iso);
+      if (decision.step === "por_publicar") {
+        needsPrice.push(iso);
+        continue;
+      }
+      if (decision.step === "prepublicado") {
+        if (c.mediaStatus === PREPUBLISHED_STATUS) {
+          already += 1;
+          continue;
+        }
+        await this.watermarkPublicCopies(c.iso, c.photos);
+        await this.prisma.container.update({
+          where: { iso },
+          data: {
+            mediaStatus: PREPUBLISHED_STATUS,
+            mediaApprovedBy: user.id,
+            mediaApprovedAt: c.mediaApprovedAt || new Date(),
+            mediaReviewNote: null,
+          },
+        });
+        await this.prisma.containerHistory.create({
+          data: { iso, type: "Catálogo", detail: `${PREPUBLISHED_WAITING_MESSAGE} Publicación masiva por ${user.name}.` },
+        });
+        prepublished += 1;
         continue;
       }
       if (c.mediaStatus === "aprobado") {
@@ -568,10 +615,10 @@ export class CatalogMediaService {
       user,
       action: "approve_media",
       entity: "Container",
-      after: { published, already, skipped: skipped.length, blocked: blocked.length },
+      after: { published, prepublished, already, skipped: skipped.length, blocked: blocked.length, needsPrice: needsPrice.length },
       ip,
     });
-    return { published, already, skipped, blocked };
+    return { published, prepublished, already, skipped, blocked, needsPrice };
   }
 
   async hide(iso: string, user: AuthUser, ip?: string) {
@@ -710,6 +757,7 @@ export class CatalogMediaService {
         nivel: { not: null },
         NOT: { lado: "PASILLO" },
         photos: { some: { status: PHOTO_STATUS_ACTIVE } },
+        priceAdjustedAt: { not: null },
         status: { not: "Vendido" },
         gateOut: { not: true },
         commercialStatus: { not: "vendido" },
@@ -732,6 +780,28 @@ export class CatalogMediaService {
         data: ready.map((row) => ({ iso: row.iso, type: "Catálogo", detail: LOCATION_PUBLISHED_MESSAGE })),
       });
     }
+    const seatedWithoutPrice = await this.prisma.container.findMany({
+      where: {
+        archivedAt: null,
+        mediaStatus: PREPUBLISHED_STATUS,
+        priceAdjustedAt: null,
+        lado: { not: null },
+        ruma: { not: null },
+        columna: { not: null },
+        nivel: { not: null },
+        NOT: { lado: "PASILLO" },
+        photos: { some: { status: PHOTO_STATUS_ACTIVE } },
+        status: { not: "Vendido" },
+        gateOut: { not: true },
+        commercialStatus: { not: "vendido" },
+      },
+      select: { iso: true },
+    });
+    await this.applyHold(
+      seatedWithoutPrice.map((row) => row.iso),
+      { mediaStatus: "pendiente" },
+      PRICE_CONFIRM_PUBLISH_MESSAGE,
+    );
     await this.recoverStrippedPublishes();
   }
 
@@ -787,6 +857,7 @@ export class CatalogMediaService {
     status: string;
     gateOut: boolean | null;
     commercialStatus: string;
+    priceAdjustedAt?: Date | null;
     photos: Array<{ status: string }>;
   }) {
     const photoCount = c.photos.filter((photo) => photo.status === PHOTO_STATUS_ACTIVE).length;
