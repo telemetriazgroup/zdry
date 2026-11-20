@@ -2206,6 +2206,12 @@ button.tile.dry-click { display: block; }
 .yard-detail-slot img { width: 100%; height: 92px; object-fit: cover; border-radius: 6px; }
 .yard-detail-slot .n { font-size: 22px; font-weight: 800; color: #98a2b3; }
 .yard-detail-slot > span { font-size: 12px; font-weight: 700; }
+.yard-detail-slot.pick { border-color: var(--orange); box-shadow: 0 0 0 3px rgba(232, 93, 4, .18); }
+.yard-detail-slot .slot-hit {
+  display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 0; border: 0; background: none;
+  text-align: left; cursor: pointer; color: inherit; font: inherit;
+}
+.yard-detail-slot .slot-hit img { width: 100%; height: 92px; object-fit: cover; border-radius: 6px; }
 .gear-media h3 { margin: 16px 0 8px; }
 .gear-upload { display: inline-flex; margin: 8px 0 12px; cursor: pointer; }
 .action-row a.btn-ghost { text-decoration: none; display: inline-flex; align-items: center; }

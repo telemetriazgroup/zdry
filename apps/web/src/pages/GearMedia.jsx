@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, apiUpload, apiUrl } from "../api.js";
+import { useLightbox } from "../media-lightbox.jsx";
 
 const LABELS = [
   "Frontal (puertas)",
@@ -17,8 +18,11 @@ export default function GearMedia({ depotId, gear, canEdit, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [bust, setBust] = useState(0);
+  const [picked, setPicked] = useState("");
+  const lb = useLightbox();
   const media = gear?.media || [];
   const photos = media.filter((item) => item.kind === "photo");
+  const videos = media.filter((item) => item.kind === "video");
 
   async function run(work) {
     setBusy(true);
@@ -46,19 +50,29 @@ export default function GearMedia({ depotId, gear, canEdit, onSaved }) {
 
   function place(mediaId, slot) {
     if (!mediaId) return;
-    run(() => api("/yard/gear/media/slot", { method: "POST", body: { depotId, outsiderId: gear.id, mediaId, slot } }));
+    run(async () => {
+      await api("/yard/gear/media/slot", { method: "POST", body: { depotId, outsiderId: gear.id, mediaId, slot } });
+      setPicked("");
+    });
   }
 
   function remove(mediaId) {
+    if (picked === mediaId) setPicked("");
     run(() => api("/yard/gear/media/remove", { method: "POST", body: { depotId, outsiderId: gear.id, mediaId } }));
   }
 
   const src = (item) => `${apiUrl(`/yard/gear/${depotId}/${gear.id}/${item.id}`)}?t=${bust}`;
 
+  function openPhoto(item) {
+    const items = photos.map((photo) => ({ src: src(photo), type: "image", label: photo.name || "Foto" }));
+    const index = Math.max(0, photos.findIndex((photo) => photo.id === item.id));
+    lb.open(items, index);
+  }
+
   return (
     <div className="gear-media">
       <h3>Fotos y videos</h3>
-      <p className="section-sub">Las fotos son opcionales. Si no hay, la casilla queda vacía, igual que un DRY sin foto. Sube varias a la vez y elige cuál va en cada vista.</p>
+      <p className="section-sub">Las fotos son opcionales. Si no hay, la casilla queda vacía, igual que un DRY sin foto. Sube varias a la vez, elige una y ponla en la casilla.</p>
       {error ? <div className="err">{error}</div> : null}
       {canEdit ? (
         <label className="btn-primary gear-upload">
@@ -76,46 +90,97 @@ export default function GearMedia({ depotId, gear, canEdit, onSaved }) {
           />
         </label>
       ) : null}
+
+      {photos.length ? (
+        <>
+          <div className="odoo-assign-thumbs">
+            {photos.map((item) => (
+              <div key={item.id} className={`odoo-assign-thumb${picked === item.id ? " on" : ""}`}>
+                <button type="button" className="thumb-zoom" onClick={() => openPhoto(item)}>
+                  <img src={src(item)} alt={item.name || "Foto"} />
+                </button>
+                {canEdit ? (
+                  <button type="button" className="thumb-pick" disabled={busy} onClick={() => setPicked(picked === item.id ? "" : item.id)}>
+                    {item.name || "Foto"}{Number.isInteger(item.slot) ? ` · ${LABELS[item.slot]}` : ""} · {picked === item.id ? "Elegida" : "Elegir"}
+                  </button>
+                ) : (
+                  <span>{item.name || "Foto"}{Number.isInteger(item.slot) ? ` · ${LABELS[item.slot]}` : ""}</span>
+                )}
+                {canEdit ? (
+                  <button type="button" className="thumb-arch" disabled={busy} onClick={() => remove(item.id)}>Quitar</button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+          {canEdit ? (
+            picked ? (
+              <div className="odoo-assign-slots">
+                <b>Asignar a casilla</b>
+                {LABELS.map((label, index) => {
+                  const current = photos.find((item) => item.slot === index);
+                  return (
+                    <button key={label} type="button" className="btn-ghost" disabled={busy} onClick={() => place(picked, index)}>
+                      {index + 1}. {label}{current ? " (reemplazar)" : ""}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="section-sub">Toca la imagen para verla. Pulsa «Elegir» y luego la casilla donde debe quedar.</p>
+            )
+          ) : null}
+        </>
+      ) : <p className="section-sub">Todavía no hay fotos. Al cargarlas, eliges una y la pones en una casilla.</p>}
+
       <div className="yard-detail-photos">
         {LABELS.map((label, index) => {
           const photo = photos.find((item) => item.slot === index);
+          const aiming = canEdit && Boolean(picked);
           return (
-            <div key={label} className={`yard-detail-slot${photo ? " has" : ""}`}>
-              {photo ? <img src={src(photo)} alt={label} /> : <span className="n">{index + 1}</span>}
-              <span>{label}{photo ? "" : " · Vacío"}</span>
-              {canEdit ? (
-                <select
-                  aria-label={`Foto de ${label}`}
-                  value={photo?.id || ""}
-                  disabled={busy}
-                  onChange={(event) => {
-                    const next = event.target.value;
-                    if (!next && photo) place(photo.id, null);
-                    else if (next) place(next, index);
-                  }}
-                >
-                  <option value="">Sin foto</option>
-                  {photos.map((item) => (
-                    <option key={item.id} value={item.id}>{item.name || `Foto ${item.id.slice(0, 6)}`}</option>
-                  ))}
-                </select>
+            <div key={label} className={`yard-detail-slot${photo ? " has" : ""}${aiming ? " pick" : ""}`}>
+              {aiming ? (
+                <button type="button" className="slot-hit" disabled={busy} onClick={() => place(picked, index)}>
+                  {photo ? <img src={src(photo)} alt={label} /> : <span className="n">{index + 1}</span>}
+                  <span>{label}{photo ? "" : " · Vacío"}</span>
+                </button>
+              ) : (
+                <>
+                  {photo ? (
+                    <button type="button" className="slot-hit" onClick={() => openPhoto(photo)}>
+                      <img src={src(photo)} alt={label} />
+                      <span>{label}</span>
+                    </button>
+                  ) : (
+                    <>
+                      <span className="n">{index + 1}</span>
+                      <span>{label} · Vacío</span>
+                    </>
+                  )}
+                </>
+              )}
+              {canEdit && photo && !aiming ? (
+                <button type="button" className="btn-ghost" disabled={busy} onClick={() => place(photo.id, null)}>Vaciar</button>
               ) : null}
             </div>
           );
         })}
       </div>
-      <h3>Archivos del equipo</h3>
-      {media.length ? (
-        <div className="gear-files">
-          {media.map((item) => (
-            <div className="gear-file" key={item.id}>
-              {item.kind === "video" ? <video src={src(item)} controls /> : <img src={src(item)} alt={item.name || "Foto"} />}
-              <span>{item.name || (item.kind === "video" ? "Video" : "Foto")}{Number.isInteger(item.slot) ? ` · ${LABELS[item.slot]}` : ""}</span>
-              {canEdit ? <button className="btn-ghost" type="button" disabled={busy} onClick={() => remove(item.id)}>Quitar</button> : null}
-            </div>
-          ))}
-        </div>
-      ) : <p className="section-sub">Todavía no hay fotos ni videos.</p>}
+
+      {videos.length ? (
+        <>
+          <h3>Videos</h3>
+          <div className="gear-files">
+            {videos.map((item) => (
+              <div className="gear-file" key={item.id}>
+                <video src={src(item)} controls />
+                <span>{item.name || "Video"}</span>
+                {canEdit ? <button className="btn-ghost" type="button" disabled={busy} onClick={() => remove(item.id)}>Quitar</button> : null}
+              </div>
+            ))}
+          </div>
+        </>
+      ) : null}
+      {lb.node}
     </div>
   );
 }
